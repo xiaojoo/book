@@ -1,0 +1,13 @@
+build/
+.gradle/
+.kotlin/
+local.properties
+*.log
+shots/
+*.tmp
+.idea/
+*.iml
+.cxx/
+scratch/novel-*.txt
+scratch/reader.xml
+tools/*_tmp.py
