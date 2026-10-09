@@ -13,7 +13,20 @@ data class BookMeta(
     val contentBytes: Long,
     val sourceBytes: Long,
     val sourceCharset: String,
-)
+    /** txt = 抽过正文、进排版引擎的书；pdf / pptx = 原件整页渲染，没有 chunk/章节索引。 */
+    val kind: String = TXT,
+    /** 只有整页渲染那一类有：版面页数（pdf 的页、pptx 的幻灯片数）。排版引擎的书恒为 0（它数的是章）。 */
+    val pages: Int = 0,
+) {
+    companion object {
+        const val TXT = "txt"
+        const val PDF = "pdf"
+        const val PPTX = "pptx"
+
+        /** 走"一屏一页、保留原版面"那条路的种类 —— 它们都没有字号/行距那套版式控制。 */
+        val WHOLE_PAGE = setOf(PDF, PPTX)
+    }
+}
 
 /** 章节只是"绝对字符偏移上的一段"，正文不在这里。 */
 data class Chapter(val index: Int, val title: String, val startOffset: Long, val endOffset: Long) {
@@ -79,6 +92,10 @@ data class TextLine(
     val trackingPx: Float = 0f,
     /** 章节标题行的字号倍数（1 = 正文）。标题顶格、加粗、按这个倍数放大。 */
     val titleScale: Float = 1f,
+    /** 等宽字体那一档：md 的代码块/行内码。排版要按等宽量，画要换字体。 */
+    val mono: Boolean = false,
+    /** 引用块：画的时候整段变灰并在左缘补一条竖线。 */
+    val quote: Boolean = false,
 ) {
     val chars: Int get() = (end - start).toInt()
 }

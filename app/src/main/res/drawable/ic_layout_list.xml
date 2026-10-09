@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 列表模式：三条「点 + 横线」。自画，不用平台图标（尺寸和线粗要跟着我们这套弹层走）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,5h3v3h-3zM9,5.75h11v1.5h-11zM4,10.5h3v3h-3zM9,11.25h11v1.5h-11zM4,16h3v3h-3zM9,16.75h11v1.5h-11z" />
+</vector>

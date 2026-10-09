@@ -16,13 +16,29 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- 文件管理器里"用本应用打开"：content:// 走 uri 授权，不需要存储权限 -->
+            <!-- 文件管理器里"用本应用打开"：content:// 走 uri 授权，不需要存储权限。
+                 mime 列表要跟 BookLibrary 的入库分派和书架那颗导入按钮的 picker 保持一致，
+                 少一行就是"这个格式我们能读，但系统不会想到我们"。 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="content" android:mimeType="text/plain" />
                 <data android:scheme="file" android:mimeType="text/plain" />
+                <data android:scheme="content" android:mimeType="text/markdown" />
+                <data android:scheme="file" android:mimeType="text/markdown" />
+                <data android:scheme="content" android:mimeType="application/epub+zip" />
+                <data android:scheme="file" android:mimeType="application/epub+zip" />
+                <data android:scheme="content" android:mimeType="application/pdf" />
+                <data android:scheme="file" android:mimeType="application/pdf" />
+                <data android:scheme="content" android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:scheme="file" android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:scheme="content" android:mimeType="application/x-mobipocket-ebook" />
+                <data android:scheme="file" android:mimeType="application/x-mobipocket-ebook" />
+                <data android:scheme="content" android:mimeType="application/vnd.amazon.ebook" />
+                <data android:scheme="file" android:mimeType="application/vnd.amazon.ebook" />
+                <data android:scheme="content" android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
+                <data android:scheme="file" android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
             </intent-filter>
         </activity>
     </application>

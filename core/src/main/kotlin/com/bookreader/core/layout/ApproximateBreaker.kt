@@ -1,5 +1,6 @@
 package com.bookreader.core.layout
 
+import com.bookreader.core.model.InlineFlag
 import com.bookreader.core.model.PageStyle
 
 /** 中文排版的断行约束，两个 LineBreaker 实现共用。 */
@@ -40,11 +41,24 @@ class ApproximateBreaker(style: PageStyle) : LineBreaker {
 
     override val lineHeightPx: Float = style.lineHeightPx
 
-    private fun widthOf(c: Char): Float = when {
-        BreakRules.isCjk(c) -> fontSizePx
-        c == ' ' -> fontSizePx * 0.30f
-        c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' -> fontSizePx * 0.55f
-        else -> fontSizePx * 0.50f
+    private fun widthOf(c: Char, flags: Int = 0): Float {
+        val base = when {
+            BreakRules.isCjk(c) -> fontSizePx
+            c == ' ' -> fontSizePx * 0.30f
+            c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' -> fontSizePx * 0.55f
+            else -> fontSizePx * 0.50f
+        }
+        // 等宽那一档按 0.6 格给（拉丁等宽比比例字体宽、比汉字窄）；粗斜体只是略微变宽，
+        // 近似模型要的是"确定、可复算"，不是冒充真机渲染
+        val mono = flags and InlineFlag.CODE != 0
+        val bump = if (flags and InlineFlag.BOLD != 0) 1.04f else 1f
+        return (if (mono) fontSizePx * 0.60f else base) * bump
+    }
+
+    private fun flagsAt(runs: List<RunRange>, i: Int): Int {
+        var acc = 0
+        for (r in runs) if (i in r.from until r.until) acc = acc or r.flags
+        return acc
     }
 
     override fun widthOf(text: CharSequence, from: Int, until: Int): Float {
@@ -54,20 +68,35 @@ class ApproximateBreaker(style: PageStyle) : LineBreaker {
         return acc
     }
 
-    override fun fit(text: CharSequence, from: Int, until: Int, availWidth: Float): Int {
+    override fun widthOf(text: CharSequence, from: Int, until: Int, runs: List<RunRange>): Float {
+        if (runs.isEmpty()) return widthOf(text, from, until)
+        var acc = 0f
+        var i = from
+        while (i < until) {
+            acc += widthOf(text[i], flagsAt(runs, i))
+            i++
+        }
+        return acc
+    }
+
+    override fun fit(text: CharSequence, from: Int, until: Int, availWidth: Float): Int =
+        fit(text, from, until, availWidth, emptyList())
+
+    override fun fit(text: CharSequence, from: Int, until: Int, availWidth: Float, runs: List<RunRange>, cjkRules: Boolean): Int {
         if (until <= from) return until.coerceAtLeast(from + 1)
         var acc = 0f
         var lastBreak = from + 1
         var i = from
+        val adjust: (Int) -> Int = { raw ->
+            if (cjkRules) BreakRules.adjust(text, from, raw, until) else raw.coerceIn(from + 1, until)
+        }
         while (i < until) {
-            val w = widthOf(text[i])
-            if (acc + w > availWidth) {
-                return BreakRules.adjust(text, from, minOf(lastBreak, i), until)
-            }
+            val w = if (runs.isEmpty()) widthOf(text[i]) else widthOf(text[i], flagsAt(runs, i))
+            if (acc + w > availWidth) return adjust(minOf(lastBreak, i))
             acc += w
             i++
             if (i < until && BreakRules.isBreakOpportunity(text, i - 1, i)) lastBreak = i
         }
-        return BreakRules.adjust(text, from, until, until)
+        return adjust(until)
     }
 }

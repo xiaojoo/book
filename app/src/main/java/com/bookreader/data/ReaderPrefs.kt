@@ -116,6 +116,11 @@ class ReaderPrefs(context: Context) {
         get() = p.getString("fontLabel", "系统默认") ?: "系统默认"
         set(v) = p.edit().putString("fontLabel", v).apply()
 
+    /** 书架排布：false = 图墙（三列封面），true = 列表（一行一本）。默认图墙，和改之前一致。 */
+    var shelfList: Boolean
+        get() = p.getBoolean("shelfList", false)
+        set(v) = p.edit().putBoolean("shelfList", v).apply()
+
     /**
      * 版心。三档设置**当参数传进来而不是在这里读 prefs** —— SharedPreferences 不是可观察状态，
      * 在这里读它，调用方的作用域就不会在档位变化时重算，表现就是"改了行间距/边距要退回书架重开才生效"。
@@ -157,6 +162,17 @@ class ReaderPrefs(context: Context) {
         if (parts.size < 2) return null
         return BookPosition(parts[0].toIntOrNull() ?: 0, parts[1].toLongOrNull() ?: 0L, 0, 0)
     }
+
+    /**
+     * 整页渲染那一类（pdf / pptx）读到第几页（0 基）。
+     * 不复用 [savePosition]：那个的权威字段是 absoluteOffset，对不排版的原件没有意义 ——
+     * 一本没有字符偏移的书，位置只能是一页一页的号。
+     */
+    fun saveWholePage(bookId: String, page: Int) {
+        p.edit().putInt("page.$bookId", page.coerceAtLeast(0)).apply()
+    }
+
+    fun loadWholePage(bookId: String): Int = p.getInt("page.$bookId", 0)
 
     /** 书签：一本书一串 "chapterIndex|absoluteOffset"。 */
     fun bookmarks(bookId: String): List<BookPosition> =

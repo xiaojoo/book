@@ -3,6 +3,7 @@ package com.bookreader.core.storage
 import com.bookreader.core.index.ChapterIndex
 import com.bookreader.core.model.BookMeta
 import com.bookreader.core.model.Chapter
+import com.bookreader.core.model.StyleIndex
 import java.io.File
 
 /**
@@ -20,6 +21,8 @@ class Book private constructor(
     val meta: BookMeta,
     val chapters: ChapterIndex,
     val cache: ChunkCache,
+    /** markdown 那类书的样式旁路；没有 style.idx 就是空索引，排版走老路。 */
+    val styles: StyleIndex,
 ) : AutoCloseable {
 
     val totalChars: Long get() = meta.totalChars
@@ -35,18 +38,31 @@ class Book private constructor(
 
         fun readMeta(dir: File): BookMeta? = runCatching { metaOf(manifestOf(dir)) }.getOrNull()
 
-        fun metaOf(m: Map<String, String>): BookMeta = BookMeta(
-            id = checkNotNull(m["id"]) { "manifest 缺 id" },
-            title = m["title"] ?: "未命名",
-            author = m["author"] ?: "",
-            totalChars = m.getValue("totalChars").toLong(),
-            chunkChars = m.getValue("chunkChars").toInt(),
-            chunkCount = m.getValue("chunkCount").toInt(),
-            chapterCount = m.getValue("chapterCount").toInt(),
-            contentBytes = m.getValue("contentBytes").toLong(),
-            sourceBytes = m["sourceBytes"]?.toLong() ?: 0L,
-            sourceCharset = m["sourceCharset"] ?: "UTF-8",
-        )
+        /**
+         * pdf 的清单里没有 chunk/章节那一套（它不进排版引擎），所以那几个键缺省。
+         * 只在 kind=pdf 时放行默认值 —— 对引擎书来说缺字段就是真损坏，不能被静默成一本空书。
+         */
+        fun metaOf(m: Map<String, String>): BookMeta {
+            val kind = m["kind"] ?: BookMeta.TXT
+            val pdf = kind == BookMeta.PDF
+            fun long(key: String): Long = m[key]?.toLongOrNull() ?: if (pdf) 0L else error("manifest 缺 $key")
+            fun int(key: String): Int = m[key]?.toIntOrNull() ?: if (pdf) 0 else error("manifest 缺 $key")
+            return BookMeta(
+                id = checkNotNull(m["id"]) { "manifest 缺 id" },
+                title = m["title"] ?: "未命名",
+                author = m["author"] ?: "",
+                totalChars = long("totalChars"),
+                chunkChars = int("chunkChars"),
+                chunkCount = int("chunkCount"),
+                chapterCount = int("chapterCount"),
+                contentBytes = long("contentBytes"),
+                sourceBytes = long("sourceBytes"),
+                sourceCharset = m["sourceCharset"] ?: "UTF-8",
+                kind = kind,
+                // 引擎书本来就没有这个键，不算损坏
+                pages = m["pages"]?.toIntOrNull() ?: 0,
+            )
+        }
 
         /** 书架：扫描根目录下每个子目录的 manifest。 */
         fun listBooks(root: File): List<BookMeta> {
@@ -63,7 +79,8 @@ class Book private constructor(
             val source = wrap(FileTextSource(File(dir, IndexCodec.CONTENT), meta.totalChars, meta.chunkChars, table))
             val chapters = ChapterIndex(IndexCodec.readChapters(File(dir, IndexCodec.CHAPTER_IDX)))
             require(chapters.size == meta.chapterCount) { "章节索引数量不符: ${chapters.size} != ${meta.chapterCount}" }
-            return Book(dir, meta, chapters, ChunkCache(source, maxChunks))
+            val styles = runCatching { IndexCodec.readStyleIndex(File(dir, IndexCodec.STYLE_IDX)) }.getOrDefault(StyleIndex.EMPTY)
+            return Book(dir, meta, chapters, ChunkCache(source, maxChunks), styles)
         }
 
         fun chaptersOf(meta: BookMeta, chapters: List<Chapter>): Int = chapters.size

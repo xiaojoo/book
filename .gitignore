@@ -11,3 +11,7 @@ shots/
 scratch/novel-*.txt
 scratch/reader.xml
 tools/*_tmp.py
+
+# 造夹具的产物和下载的参考包（19MB epub / 29MB txt，不进仓库）
+scratch/
+tools/__pycache__/

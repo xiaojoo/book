@@ -1,6 +1,10 @@
 package com.bookreader.core.storage
 
+import com.bookreader.core.model.BlockKind
+import com.bookreader.core.model.BlockStyle
 import com.bookreader.core.model.Chapter
+import com.bookreader.core.model.InlineSpan
+import com.bookreader.core.model.StyleIndex
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -15,6 +19,10 @@ object IndexCodec {
     const val CONTENT = "content.txt"
     const val CHUNK_IDX = "chunk.idx"
     const val CHAPTER_IDX = "chapter.idx"
+    const val STYLE_IDX = "style.idx"
+
+    /** 一份样式索引里任一类的条数上限：超过就是文件坏了，不是真书（真书几万字也就几千条）。 */
+    private const val MAX_STYLE_ENTRIES = 20_000_000
 
     fun writeChunkIndex(file: File, table: ChunkOffsetTable) {
         DataOutputStream(file.outputStream().buffered()).use { out ->
@@ -65,6 +73,34 @@ object IndexCodec {
                 ins.readFully(t)
                 Chapter(i, String(t, Charsets.UTF_8), start, end)
             }
+        }
+    }
+
+    /**
+     * markdown 的样式旁路：正文还是那份纯文本，这里只记"哪段偏移长什么样"。
+     * 没有这个文件 = 这本书没有样式（txt/epub/mobi 都是），读出来是空索引，行为逐字节不变。
+     */
+    fun writeStyleIndex(file: File, spans: List<InlineSpan>, blocks: List<BlockStyle>) {
+        DataOutputStream(file.outputStream().buffered()).use { out ->
+            out.writeInt(spans.size)
+            spans.forEach { s -> out.writeInt(s.start); out.writeInt(s.end); out.writeInt(s.flags) }
+            out.writeInt(blocks.size)
+            blocks.forEach { b -> out.writeInt(b.start); out.writeByte(b.kind.ordinal); out.writeByte(b.level) }
+        }
+    }
+
+    fun readStyleIndex(file: File): StyleIndex {
+        if (!file.isFile) return StyleIndex.EMPTY
+        return DataInputStream(file.inputStream().buffered()).use { ins ->
+            val n = ins.readInt()
+            require(n in 0..MAX_STYLE_ENTRIES) { "坏样式索引: ${file.path} spans=$n" }
+            val spans = List(n) { InlineSpan(ins.readInt(), ins.readInt(), ins.readInt()) }
+            val m = ins.readInt()
+            require(m in 0..MAX_STYLE_ENTRIES) { "坏样式索引: ${file.path} blocks=$m" }
+            val blocks = List(m) {
+                BlockStyle(ins.readInt(), BlockKind.values()[ins.readByte().toInt().and(0xFF).coerceAtMost(BlockKind.values().size - 1)], ins.readByte().toInt())
+            }
+            StyleIndex(spans, blocks)
         }
     }
 

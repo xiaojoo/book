@@ -27,6 +27,7 @@ fun PageView(
     selectionColor: Int = 0,
     marks: List<LongRange> = emptyList(),
     markColor: Int = 0,
+    styles: com.bookreader.core.model.StyleIndex = com.bookreader.core.model.StyleIndex.EMPTY,
     modifier: Modifier = Modifier,
 ) {
     val textSizePx = style.fontSizePx
@@ -47,6 +48,8 @@ fun PageView(
             lineHeightPx = style.lineHeightPx,
             marks = marks,
             markColor = markColor,
+            styles = styles,
+            quoteColor = quoteArgb(theme),
         )
     }
 }
