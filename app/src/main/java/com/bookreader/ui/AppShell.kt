@@ -69,11 +69,9 @@ class Palette(
     val dot: Color,
     val danger: Color,
     val hairline: Color,
-    val listPage: Color,
     val chip: Color,
 ) {
     val pageArgb: Int get() = page.toArgb()
-    val barArgb: Int get() = card.toArgb()
 }
 
 /**
@@ -89,13 +87,13 @@ object Chrome {
     private val day = Palette(
         page = Color(0xFFF6F7F9), card = Color(0xFFFFFFFF), ink = Color(0xFF22262E),
         faint = Color(0xFF8B93A1), accent = Color(0xFFE30000), dot = Color(0xFFE30000),
-        danger = Color(0xFFB3261E), hairline = Color(0xFFE3E7ED), listPage = Color(0xFFFFFFFF),
+        danger = Color(0xFFB3261E), hairline = Color(0xFFE3E7ED),
         chip = Color(0xFFF4F5F7),
     )
     private val dark = Palette(
         page = Color(0xFF121316), card = Color(0xFF1B1C20), ink = Color(0xFFB9BFC9),
         faint = Color(0xFF6A7079), accent = Color(0xFFFF6B6B), dot = Color(0xFFFF6B6B),
-        danger = Color(0xFFCF6679), hairline = Color(0xFF2A2D33), listPage = Color(0xFF16171A),
+        danger = Color(0xFFCF6679), hairline = Color(0xFF2A2D33),
         chip = Color(0xFF232529),
     )
     private val cur: Palette get() = if (night) dark else day
@@ -108,11 +106,16 @@ object Chrome {
     val dot: Color get() = cur.dot
     val danger: Color get() = cur.danger
     val hairline: Color get() = cur.hairline
-    val listPage: Color get() = cur.listPage
     val chip: Color get() = cur.chip
     val pageArgb: Int get() = cur.pageArgb
-    val barArgb: Int get() = cur.barArgb
 }
+
+/**
+ * 底部抽屉/`ModalBottomSheet` 顶部那一对圆角：一个常量管到底，别出现"抽屉 16dp、偏好设置 28dp"
+ * 那种同一种东西两个主人（Material 的默认就是 28dp）。
+ * 10dp = 这台机 27.5px。阅读页里那四处弹层（快捷/更多设置/字体/书签）仍是 16dp —— 那是他认可过的另一档。
+ */
+val SHEET_RADIUS = 10.dp
 
 enum class MainTab(val label: String, val iconRes: Int) {
     Shelf("书架", R.drawable.ic_tab_shelf),
@@ -127,7 +130,8 @@ fun AppScaffold(
     onTab: (MainTab) -> Unit,
     content: @Composable () -> Unit,
 ) {
-    ApplySystemBars(Chrome.pageArgb, Chrome.barArgb, darkIcons = !Chrome.night)
+    // 系统导航条也铺界面底色：它是底栏往下那条，留着卡片白就等于同一条栏有两个主人
+    ApplySystemBars(Chrome.pageArgb, Chrome.pageArgb, darkIcons = !Chrome.night)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -138,7 +142,7 @@ fun AppScaffold(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Chrome.card)
+                .background(Chrome.page)
                 .drawBehind {
                     // 1px 分界：这台机 1dp 会渲成 3px
                     drawLine(Chrome.hairline, Offset.Zero, Offset(size.width, 0f), 1f)
@@ -197,7 +201,8 @@ private class FeaturedBook(
 /**
  * 精选：静态。文案和封面都是从那张参考截图里裁/抄来的样例，只给原型看，上线前必须换成真书源。
  * 版式是量出来的（截图 827 宽 → 设备 1080 宽，系数 1.306）：封面 128x171=61x82dp、
- * 左边距 40=19dp、图文间距 25=12dp、行距 204=97dp、页面底色反算成纯白。
+ * 图文间距 25=12dp、行距 204=97dp。列表按书签那一档做成卡片（同一套外壳：12dp 外缩进 +
+ * 10dp 圆角 + 10dp 卡缝），所以封面左缘的 19dp 拆成"卡外 12 + 卡内 7"，墨迹位置不变。
  */
 private val FEATURED = listOf(
     FeaturedBook(
@@ -247,7 +252,7 @@ private val FEATURED = listOf(
 @Composable
 fun FeaturedScreen() {
     var note by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxSize().background(Chrome.listPage)) {
+    Column(Modifier.fillMaxSize().background(Chrome.page)) {
         ScreenHeader("精选")
         note?.let {
             Text(
@@ -259,7 +264,8 @@ fun FeaturedScreen() {
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 16.dp),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(FEATURED, key = { it.title }) { book ->
                 FeaturedRow(book = book, onClick = {
@@ -275,9 +281,12 @@ private fun FeaturedRow(book: FeaturedBook, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Chrome.listPage)
+            // 卡片外壳和书签那一档同一份：10dp 圆角 + 卡片底色；左右各 7dp 内衬，加上卡外的
+            // 12dp 正好还是量出来的封面左缘 19dp，改成卡片不该把内容挪位
+            .clip(RoundedCornerShape(10.dp))
+            .background(Chrome.card)
             .tap(onClick)
-            .padding(start = 19.dp, end = 19.dp, top = 7.dp, bottom = 7.dp),
+            .padding(start = 7.dp, end = 7.dp, top = 7.dp, bottom = 7.dp),
     ) {
         Image(
             painter = painterResource(book.coverRes),
@@ -744,7 +753,11 @@ private fun PrefSheet(prefs: ReaderPrefs, onDismiss: () -> Unit) {
     var keep by remember { mutableStateOf(prefs.keepScreenOn) }
     var both by remember { mutableStateOf(prefs.bothSidesNext) }
     var indent by remember { mutableStateOf(prefs.paragraphIndent) }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Chrome.card) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Chrome.card,
+        shape = RoundedCornerShape(topStart = SHEET_RADIUS, topEnd = SHEET_RADIUS),
+    ) {
         Column(Modifier.padding(bottom = 20.dp)) {
             Text("偏好设置", fontSize = 16.sp, color = Chrome.ink, modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 4.dp))
             SwitchLine("音量键翻页", volume) { volume = it; prefs.volumePaging = it }

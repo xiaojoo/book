@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -312,6 +313,8 @@ fun ScrollReader(
                     lineHeightPx = lineHeight,
                     marks = marks,
                     markColor = markColor,
+                    styles = engine.book.styles,
+                    quoteColor = quoteArgb(theme),
                 )
             }
         }
@@ -412,6 +415,10 @@ internal fun headLines(lines: List<TextLine>, cursor: Long): Int {
 }
 
 /** 一行真正占的宽度：两端对齐的行被拉开字距后比量的自然宽长，选中底色和波浪线都要按这个长度铺。 */
+/** 引用块那一档的灰：墨色压暗，六档纸色下都还看得见，不跟正文抢。 */
+internal fun quoteArgb(theme: ReaderTheme): Int =
+    theme.inkColor.copy(alpha = 0.62f).toArgb()
+
 private fun drawnWidthPx(line: TextLine): Float =
     (line.widthPx + line.chars * line.trackingPx).coerceAtLeast(1f)
 
@@ -430,6 +437,9 @@ internal fun drawLines(
     lineHeightPx: Float = 0f,
     marks: List<LongRange> = emptyList(),
     markColor: Int = 0,
+    /** markdown 那类书的样式旁路；空索引 = 老书，逐字节按原来那条路画。 */
+    styles: com.bookreader.core.model.StyleIndex = com.bookreader.core.model.StyleIndex.EMPTY,
+    quoteColor: Int = 0,
 ) {
     // 长按选中的那一段：先铺一层底色，再写字。整段可能跨页、跨屏，所以按行求交集逐行铺。
     // 宽度要用"拉开字距之后"的实际占宽：两端对齐的行 natural 比右边界短一截，
@@ -472,6 +482,25 @@ internal fun drawLines(
             canvas.drawPath(path, pen)
         }
     }
+    // 行内样式要按 run 换字体画：用正文的字体量、用样式的字体画，行会溢出右边界；
+    // 反过来量了样式却没换字体，粗体就只是"看起来一样"。所以字体件在这里也按 flags 缓存一份。
+    val baseFace = paint.typeface ?: android.graphics.Typeface.DEFAULT
+    val faces = HashMap<Int, android.graphics.Typeface>()
+    fun faceOf(flags: Int): android.graphics.Typeface = faces.getOrPut(flags) {
+        val style = when {
+            flags and com.bookreader.core.model.InlineFlag.BOLD != 0 &&
+                flags and com.bookreader.core.model.InlineFlag.ITALIC != 0 -> android.graphics.Typeface.BOLD_ITALIC
+            flags and com.bookreader.core.model.InlineFlag.BOLD != 0 -> android.graphics.Typeface.BOLD
+            flags and com.bookreader.core.model.InlineFlag.ITALIC != 0 -> android.graphics.Typeface.ITALIC
+            else -> android.graphics.Typeface.NORMAL
+        }
+        if (flags and com.bookreader.core.model.InlineFlag.CODE != 0) {
+            android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, style)
+        } else {
+            android.graphics.Typeface.create(baseFace, style)
+        }
+    }
+    val ink = paint.color
     for (line in lines) {
         val from = (line.start - pageStart).toInt().coerceIn(0, text.length)
         val to = (line.end - pageStart).toInt().coerceIn(from, text.length)
@@ -484,15 +513,71 @@ internal fun drawLines(
         }
         // 两端对齐：letterSpacing 是"每个字之后加"，natural + 字数×tracking 正好落到右边界
         paint.letterSpacing = if (line.trackingPx > 0f) line.trackingPx / textSizePx else 0f
-        canvas.drawText(
-            text, from, to, line.indentPx,
-            baseY + line.topPx + ascent * line.titleScale, paint,
-        )
+        val baseYLine = baseY + line.topPx + ascent * line.titleScale
+        if (line.quote && quoteColor != 0) paint.color = quoteColor
+        if (line.quote && lineHeightPx > 0f) {
+            // 引用块左缘那条竖线：宽度就是 1 个物理像素，画在这一行的最左边
+            val pen = android.graphics.Paint(paint)
+            pen.color = if (quoteColor != 0) quoteColor else ink
+            pen.strokeWidth = 3f
+            pen.letterSpacing = 0f
+            canvas.drawRect(line.indentPx - 12f, baseY + line.topPx, line.indentPx - 9f, baseY + line.topPx + lineHeightPx, pen)
+        }
+        var x = line.indentPx
+        val ranges = if (line.mono) listOf(Triple(from, to, com.bookreader.core.model.InlineFlag.CODE))
+        else runRangesOf(styles, line, from, to, pageStart)
+        for ((a, b, flags) in ranges) {
+            paint.typeface = faceOf(flags)
+            // 这台机器的中日韩字体没有真斜体，Typeface.create(base, ITALIC) 画出来和正体逐位相同
+            // （真机量过：普通与"斜体"的 山水风云 墨数 1098=1098、上/下 1/3 质心 77.74/68.78 全等），
+            // 所以斜体自己合成。方向按 Paint 文档那句「For approximating oblique text, use values around -0.25」，
+            // 剪切不改水平推进，所以排版器量出来的宽度不用跟着改。
+            paint.textSkewX = if (flags and com.bookreader.core.model.InlineFlag.ITALIC != 0) -0.22f else 0f
+            canvas.drawText(text, a, b, x, baseYLine, paint)
+            paint.textSkewX = 0f
+            val w = paint.measureText(text, a, b)
+            if (flags and com.bookreader.core.model.InlineFlag.STRIKE != 0) {
+                // 删除线画在字面中间：基线往上 1/3 字高，粗细跟字号走，小字号下不会糊成一团
+                val pen = android.graphics.Paint(paint)
+                pen.letterSpacing = 0f
+                pen.strokeWidth = (textSizePx * line.titleScale * 0.06f).coerceAtLeast(2f)
+                val y = baseYLine - ascent * 0.34f
+                canvas.drawLine(x, y, x + w, y, pen)
+            }
+            x += w
+        }
+        paint.typeface = baseFace
+        paint.color = ink
         if (line.titleScale != 1f) {
             paint.textSize = textSizePx
             paint.isFakeBoldText = false
         }
     }
+}
+
+/** 这一行上的样式分段（绝对偏移换成 text 里的局部下标；没被任何一段盖住的部分 flags=0）。 */
+private fun runRangesOf(
+    styles: com.bookreader.core.model.StyleIndex,
+    line: TextLine,
+    from: Int,
+    to: Int,
+    pageStart: Long,
+): List<Triple<Int, Int, Int>> {
+    val spans = styles.spansIn(line.start.toInt(), line.end.toInt())
+    if (spans.isEmpty()) return listOf(Triple(from, to, 0))
+    val shift = from - line.start.toInt()
+    val out = ArrayList<Triple<Int, Int, Int>>(spans.size + 1)
+    var pos = from
+    for (s in spans.sortedBy { it.start }) {
+        val a = (s.start + shift).coerceIn(from, to)
+        val b = (s.end + shift).coerceIn(from, to)
+        if (b <= a) continue
+        if (a > pos) out += Triple(pos, a, 0)
+        out += Triple(a, b, s.flags)
+        pos = b
+    }
+    if (pos < to) out += Triple(pos, to, 0)
+    return out
 }
 
 @Composable

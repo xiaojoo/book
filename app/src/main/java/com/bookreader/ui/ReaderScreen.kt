@@ -534,9 +534,9 @@ fun ReaderScreen(
                             // 平移：两页一起走，往右翻旧页往左退、新页从右边进；往左翻整个镜像
                             turning && turnMode == TurnMode.Slide -> {
                                 val (outX, inX) = PageTurn.slideOffsets(p, turnForward)
-                                TurnLayer(out.first, out.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor,
+                                TurnLayer(out.first, out.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles,
                                     Modifier.graphicsLayer { translationX = outX * viewport.width })
-                                TurnLayer(page, pageText, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor,
+                                TurnLayer(page, pageText, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles,
                                     Modifier.graphicsLayer { translationX = inX * viewport.width })
                             }
                             // 仿真：都绕左边的书脊转。往前翻是把旧页掀起来（0→-90°），往后翻是把新页铺回去（-90°→0）
@@ -544,8 +544,8 @@ fun ReaderScreen(
                                 val lift = PageTurn.coverLift(p, turnForward)
                                 val under = if (turnForward) page to pageText else out
                                 val onTop = if (turnForward) out else page to pageText
-                                TurnLayer(under.first, under.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, Modifier)
-                                TurnLayer(onTop.first, onTop.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor,
+                                TurnLayer(under.first, under.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles, Modifier)
+                                TurnLayer(onTop.first, onTop.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles,
                                     Modifier.graphicsLayer {
                                         rotationY = PageTurn.coverAngle(lift)
                                         transformOrigin = TransformOrigin(0f, 0.5f)
@@ -553,19 +553,29 @@ fun ReaderScreen(
                                         alpha = 1f - 0.3f * lift
                                     })
                             }
-                            else -> TurnLayer(page, pageText, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, Modifier)
+                            else -> TurnLayer(page, pageText, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles, Modifier)
                         }
                     }
                 }
             selection?.let { range ->
                 val rect = selectionRect
+                // 尖端离段落边缘的缝、三角自己的高、动作栏的高，三者都要算进落点：
+                // 之前朝上那一档只让开了栏高（70dp），三角整个压在段落首行上；朝下那一档
+                // 尖端从段落底边往上 4dp 就开始画，栏体也只让了 4dp，等于把下一行削掉半截。
+                val tipGap = 4f * density.density
+                val arrowH = 8f * density.density
+                // 动作栏自己的高度：SelectionBar 里写的是 58dp（真机量过那一整条色块 160px = 58.2dp）。
+                // 先前按 70dp 预留，多让 12dp，尖端离段落 46px，看着就是三角没挨着段落。
+                val barH = 58f * density.density
+                // 「已加书签…」那行在栏上面，占一格高度，落点要把它算进去，否则一出现回话整栏就往下挤
+                val noteH = if (selectionNote != null) 24f * density.density else 0f
+                val stackH = noteH + barH + arrowH + tipGap
                 // 上面放得下就贴在段落上面；放不下（选的是第一段）才放到下面
-                val barAbove = rect != null && rect.first > 84f + 70f * density.density
-                // 三角占 8dp，贴在面向段落的那一侧，尖端离段落边缘留 4dp
+                val barAbove = rect != null && rect.first > 84f + stackH
                 val barTopPx = when {
                     rect == null -> viewport.height - 190f
-                    barAbove -> rect.first - 70f * density.density
-                    else -> rect.second - 4f * density.density
+                    barAbove -> rect.first - stackH
+                    else -> rect.second + tipGap
                 }
                 Column(
                     modifier = Modifier
@@ -1292,6 +1302,7 @@ private fun TurnLayer(
     selectionColor: Int,
     marks: List<LongRange>,
     markColor: Int,
+    styles: com.bookreader.core.model.StyleIndex,
     move: Modifier,
 ) {
     PageView(
@@ -1305,6 +1316,9 @@ private fun TurnLayer(
         selectionColor = selectionColor,
         marks = marks,
         markColor = markColor,
+        // 这一行不转就等于整条按页那档没有行内样式：PageView 的默认值是空索引，
+        // 编译和判据都不会红，只有把同一组词量一遍才发现粗体没画上去（真机量过：两组都是 22.54%）
+        styles = styles,
         modifier = Modifier
             .fillMaxSize()
             .then(move)

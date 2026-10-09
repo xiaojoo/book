@@ -28,6 +28,8 @@ class TxtIngestor(private val chunkChars: Int = DEFAULT_CHUNK_CHARS) {
         destDir: File,
         title: String = source.nameWithoutExtension,
         author: String = "",
+        /** markdown 那类书带过来的样式旁路；null = 这本书没有样式（txt/epub/mobi 都是）。 */
+        styles: com.bookreader.core.model.StyleIndex? = null,
         onProgress: (Double) -> Unit = {},
     ): IngestReport {
         require(chunkChars in MIN_CHUNK_CHARS..MAX_CHUNK_CHARS) { "逻辑块大小要落在 4096~65536 字之间" }
@@ -129,8 +131,11 @@ class TxtIngestor(private val chunkChars: Int = DEFAULT_CHUNK_CHARS) {
         check(done) { "入库中途失败，目录内容不完整: ${destDir.path}" }
         require(totalChars > 0) { "正文是空的" }
 
+        // markdown 的章是显式的：# 一级标题就是章。用正文那套正则认会把 "1. 有序列表" 认成章
+        // —— 真机上量过：那样切出来的第一章只有 7 行，剩下的正文被推到了后面几章去
+        val effective = mdTitles(File(destDir, IndexCodec.CONTENT), styles) ?: titles
         val chapters = splitOversized(
-            buildChapters(titles, totalChars),
+            buildChapters(effective, totalChars),
             FileTextSource(File(destDir, IndexCodec.CONTENT), totalChars, chunkChars, ChunkOffsetTable(byteStarts.toLongArray(), byteLens.toIntArray())),
             MAX_CHAPTER_CHARS,
         )
@@ -139,6 +144,14 @@ class TxtIngestor(private val chunkChars: Int = DEFAULT_CHUNK_CHARS) {
             ChunkOffsetTable(byteStarts.toLongArray(), byteLens.toIntArray())
         )
         IndexCodec.writeChapters(File(destDir, IndexCodec.CHAPTER_IDX), chapters)
+        // 样式偏移是"正文第几个字"，和 content.txt 同一个坐标系；写完立刻在测试里回读一段核对
+        if (styles != null && (styles.spans.isNotEmpty() || styles.blocks.isNotEmpty())) {
+            IndexCodec.writeStyleIndex(
+                File(destDir, IndexCodec.STYLE_IDX),
+                styles.spans.filter { it.start < totalChars && it.end <= totalChars },
+                styles.blocks.filter { it.start < totalChars },
+            )
+        }
         val meta = BookMeta(
             id = destDir.name,
             title = title,
@@ -167,6 +180,22 @@ class TxtIngestor(private val chunkChars: Int = DEFAULT_CHUNK_CHARS) {
             )
         )
         return IngestReport(meta, (System.nanoTime() - startedAt) / 1_000_000, titles.size, charset.name())
+    }
+
+    /**
+     * md 书的章表：每个 `#` 一级标题开一章。少于两个就退回正文正则那套
+     * （只有一级标题的笔记类 md 不该被切成"一章"）。
+     */
+    private fun mdTitles(content: File, styles: com.bookreader.core.model.StyleIndex?): List<Pair<Long, String>>? {
+        if (styles == null) return null
+        val heads = styles.blocks.filter { it.kind == com.bookreader.core.model.BlockKind.HEADING1 }.sortedBy { it.start }
+        if (heads.size < 2) return null
+        val text = content.readText(Charsets.UTF_8)
+        return heads.map { h ->
+            val nl = text.indexOf('\n', h.start)
+            val end = if (nl < 0) text.length else nl
+            h.start.toLong() to text.substring(h.start, end).take(80)
+        }
     }
 
     private fun buildChapters(titles: List<Pair<Long, String>>, totalChars: Long): List<Chapter> {

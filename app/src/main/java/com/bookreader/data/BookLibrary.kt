@@ -2,15 +2,29 @@ package com.bookreader.data
 
 import android.content.Context
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import com.bookreader.core.ingest.EbookText
+import com.bookreader.core.ingest.MarkdownText
+import com.bookreader.core.ingest.MobiText
+import com.bookreader.core.ingest.PptxDoc
 import com.bookreader.core.ingest.TxtIngestor
 import com.bookreader.core.model.BookMeta
 import com.bookreader.core.storage.Book
+import com.bookreader.core.storage.IndexCodec
+import android.graphics.pdf.PdfRenderer
 import java.io.File
 
 /**
  * 书架落在 filesDir/books/<id>/，每目录一本（core 的 BookContainer）。
  * SAF 给的 uri 不是文件路径，所以先流式复制到 cacheDir 再入库，入库产物才进 filesDir。
+ *
+ * 四条入库路：
+ *   txt            → 直接进 [TxtIngestor]
+ *   epub / docx    → [EbookText] 抽成"一行一段"的 txt，再进同一个 [TxtIngestor]（章节、偏移、分页全复用）
+ *   mobi / azw3    → [MobiText] 解 PalmDOC LZ77，同样抽成 txt 进同一个 [TxtIngestor]
+ *   pdf / pptx     → 不进排版引擎：原件留在书目录里，清单上记 kind + 页数，
+ *                    打开分别走 PdfReaderScreen（整页位图）和 PptReaderScreen（一屏一张版面）
  */
 class BookLibrary(private val context: Context) {
 
@@ -25,6 +39,11 @@ class BookLibrary(private val context: Context) {
 
     fun delete(id: String): Boolean = dir(id).deleteRecursively()
 
+    /** 整页渲染那一类的原件（kind=pdf / kind=pptx 各有一份）。 */
+    fun pdfFile(id: String): File = File(dir(id), PDF_FILE)
+
+    fun deckFile(id: String): File = File(dir(id), PPTX_FILE)
+
     fun displayName(uri: Uri): String {
         // file:// 没有 DISPLAY_NAME 可查，只能拿路径末段，否则书架上会全叫"未命名小说"
         if (uri.scheme == "file") return uri.lastPathSegment?.substringAfterLast('/') ?: "未命名小说"
@@ -36,20 +55,43 @@ class BookLibrary(private val context: Context) {
 
     /** 同步阻塞，调用方要在 IO 线程上跑。 */
     fun import(uri: Uri, onProgress: (Double) -> Unit = {}): BookMeta {
-        val title = displayName(uri).substringBeforeLast('.')
-        val staged = File(staging, "staged-${System.currentTimeMillis()}.txt")
+        val name = displayName(uri)
+        val ext = name.substringAfterLast('.', "")
+        val title = name.substringBeforeLast('.').ifBlank { "未命名小说" }
+        val staged = File(staging, "staged-${System.currentTimeMillis()}.${ext.ifBlank { "bin" }}")
+        // 输出流必须自己关掉：copyTo 只管往里写，外面那层 64KB 缓冲不 flush，
+        // 落盘的件就短一截 —— zip 的中央目录在文件末尾，短了就等于"不是 epub"（真机上量过：
+        // 19,624,699 字节的 epub 只剩 19,491,976，被当成纯文本吞成了 99 章乱码）
         context.contentResolver.openInputStream(uri).use { input ->
             checkNotNull(input) { "读不到所选文件" }
-            input.copyTo(staged.outputStream().buffered(1 shl 16))
+            staged.outputStream().buffered(1 shl 16).use { out -> input.copyTo(out) }
         }
         val id = "${System.currentTimeMillis()}-${title.replace(UNSAFE, "").take(40)}"
         val dir = File(root, id)
         val t0 = System.nanoTime()
         return try {
-            val meta = TxtIngestor().ingest(staged, dir, title = title, onProgress = onProgress).meta
+            val ebook = EbookText()
+            val mobi = MobiText()
+            val meta = when {
+                ext.lowercase() == "pdf" -> importPdf(staged, dir, id, title)
+                ext.lowercase() == "pptx" -> importPptx(staged, dir, id, title)
+                ebook.supports(staged) -> importMarkup(staged, dir, id, title, onProgress) { s, d -> ebook.extractToText(s, d) }
+                mobi.supports(staged) -> importMarkup(staged, dir, id, title, onProgress) { s, d -> mobi.extractToText(s, d) }
+                // md 只按扩展名认：内容嗅探会把"正文里恰好有三个星号"的小说当 markdown 拆，
+                // 那种错看不出来（字数照样对，段落却全乱了），所以宁可漏认也不误认。
+                ext.lowercase() in MD_EXTENSIONS -> importMarkdown(staged, dir, id, title, onProgress)
+                // 扩展名说是这些格式却没认出壳，就不能当纯文本吞下去：
+                // 那会把 zip/palmdb 的二进制读成几十万字乱码（真机上量过：19,491,976 字 / 99 章 / ISO-8859-1）
+                ext.lowercase() in BOOK_EXTENSIONS ->
+                    error("这个 ${ext.uppercase()} 读不出正文：可能是加密的（DRM/HUFF），或者不是真正的 ${ext.uppercase()} 文件")
+                // .ppt 是 97 那版二进制复合文档，不是 zip —— 当纯文本吞会读出几十万字乱码
+                ext.lowercase() == "ppt" ->
+                    error("这是老版 .ppt（97 二进制格式），这边读不了；在电脑上另存成 .pptx 再导入")
+                else -> TxtIngestor().ingest(staged, dir, title = title, onProgress = onProgress).meta
+            }
             android.util.Log.d(
                 "ReaderPerf",
-                "ingest chars=${meta.totalChars} chunks=${meta.chunkCount} contentBytes=${meta.contentBytes} " +
+                "ingest kind=${meta.kind} ext=$ext chars=${meta.totalChars} pages=${meta.pages} " +
                     "chapters=${meta.chapterCount} charset=${meta.sourceCharset} ms=${(System.nanoTime() - t0) / 1_000_000}",
             )
             meta
@@ -58,7 +100,116 @@ class BookLibrary(private val context: Context) {
         }
     }
 
+    /**
+     * 抽正文那条路（epub / docx / mobi / azw3）：先抽成"一行一段"的 txt（临时件，抽完就删），
+     * 再走和 TXT 完全一样的入库 —— 章节识别、分块、偏移、分页全复用，不为哪种壳另起一套。
+     */
+    private fun importMarkup(
+        staged: File,
+        dir: File,
+        id: String,
+        title: String,
+        onProgress: (Double) -> Unit,
+        extract: (File, File) -> String?,
+    ): BookMeta {
+        val txt = File(staging, "extracted-${System.currentTimeMillis()}.txt")
+        val report = extract(staged, txt) ?: error("这个文件里没抽出正文（可能是加密的）")
+        android.util.Log.d("ReaderPerf", "ebook extract $report")
+        try {
+            return TxtIngestor().ingest(txt, dir, title = title, onProgress = onProgress).meta
+        } finally {
+            txt.delete()
+        }
+    }
+
+    /**
+     * markdown：抽成纯文本 + 一份样式旁路。样式的偏移是相对抽出来的那段文本算的，
+     * 所以 parse 的结果要原样落盘再喂给 TxtIngestor —— 中间多改一个字符，粗体就会粗到别处去。
+     */
+    private fun importMarkdown(
+        staged: File,
+        dir: File,
+        id: String,
+        title: String,
+        onProgress: (Double) -> Unit,
+    ): BookMeta {
+        val parsed = MarkdownText().parseFile(staged)
+        val txt = File(staging, "extracted-${System.currentTimeMillis()}.txt")
+        txt.writeText(parsed.text, Charsets.UTF_8)
+        android.util.Log.d("ReaderPerf", "md 块=${parsed.blocks} 样式=${parsed.spans} 字=${parsed.text.length}")
+        try {
+            return TxtIngestor().ingest(txt, dir, title = title, styles = parsed.styles, onProgress = onProgress).meta
+        } finally {
+            txt.delete()
+        }
+    }
+
+    /**
+     * 整页渲染那一类（pdf / pptx）的入库：原件进书目录，清单只记"这是哪一类、多少页"。
+     * 页数在入库时就数好 —— 书架和页码条都要它，而渲染器不能跨进程常驻。
+     */
+    private fun importWholePage(staged: File, dir: File, id: String, title: String, kind: String, file: String, pages: Int): BookMeta {
+        require(pages > 0) { "这个 $kind 打不开（0 页）：可能已损坏或被加密" }
+        val size = File(dir, file).length()
+        IndexCodec.writeManifest(
+            File(dir, IndexCodec.MANIFEST),
+            linkedMapOf(
+                "id" to id,
+                "title" to title,
+                "author" to "",
+                // 整页渲染的书没有"章"和"字"这两个口径，别把页数塞进 chapterCount 冒充
+                "totalChars" to "0",
+                "chunkChars" to "0",
+                "chunkCount" to "0",
+                "chapterCount" to "0",
+                "contentBytes" to size.toString(),
+                "sourceBytes" to size.toString(),
+                "sourceCharset" to kind.uppercase(),
+                "kind" to kind,
+                "pages" to pages.toString(),
+            ),
+        )
+        return BookMeta(
+            id = id,
+            title = title,
+            author = "",
+            totalChars = 0L,
+            chunkChars = 0,
+            chunkCount = 0,
+            chapterCount = 0,
+            contentBytes = size,
+            sourceBytes = size,
+            sourceCharset = kind.uppercase(),
+            kind = kind,
+            pages = pages,
+        )
+    }
+
+    private fun importPdf(staged: File, dir: File, id: String, title: String): BookMeta {
+        dir.mkdirs()
+        staged.copyTo(File(dir, PDF_FILE), overwrite = true)
+        val pages = runCatching {
+            ParcelFileDescriptor.open(File(dir, PDF_FILE), ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                PdfRenderer(pfd).use { it.pageCount }
+            }
+        }.getOrDefault(0)
+        return importWholePage(staged, dir, id, title, BookMeta.PDF, PDF_FILE, pages)
+    }
+
+    private fun importPptx(staged: File, dir: File, id: String, title: String): BookMeta {
+        dir.mkdirs()
+        staged.copyTo(File(dir, PPTX_FILE), overwrite = true)
+        val deck = PptxDoc().load(File(dir, PPTX_FILE))
+        return importWholePage(staged, dir, id, title, BookMeta.PPTX, PPTX_FILE, deck?.slides?.size ?: 0)
+    }
+
     private companion object {
         val UNSAFE = Regex("""[\\/:*?"<>|\s]""")
+
+        /** 这些扩展名一律该走抽正文那条路；认不出壳就报错，不当纯文本吞。 */
+        val BOOK_EXTENSIONS = setOf("epub", "docx", "mobi", "azw", "azw3", "prc", "pptx")
+        val MD_EXTENSIONS = setOf("md", "markdown", "mdown")
+        const val PDF_FILE = "document.pdf"
+        const val PPTX_FILE = "deck.pptx"
     }
 }

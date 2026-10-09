@@ -1,7 +1,9 @@
 package com.bookreader.core.layout
 
+import com.bookreader.core.model.BlockKind
 import com.bookreader.core.model.Page
 import com.bookreader.core.model.PageStyle
+import com.bookreader.core.model.StyleIndex
 import com.bookreader.core.model.TextLine
 import com.bookreader.core.storage.ChunkCache
 import com.bookreader.core.text.ParagraphCursor
@@ -14,6 +16,7 @@ class PageComposer(
     private val cache: ChunkCache,
     private val breaker: LineBreaker,
     private val style: PageStyle,
+    private val styles: StyleIndex = StyleIndex.EMPTY,
 ) {
     private val cursor = ParagraphCursor(cache)
 
@@ -43,7 +46,9 @@ class PageComposer(
             if (pos >= chapterEnd || pos >= total) break
             val paragraphStart = cursor.startAtOrBefore(pos)
             val paragraph = cursor.paragraphAt(paragraphStart)
-            val lead = leadingSpaces(paragraph.text)
+            val block = styles.blockAt(paragraphStart.toInt())
+            // 代码块的行首空格是对齐用的，不能当"正文里手打的假缩进"吃掉
+            val lead = if (block?.kind == BlockKind.CODE) 0 else leadingSpaces(paragraph.text)
             val limit = (minOf(paragraph.length.toLong(), chapterEnd - paragraphStart) - lead).toInt().coerceAtLeast(0)
             var local = (pos - paragraphStart).toInt() - lead
             if (local < 0) local = 0
@@ -54,15 +59,32 @@ class PageComposer(
             val isTitle = paragraphStart == chapterStart
             // 章名那一行顶格（不吃段首缩进），放大和加粗由绘制端按 titleScale 办；
             // 可用宽度先按倍数除掉，量出来的自然宽才是放大后真正占的宽度，标题行才不会顶出右边界
-            val titleScale = if (isTitle) TITLE_SCALE else 1f
-            val indent = if (local == 0 && !isTitle) style.paragraphIndentPx else 0f
+            val titleScale = when (block?.kind) {
+                BlockKind.HEADING1 -> HEADING1_SCALE
+                BlockKind.HEADING2 -> HEADING2_SCALE
+                BlockKind.HEADING3 -> HEADING3_SCALE
+                else -> if (isTitle) TITLE_SCALE else 1f
+            }
+            // 标题、引用、代码、列表都不吃段首缩进：它们靠块级缩进区分，再叠 2 字就跑偏了
+            val blockIndent = when (block?.kind) {
+                BlockKind.QUOTE -> style.paragraphIndentPx
+                BlockKind.CODE -> 0f
+                BlockKind.LIST -> style.paragraphIndentPx * 0.5f + block.level * style.fontSizePx * 2f
+                else -> 0f
+            }
+            val noParagraphIndent = isTitle || block != null
+            val indent = blockIndent + (if (local == 0 && !noParagraphIndent) style.paragraphIndentPx else 0f)
+            val mono = block?.kind == BlockKind.CODE
             val avail = (style.contentWidthPx - indent) / titleScale
-            val fit = breaker.fit(paragraph.text, local + lead, limit + lead, avail).coerceAtLeast(local + lead + 1) - lead
-            val natural = breaker.widthOf(paragraph.text, local + lead, fit + lead)
+            val quote = block?.kind == BlockKind.QUOTE
+            // 行内样式：段里的绝对偏移换成局部下标，交给测量器按 run 换字体量宽
+            val runs = if (styles.spans.isEmpty()) EMPTY_RUNS else inlineRuns(paragraphStart, lead, limit)
+            val fit = breaker.fit(paragraph.text, local + lead, limit + lead, avail, runs, cjkRules = !mono).coerceAtLeast(local + lead + 1) - lead
+            val natural = breaker.widthOf(paragraph.text, local + lead, fit + lead, runs)
             val chars = fit - local
             val lastOfParagraph = fit >= limit
             // 两端对齐：段中行把余量摊到字距上，段末行不拉伸，否则右边界每行都参差
-            val tracking = if (lastOfParagraph || chars < 2) 0f else {
+            val tracking = if (lastOfParagraph || chars < 2 || mono) 0f else {
                 ((avail - natural) / chars).coerceIn(0f, style.fontSizePx * MAX_TRACK_RATIO)
             }
             lines += TextLine(
@@ -73,6 +95,8 @@ class PageComposer(
                 widthPx = natural,
                 trackingPx = tracking,
                 titleScale = titleScale,
+                mono = mono,
+                quote = quote,
             )
             linesLaidOut++
             y += lineHeight
@@ -104,6 +128,11 @@ class PageComposer(
         /** 章名相对正文的字号倍数（加粗由绘制端 fakeBold 给）。 */
         const val TITLE_SCALE = 1.25f
 
+        /** markdown 的三级标题：倍数照常见渲染给，h1 和章名同一档。 */
+        const val HEADING1_SCALE = 1.25f
+        const val HEADING2_SCALE = 1.15f
+        const val HEADING3_SCALE = 1.06f
+
         /** 两端对齐最多补多少字距（相对字号），不然短句会被拉成稀疏的点线。 */
         private const val MAX_TRACK_RATIO = 0.40f
 
@@ -113,5 +142,19 @@ class PageComposer(
             while (i < text.length && (text[i].isWhitespace() || text[i].code == 0xA0)) i++
             return i
         }
+
+        private val EMPTY_RUNS = emptyList<RunRange>()
+    }
+
+    /** 这一段里的行内样式，换成 `paragraph.text` 的局部下标（测量器按局部下标取字）。 */
+    private fun inlineRuns(paragraphStart: Long, lead: Int, limit: Int): List<RunRange> {
+        val from = paragraphStart.toInt() + lead
+        val spans = styles.spansIn(from, from + limit)
+        if (spans.isEmpty()) return EMPTY_RUNS
+        return spans.mapNotNull { s ->
+            val a = (s.start - from).coerceAtLeast(0)
+            val b = (s.end - from).coerceAtMost(limit)
+            if (b <= a) null else RunRange(a, b, s.flags)
+        }.sortedBy { it.from }
     }
 }

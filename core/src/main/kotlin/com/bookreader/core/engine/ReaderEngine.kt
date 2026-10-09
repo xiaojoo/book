@@ -221,7 +221,7 @@ class ReaderEngine(
         linesLaidOut = composer.linesLaidOut,
     )
 
-    private fun newComposer(s: PageStyle): PageComposer = PageComposer(book.cache, breakerFactory(s), s)
+    private fun newComposer(s: PageStyle): PageComposer = PageComposer(book.cache, breakerFactory(s), s, book.styles)
 
     @Synchronized
     private fun pagination(index: Int): ChapterPagination = paginations.getOrPut(index) {

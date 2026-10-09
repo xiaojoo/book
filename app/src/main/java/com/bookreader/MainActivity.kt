@@ -16,14 +16,18 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.ReaderPrefs
+import com.bookreader.core.model.BookMeta
 import com.bookreader.ui.AppScaffold
 import com.bookreader.ui.FeaturedScreen
 import com.bookreader.ui.LibraryScreen
 import com.bookreader.ui.Chrome
+import com.bookreader.ui.PdfReaderScreen
+import com.bookreader.ui.PptReaderScreen
 import com.bookreader.ui.ReaderTheme
 import com.bookreader.ui.MainTab
 import com.bookreader.ui.MarksScreen
@@ -106,7 +110,17 @@ private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
             }
         }
     } else {
-        ReaderScreen(bookId = id, library = library, prefs = prefs, onBack = { openBook = null })
+        // 整页渲染那一类（pdf / pptx）不进排版引擎，开的是另一条渲染路 —— 路由看的是 kind 而不是"能不能 open"
+        val meta = remember(id) { library.list().firstOrNull { it.id == id } }
+        if (meta == null) {
+            LaunchedEffect(id) { openBook = null }
+        } else if (meta.kind == BookMeta.PDF) {
+            PdfReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
+        } else if (meta.kind == BookMeta.PPTX) {
+            PptReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
+        } else {
+            ReaderScreen(bookId = id, library = library, prefs = prefs, onBack = { openBook = null })
+        }
     }
 }
 /** 什么都不画的点击反馈：Material 的 Button 和 clickable 都读这颗，一处换掉全项目生效。 */
