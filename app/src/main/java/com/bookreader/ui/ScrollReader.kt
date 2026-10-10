@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.bookreader.core.engine.ReaderEngine
+import com.bookreader.core.layout.coversLine
 import com.bookreader.core.model.Page
 import com.bookreader.core.model.PageStyle
 import com.bookreader.data.TraditionalText
@@ -448,7 +449,7 @@ internal fun drawLines(
         val fill = android.graphics.Paint(paint)
         fill.color = highlightColor
         for (line in lines) {
-            if (line.end <= highlight.first || line.start >= highlight.last) continue
+            if (!highlight.coversLine(line.start, line.end)) continue
             canvas.drawRect(
                 line.indentPx,
                 baseY + line.topPx,

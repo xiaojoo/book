@@ -2,10 +2,15 @@ package com.bookreader.ui
 
 import android.app.Activity
 import android.util.Log
+import android.media.AudioManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +32,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.focus.FocusRequester
@@ -37,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -46,6 +54,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.text.style.TextOverflow
+import java.io.File
 import com.bookreader.R
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -58,10 +67,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -72,7 +83,9 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
@@ -80,14 +93,23 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bookreader.core.ai.AiProtocol
+import com.bookreader.core.ai.AiSpeech
 import com.bookreader.core.engine.PrefetchManager
 import com.bookreader.core.engine.PageTurn
 import com.bookreader.core.engine.ReaderEngine
 import com.bookreader.core.engine.ReaderGestures
 import com.bookreader.core.engine.TapZone
+import com.bookreader.data.AiClient
+import com.bookreader.data.AiError
+import com.bookreader.data.AiVoiceCache
+import com.bookreader.data.AiVoiceClient
+import com.bookreader.data.AiVoicePlayer
+import com.bookreader.data.SecretStore
 import com.bookreader.core.model.BookPosition
 import com.bookreader.core.model.Page
 import com.bookreader.core.model.PageStyle
@@ -104,7 +126,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-private enum class Panel { None, Chapters, Search, Marks, Quick, More, Fonts }
+private enum class Panel { None, Chapters, Search, Marks, Dict, Quick, More, Fonts }
 
 internal const val TAG_PERF = "ReaderPerf"
 
@@ -151,9 +173,47 @@ fun ReaderScreen(
     var selectionRect by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     /** 动作栏下面那一行回话：哪颗没接后端，这里说清楚，不留哑按钮。 */
     var selectionNote by remember { mutableStateOf<String?>(null) }
+    /** 词典面板的三样：查的那段、AI 回来的三行、还在不在路上。只在 `Panel.Dict` 开着时有意义。 */
+    var dictQuery by remember { mutableStateOf("") }
+    var dictAnswer by remember { mutableStateOf<String?>(null) }
+    var dictBusy by remember { mutableStateOf(false) }
+    /**
+     * 听书的三样：正在念的那一段（**它才是选中高亮的主人** —— 动作栏收起来之后高亮要一直留到念完）、
+     * 是不是在放（暂停键要跟着它换图标）、浮窗的位置（像素，可拖）。
+     */
+    var listening by remember { mutableStateOf<LongRange?>(null) }
+    var aiPlaying by remember { mutableStateOf(false) }
+    /** 合成在路上的那几秒：浮窗先不出现。它一出现就该能按，出现一颗按了不动的"继续"看起来是坏了。 */
+    var listenBusy by remember { mutableStateOf(false) }
+    /** 点浮窗上的封面展开的那一整屏（听书页）。收起它不影响播放。 */
+    var listenPage by remember { mutableStateOf(false) }
+    /**
+     * 语速。存在这一层而不是听书页里：收起那一屏时组合会被销毁，而播放器手里的速率还在 ——
+     * 存在这里才不会"界面写 1.0x、耳朵听着 1.5x"。
+     */
+    var listenRate by remember { mutableStateOf(1.0f) }
+    // 音色当前值：prefs 是 SharedPreferences，不是可观察状态，写完不重算的话界面上那颗勾还停在旧名字上
+    var voiceNow by remember { mutableStateOf(prefs.aiVoiceId) }
+    // 「更多」里那两颗开关：自动接下一段默认关（每多一段就多一次合成费），混播默认关（照旧抢焦点）
+    var autoNext by remember { mutableStateOf(prefs.listenAutoNext) }
+    var shareFocus by remember { mutableStateOf(prefs.listenShareFocus) }
+    var historyPage by remember { mutableStateOf(false) }
+    var fixesPage by remember { mutableStateOf(false) }
+    var voiceHistory by remember { mutableStateOf<List<AiVoiceCache.Entry>>(emptyList()) }
+    var floatPos by remember { mutableStateOf(Offset.Zero) }
+    /** 动作栏单独一个开关：以前它和"有没有选中"绑死，于是"留着高亮、收起按钮"做不到。 */
+    var barUp by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val voice = remember { ParagraphVoice(context) }
     DisposableEffect(voice) { onDispose { voice.close() } }
+    // AI 朗读（配了语音那一档才有意义）和系统 TTS 是两个主人，谁开口另一个就得停
+    val aiVoice = remember {
+        AiVoicePlayer().apply {
+            // 混播那颗开关要的就是这个服务；不塞进去它会静默什么都不做
+            audioManager = context.getSystemService(AudioManager::class.java)
+        }
+    }
+    DisposableEffect(aiVoice) { onDispose { aiVoice.close() } }
     val selectionColor = theme.inkColor.copy(alpha = 0.18f).toArgb()
     val markColor = theme.accentColor.copy(alpha = 0.9f).toArgb()
     var restPrompt by remember { mutableStateOf(false) }
@@ -317,11 +377,18 @@ fun ReaderScreen(
 
     // 菜单开着时，点屏幕任何一处都是收菜单，不误翻页
     fun surfaceTap(widthPx: Int, x: Float) {
-        if (selection != null) {
+        if (barUp) {
+            // 只收动作栏。高亮**留着**：听书时点屏幕是为了翻页继续听，不是取消选中
+            barUp = false
+            selectionNote = null
+            return
+        }
+        if (selection != null && listening == null) {
             selection = null
             selectionRect = null
             selectionNote = null
             voice.stop()
+            aiVoice.stop()
             return
         }
         if (panel != Panel.None) {
@@ -336,7 +403,9 @@ fun ReaderScreen(
         when (ReaderGestures.zoneOf(widthPx, x)) {
             TapZone.Prev -> if (bothSidesNext) turn(true) else turn(false)
             TapZone.Next -> turn(true)
-            TapZone.ToggleBars -> bars = true
+            // 听书会话开着的时候，中间这一枪不叫菜单：上面那两条分支故意没把选中清掉（点屏是为了翻页继续听），
+            // 于是它会一路走到这里 —— 表现就是他报的"听书中点屏幕，阅读菜单又冒出来了"
+            TapZone.ToggleBars -> if (listening == null) bars = true
         }
     }
 
@@ -354,12 +423,21 @@ fun ReaderScreen(
         } else {
             // 音量键翻页时菜单/弹层先收起来：手在侧边按键，屏幕上还压着一层面板没意义
             host.volumeHook = { up ->
-                if (panel != Panel.None) {
-                    panel = Panel.None
-                    panelNote = null
+                // 听书会话开着（在放、还是暂停都算）就不拦这一枪：他要的是音量，不是翻页。
+                // 原来判的是 aiPlaying，暂停的那几秒会漏 —— 漏了的表现就是"音量键还是打断了听书"
+                if (listening != null) {
+                    Log.d(TAG_PERF, "volume key $up -> 系统音量（听书会话开着）")
+                    false
+                } else {
+                    if (panel != Panel.None) {
+                        panel = Panel.None
+                        panelNote = null
+                    }
+                    bars = false
+                    Log.d(TAG_PERF, "volume key $up -> 翻页")
+                    turn(!up)
+                    true
                 }
-                bars = false
-                turn(!up)
             }
             onDispose { host.volumeHook = null }
         }
@@ -419,13 +497,34 @@ fun ReaderScreen(
         restPrompt = true
     }
 
-    // 系统返回键：先收面板，再收菜单，最后回书架，不直接退程序
+    // 系统返回键：先收整屏页，再收动作栏，再停听书，再收选中，再收面板，最后回书架，不直接退程序
     BackHandler(enabled = true) {
         when {
+            historyPage -> historyPage = false
+
+            fixesPage -> fixesPage = false
+
+            barUp -> {
+                barUp = false
+                selectionNote = null
+            }
+
+            listening != null && listenPage -> listenPage = false
+
+            listening != null -> {
+                listening = null
+                aiPlaying = false
+                selection = null
+                selectionRect = null
+                aiVoice.stop()
+            }
+
             selection != null -> {
                 selection = null
+                selectionRect = null
                 selectionNote = null
                 voice.stop()
+                aiVoice.stop()
             }
 
             panel != Panel.None -> {
@@ -434,6 +533,132 @@ fun ReaderScreen(
 
             bars -> bars = false
             else -> onBack()
+        }
+    }
+
+    /** 停掉听书：音频、高亮、浮窗、听书页一起退。 */
+    fun stopListening() {
+        listening = null
+        listenBusy = false
+        aiPlaying = false
+        listenPage = false
+        aiVoice.stop()
+        selection = null
+        selectionRect = null
+    }
+
+    /**
+     * 合成并播这一段。听书那颗、以及听书页上的「上一段 / 下一段」都走这里 ——
+     * 三处共用一份，才不会有一处的错误回话和别处不一样。
+     *
+     * 同一段（服务商+模型+音色+正文都一样）的音频落在 `cacheDir/voice/` 里，再点**不再发请求**：
+     * 合成按字符计费，翻回去重听同一段不该再掏一次钱。要强制重合成只有听书页「更多 → 重新生成」。
+     */
+    fun speakParagraph(range: LongRange, force: Boolean = false) {
+        val text = engine.book.cache.slice(range.first, (range.last - range.first + 1).toInt())
+        // 多音字白名单只改"发给接口的那串字"：屏幕上高亮和回显的仍是原文。缓存键跟着它走，
+        // 所以改了表之后同一段会重新合成一次 —— 那是应该的，旧音频本来就是错读法
+        val spoken = AiSpeech.applyFixes(text, prefs.aiFixes)
+        aiVoice.rate = listenRate
+        aiVoice.shareFocus = shareFocus
+        listening = range
+        listenBusy = true
+        voice.stop()
+        selection = range
+        selectionNote = "正在合成…"
+        scope.launch {
+            val plain = withContext(Dispatchers.IO) { SecretStore.decrypt(prefs.aiVoiceKeyCipher) }
+            val kind = runCatching { AiSpeech.Kind.valueOf(prefs.aiVoiceKind) }.getOrDefault(AiSpeech.Kind.OpenAi)
+            val outcome = withContext(Dispatchers.IO) {
+                runCatching {
+                    val chosen = prefs.aiVoiceId
+                    val f = AiVoiceCache.fileFor(context, kind, prefs.aiVoiceModel, chosen, spoken)
+                    // 合成 + 落盘。存之前先把 wav 的两个长度字段写成真实字节数（阿里回的是 0x7FFFFFFF）
+                    val synth: (String) -> File = { voice ->
+                        AiVoiceCache.fileFor(context, kind, prefs.aiVoiceModel, voice, spoken).apply {
+                            writeBytes(AiSpeech.wavSizesFixed(AiVoiceClient.synthesize(
+                                prefs.aiVoiceBaseUrl, plain ?: "", kind, prefs.aiVoiceModel, voice, spoken,
+                            )))
+                            // 只有真发过请求才记一笔：缓存命中不重复记，否则「缓存历史」会被"重听"灌满。
+                            // 字数记**原文**的：那一页要显示的是屏幕上那段，不是发给接口那串
+                            AiVoiceCache.remember(context, this, bookId, range.first, text.length)
+                        }
+                    }
+                    // 命中过的直接用手里那份；写坏/半截的文件长度是 0，落回合成那一条
+                    if (!force && f.length() > 0L) {
+                        // 这一档之前存进去的文件都带着"长度未知"的 wav 头，不补的话时长报成 745:39
+                        AiVoiceCache.heal(f)
+                        f to (null as String?)
+                    } else try {
+                        synth(chosen) to (null as String?)
+                    } catch (e: AiError) {
+                        // 他选的这个名字这一家不认：退回这一档的默认音色再试一次。
+                        // 失败那一次没出音频、不按字计费，所以这一下重试不多花钱
+                        val why = e.message ?: ""
+                        val def = AiSpeech.defaultVoice(kind, prefs.aiVoiceModel)
+                        if (
+                            def == null || def.equals(chosen, ignoreCase = true) ||
+                            !(why.contains("voice", true) || why.contains("音色") || why.contains("InvalidParameter"))
+                        ) throw e
+                        synth(def) to (def as String?)
+                    }
+                }
+            }
+            outcome.fold(
+                onSuccess = { (file, usedFallback) ->
+                    // 退回默认音色播成功了：把界面上选中那颗挪过去，不然它标着的还是那个不认的名字
+                    if (usedFallback != null) {
+                        prefs.aiVoiceId = usedFallback
+                        voiceNow = usedFallback
+                    }
+                    listenBusy = false
+                    // 合成这几秒里他又点了一次「听书」= 取消：不接着播，也不顶出浮窗
+                    if (listening == range) {
+                        val started = aiVoice.play(file) {
+                            // 「更多 → 自动读下一段」开着：自然放完就自己接下一段（每多一段多一次合成费，
+                            // 所以这颗默认关）。暂停后手动收的、和定时到点停的都不走这一条。
+                            if (autoNext && listening == range) {
+                                engine.nextParagraph(range)?.let { speakParagraph(it); return@play }
+                            }
+                            // 念完自己收：高亮和浮窗一起退，不用他再点一下
+                            listening = null
+                            aiPlaying = false
+                            listenPage = false
+                            selection = null
+                            selectionRect = null
+                        }
+                        if (started) {
+                            aiPlaying = true
+                            // 开口之后才收动作栏：留着高亮，浮窗接管"暂停/停"
+                            barUp = false
+                            selectionNote = null
+                        } else {
+                            listening = null
+                            selectionNote = "拿到了 ${file.length()} 字节音频，本机播不出来"
+                        }
+                    }
+                },
+                onFailure = {
+                    listenBusy = false
+                    listening = null
+                    selectionNote = if (it is AiError) it.message ?: "合成失败"
+                    else "合成失败：${it.javaClass.simpleName}"
+                },
+            )
+        }
+    }
+
+    /** 定时停止：到点自己收。0 = 没设。放在这一层而不是听书页里，收起那一屏也要继续倒计时。 */
+    var sleepEndsAt by remember { mutableStateOf(0L) }
+    LaunchedEffect(sleepEndsAt) {
+        while (sleepEndsAt > 0L) {
+            val left = sleepEndsAt - System.currentTimeMillis()
+            if (left <= 0L) {
+                sleepEndsAt = 0L
+                stopListening()
+                break
+            }
+            delay(1000)
         }
     }
 
@@ -463,6 +688,7 @@ fun ReaderScreen(
                                     val range = engine.paragraphRange(line.start)
                                     val touched = shown.lines.filter { it.end > range.first && it.start < range.last }
                                     selection = range
+                                    barUp = true
                                     selectionRect = if (touched.isEmpty()) null else
                                         pagePadPx + touched.minOf { it.topPx } to
                                             pagePadPx + touched.maxOf { it.topPx } + lineHeightPx
@@ -511,6 +737,7 @@ fun ReaderScreen(
                             // 弹框由 selection 驱动，这里只写 selectionRect 的话上下那一档永远只亮不弹
                             engine.paragraphRange(offset).also {
                                 selection = it
+                                barUp = true
                                 selectionNote = null
                             }
                         },
@@ -557,7 +784,9 @@ fun ReaderScreen(
                         }
                     }
                 }
-            selection?.let { range ->
+            // 动作栏由 barUp 决定看不看得到，高亮由 selection 决定 —— 听书时要"留着高亮、收起按钮"，
+            // 这两个必须能分开
+            selection?.takeIf { barUp }?.let { range ->
                 val rect = selectionRect
                 // 尖端离段落边缘的缝、三角自己的高、动作栏的高，三者都要算进落点：
                 // 之前朝上那一档只让开了栏高（70dp），三角整个压在段落首行上；朝下那一档
@@ -586,7 +815,19 @@ fun ReaderScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     selectionNote?.let {
-                        Text(it, fontSize = 12.sp, color = theme.accentColor, modifier = Modifier.padding(bottom = 6.dp))
+                        // AI 在路上时给一个转圈的指示：这句回话要等一两秒，没有它看起来像没响应
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (listenBusy || dictBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 1.6.dp,
+                                    color = theme.faintColor,
+                                )
+                                Spacer(Modifier.size(6.dp))
+                            }
+                            // 不用强调色（红）：这一行是"发生了什么"的回话，不是要他注意的危险提示
+                            Text(it, fontSize = 12.sp, color = theme.faintColor, modifier = Modifier.padding(bottom = 6.dp))
+                        }
                     }
                     if (!barAbove) SelectionArrow(theme.barColor, down = false)
                     SelectionBar(
@@ -611,15 +852,54 @@ fun ReaderScreen(
                                     selectionRect = null
                                 }
                                 SelectionAction.Listen -> {
-                                    val text = engine.book.cache.slice(range.first, (range.last - range.first).toInt())
-                                    selectionNote = when {
-                                        voice.speak(text) -> "正在朗读这一段"
-                                        voice.state == 0 -> "语音引擎正在启动，再点一次听书"
-                                        else -> "这台机没有可用的中文语音引擎"
+                                    val text = engine.book.cache.slice(range.first, (range.last - range.first + 1).toInt())
+                                    if (prefs.aiVoiceReady) {
+                                        // 再点一次 = 停：合成要花钱，不能让人靠"等它念完"来取消
+                                        if (listening != null) stopListening() else speakParagraph(range)
+                                    } else when {
+                                        voice.speak(text) -> selectionNote = "系统语音朗读这一段"
+                                        voice.state == 0 -> selectionNote = "语音引擎正在启动，再点一次听书"
+                                        else -> selectionNote = "这台机没有可用的中文语音引擎；在「我的 → AI 服务」里填一档语音地址、模型、音色和秘钥就能听"
                                     }
                                 }
                                 SelectionAction.Comment -> selectionNote = "评论要接书源服务端才有地方存"
-                                SelectionAction.Dictionary -> selectionNote = "词典要词库，本机没接"
+                                SelectionAction.Dictionary -> {
+                                    val q = engine.book.cache.slice(range.first, (range.last - range.first + 1).toInt())
+                                    // 多音字和"一/不"变调只有上下文能定，所以把前面 60 字一起发过去
+                                    val from = (range.first - 60).coerceAtLeast(0L)
+                                    val ctx = engine.book.cache.slice(from, (range.first - from).toInt())
+                                    selection = null
+                                    selectionRect = null
+                                    dictQuery = q
+                                    val configured = prefs.aiBaseUrl.isNotBlank() && prefs.aiKeyCipher.isNotBlank()
+                                    if (!configured) {
+                                        dictBusy = false
+                                        dictAnswer = "还没配 AI 服务：我的 → AI 服务 里填 API 地址、模型名和秘钥。"
+                                    } else {
+                                        dictBusy = true
+                                        dictAnswer = null
+                                        scope.launch {
+                                            val plain = withContext(Dispatchers.IO) { SecretStore.decrypt(prefs.aiKeyCipher) }
+                                            val outcome = withContext(Dispatchers.IO) {
+                                                runCatching {
+                                                    AiClient.chat(
+                                                        prefs.aiBaseUrl, plain ?: "", prefs.aiModel,
+                                                        AiProtocol.DICT_SYSTEM, AiProtocol.dictUser(q, ctx),
+                                                    )
+                                                }
+                                            }
+                                            dictBusy = false
+                                            dictAnswer = outcome.fold(
+                                                onSuccess = { it },
+                                                onFailure = {
+                                                    if (it is AiError) it.message ?: "查询失败"
+                                                    else "查询失败：${it.javaClass.simpleName}"
+                                                },
+                                            )
+                                        }
+                                    }
+                                    panel = Panel.Dict
+                                }
                                 SelectionAction.Correct -> selectionNote = "纠错要能提交回书源，本机没接"
                             }
                         },
@@ -628,12 +908,151 @@ fun ReaderScreen(
                 }
             }
 
+                if (listening != null && !listenBusy) {
+                    val wPx = 116f * density.density
+                    val hPx = 56f * density.density
+                    // 默认落在左下角，往上留出底栏那一格；拖过之后用拖到的位置
+                    val at = if (floatPos == Offset.Zero) {
+                        Offset(12f * density.density, (viewport.height - hPx - 96f * density.density).coerceAtLeast(0f))
+                    } else {
+                        floatPos
+                    }
+                    ListenFloat(
+                        theme = theme,
+                        playing = aiPlaying,
+                        coverRes = coverOf(engine.book.meta.title),
+                        title = engine.book.meta.title,
+                        modifier = Modifier.offset { IntOffset(at.x.toInt(), at.y.toInt()) },
+                        onDrag = { dx, dy ->
+                            floatPos = Offset(
+                                (at.x + dx).coerceIn(0f, (viewport.width - wPx).coerceAtLeast(0f)),
+                                (at.y + dy).coerceIn(0f, (viewport.height - hPx).coerceAtLeast(0f)),
+                            )
+                        },
+                        onToggle = { aiPlaying = aiVoice.toggle() },
+                        onOpenPage = { listenPage = true },
+                        onClose = { stopListening() },
+                    )
+                }
+
+                val lr = listening
+                if (lr != null && listenPage) {
+                    // 上一段/下一段只在"有没有"上判，跳过去还要重新合成 —— 这两颗按字符计费，
+                    // 所以不做"自动连念"，一次一下是他点出来的
+                    val hasPrev = remember(lr) { engine.prevParagraph(lr) != null }
+                    val hasNext = remember(lr) { engine.nextParagraph(lr) != null }
+                    ListenScreen(
+                        theme = theme,
+                        chapterTitle = "第 ${engine.currentChapterIndex + 1} 章 " +
+                            engine.book.chapters[engine.currentChapterIndex].title,
+                        bookTitle = engine.book.meta.title,
+                        coverRes = coverOf(engine.book.meta.title),
+                        paragraph = engine.book.cache.slice(lr.first, (lr.last - lr.first + 1).toInt()),
+                        busy = listenBusy,
+                        playing = aiPlaying,
+                        hasPrev = hasPrev,
+                        hasNext = hasNext,
+                        player = aiVoice,
+                        rate = listenRate,
+                        sleepEndsAt = sleepEndsAt,
+                        onCollapse = { listenPage = false },
+                        onToggle = { aiPlaying = aiVoice.toggle() },
+                        onStop = { stopListening() },
+                        onPrev = { engine.prevParagraph(lr)?.let { speakParagraph(it) } },
+                        onNext = { engine.nextParagraph(lr)?.let { speakParagraph(it) } },
+                        onRate = { r ->
+                            // 本地变速：音频已经在手里，不重新合成、不再花一次钱。
+                            // 暂停的时候 setRate 只记下值，不会把播放顶起来（那是平台行为，播放器里挡掉了）
+                            listenRate = r
+                            aiVoice.rate = r
+                            aiVoice.applyRate()
+                        },
+                        // 「原文」= 收起这一屏，把正文翻到正在念的那一段
+                        onOriginal = {
+                            listenPage = false
+                            page = engine.jumpToOffset(lr.first)
+                            jumpToken++
+                        },
+                        onSleep = { minutes ->
+                            sleepEndsAt = if (minutes <= 0) 0L else System.currentTimeMillis() + minutes * 60_000L
+                        },
+                        onResynth = { speakParagraph(lr, force = true) },
+                        voiceId = voiceNow,
+                        // 可选那一列按服务商各存一份：OpenAI 的 alloy 不是阿里的音色名，混着列出来选了必 400
+                        // 他自己抄的那一列排前面，内置的常见音色补后面（第一屏不是一排空的）
+                        voices = AiSpeech.voiceOptions(
+                            AiSpeech.voices(prefs.aiVoiceChoices(prefs.aiVoiceKind)),
+                            AiSpeech.commonVoices(
+                                runCatching { AiSpeech.Kind.valueOf(prefs.aiVoiceKind) }
+                                    .getOrDefault(AiSpeech.Kind.OpenAi),
+                                prefs.aiVoiceModel,
+                            ),
+                        ),
+                        autoNext = autoNext,
+                        shareFocus = shareFocus,
+                        onVoice = { v ->
+                            prefs.aiVoiceId = v
+                            voiceNow = v
+                        },
+                        onAutoNext = { v ->
+                            autoNext = v
+                            prefs.listenAutoNext = v
+                        },
+                        onShareFocus = { v ->
+                            shareFocus = v
+                            prefs.listenShareFocus = v
+                            // 下一段新建播放器时套上去；手里这段已经开播了，改焦点属性要重开，不为了它打断
+                            aiVoice.shareFocus = v
+                        },
+                        onHistory = {
+                            voiceHistory = AiVoiceCache.history(context).filter { it.bookId == bookId }
+                            historyPage = true
+                        },
+                        onFixes = { fixesPage = true },
+                        onPaper = { picked ->
+                            // 和快捷面板那排色块同一个主人：改的就是 themeIndex，回阅读页也是这一档
+                            theme = picked
+                            prefs.themeIndex = picked.ordinal
+                        },
+                    )
+                }
+
+                if (historyPage) {
+                    ListenHistoryPage(
+                        theme = theme,
+                        entries = voiceHistory,
+                        preview = { off, n -> engine.book.cache.slice(off, n).replace('\n', ' ') },
+                        totalBytes = voiceHistory.sumOf { it.bytes },
+                        onBack = { historyPage = false },
+                        onReplay = { e ->
+                            historyPage = false
+                            // 按偏移找回那一段（记的是原文偏移，所以表改过也能对上），再走同一条缓存路
+                            val r = engine.paragraphRange(e.offset)
+                            speakParagraph(r)
+                            page = engine.jumpToOffset(r.first)
+                            jumpToken++
+                        },
+                    )
+                }
+
+                if (fixesPage) {
+                    ListenFixesPage(
+                        theme = theme,
+                        table = prefs.aiFixes,
+                        hits = voiceHistory.size,
+                        onBack = { fixesPage = false },
+                        onSave = { prefs.aiFixes = it },
+                    )
+                }
+
                 if (eyeCare) {
                     Box(Modifier.fillMaxSize().background(Color(0x26FF9A3C)))
                 }
             }
 
-            if (bars) {
+            // 顶/底栏画在听书页**之后**（同一层 Box 的后面），所以听书页开着时它俩会压在人家上面 ——
+            // 收起听书页也不该顺手把菜单叫出来：`bars` 保持原值，只是这一会儿不画
+            if (bars && !listenPage && !historyPage && !fixesPage) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -647,7 +1066,7 @@ fun ReaderScreen(
                         .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    BackChevron(theme, onBack)
+                    BackChevron(theme, onClick = onBack)
                     Text(chapter.title, fontSize = 14.sp, color = theme.inkColor, modifier = Modifier.padding(start = 4.dp))
                     Spacer(Modifier.weight(1f))
                     Text(
@@ -701,6 +1120,8 @@ fun ReaderScreen(
                             jumpToken++
                             panel = Panel.None
                         }, onClose = { panel = Panel.None })
+
+                    Panel.Dict -> DictPanel(dictQuery, dictAnswer, dictBusy, theme, onClose = { panel = Panel.None })
 
                     Panel.Quick -> QuickSettingsPanel(
                         theme = theme,
@@ -804,7 +1225,12 @@ private fun flip(current: Panel, target: Panel): Panel = if (current == target) 
 
 /** MainActivity 实现它就能把音量键交给阅读页。 */
 interface VolumeKeyHost {
-    var volumeHook: ((Boolean) -> Unit)?
+    /**
+     * @return true = 这一枪被翻页吃掉了；false = 我们不拦，交回系统去调音量。
+     * 必须是 Boolean 而不是 Unit：听书正放着的时候音量键该管音量，
+     * 而钩子是在 `DisposableEffect` 里一次性挂上去的，读不到当时的组合状态，只能由钩子自己回答。
+     */
+    var volumeHook: ((Boolean) -> Boolean)?
 }
 
 private fun colorSchemeOf(theme: ReaderTheme): ColorScheme {
@@ -1196,6 +1622,176 @@ private fun SearchLine(
                     modifier = Modifier.size(16.dp),
                 )
             }
+        }
+    }
+}
+
+/**
+ * 词典结果面板：AI 回的那三行（拼音 / 释义 / 译文）。
+ * 外壳和书签、目录那一档同一份（底部推上来、16dp 顶角、`theme.barColor`、自己吃点击）。
+ * 三行按"第一个冒号"拆成标签和值 —— 这是我们自己在提示词里要求的格式；它没照格式回的时候
+ * 整行原样显示，不去猜，也不省略号收尾（查词的结果被截断等于这颗没做）。
+ */
+@Composable
+private fun BoxScope.DictPanel(
+    query: String,
+    answer: String?,
+    busy: Boolean,
+    theme: ReaderTheme,
+    onClose: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxHeight(0.5f)
+            .align(Alignment.BottomCenter)
+            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            .background(theme.barColor)
+            .consumesPanelTaps(),
+    ) {
+        PanelTitle("词典", theme, onClose)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 19.dp)
+                .padding(bottom = 16.dp),
+        ) {
+            Text(query, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, lineHeight = 25.sp)
+            Spacer(Modifier.height(10.dp))
+            if (busy) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 1.8.dp,
+                        color = theme.accentColor,
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text("正在查…", fontSize = 14.sp, color = theme.faintColor)
+                }
+            } else {
+                (answer ?: "").lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach { line ->
+                    val i = line.indexOf('：')
+                    if (i in 1..6) {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.Top) {
+                            Text(
+                                line.substring(0, i),
+                                fontSize = 13.sp,
+                                color = theme.faintColor,
+                                modifier = Modifier.width(46.dp),
+                            )
+                            Text(
+                                line.substring(i + 1),
+                                fontSize = 15.sp,
+                                color = theme.inkColor,
+                                lineHeight = 23.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    } else {
+                        Text(line, fontSize = 15.sp, color = theme.inkColor, lineHeight = 23.sp, modifier = Modifier.padding(bottom = 8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 听书浮窗：封面 + 暂停/继续 + 关。可以拖着走；翻页、点正文都不碰它，念完自己收。
+ * 拖动只改 offset —— 按下去不给它任何几何反馈（这个项目里按下/悬停只许换颜色，不长宽、不变厚）。
+ */
+@Composable
+private fun ListenFloat(
+    theme: ReaderTheme,
+    playing: Boolean,
+    coverRes: Int?,
+    title: String,
+    modifier: Modifier = Modifier,
+    onDrag: (Float, Float) -> Unit,
+    onToggle: () -> Unit,
+    onOpenPage: () -> Unit,
+    onClose: () -> Unit,
+) {
+    // `pointerInput(Unit)` 的闭包抓的是**第一次组合**那份 `onDrag`，而 `onDrag` 里带着当时的 `at`
+    // （默认左下角那一格）。所以拖动时每一枪都是"默认位置 + 这一帧的位移"，看着就是拖不动 ——
+    // 用 rememberUpdatedState 把回调换成当下那一份
+    val drag by rememberUpdatedState(onDrag)
+    Row(
+        modifier = modifier
+            .size(width = 116.dp, height = 56.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(theme.barColor)
+            // 拖动和"吃掉点击"必须在同一个手势循环里做：两颗 pointerInput 挂在同一个节点上会互相抢，
+            // 结果是 detectTapGestures 先把 down 消费掉，detectDragGestures 再也等不到移动 —— 拖不动
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        // Initial 这一趟：孩子（封面/暂停/× 那三颗 clickable）还没机会把这一枪消费掉。
+                        // 走 Main 的话子级一旦 consume，父级读到的 position 差值就是 0 —— 表现就是拖不动
+                        val e = awaitPointerEvent(PointerEventPass.Initial)
+                        val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!c.pressed) break
+                        // 手算位移：`positionChange()` 在这版 Compose 里和同名 Boolean 属性撞了
+                        val d = Offset(c.position.x - c.previousPosition.x, c.position.y - c.previousPosition.y)
+                        if (d != Offset.Zero) drag(d.x, d.y)
+                        c.consume()
+                        if (e.changes.none { it.pressed }) break
+                    }
+                }
+            }
+            .padding(start = 8.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (coverRes != null) {
+            Image(
+                painter = painterResource(coverRes),
+                contentDescription = "打开听书页",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(width = 32.dp, height = 44.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .tap(onOpenPage),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(width = 32.dp, height = 44.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(theme.pageColor)
+                    .tap(onOpenPage),
+                contentAlignment = Alignment.Center,
+            ) { Text(title.take(1), fontSize = 13.sp, color = theme.inkColor) }
+        }
+        Spacer(Modifier.size(8.dp))
+        Box(
+            modifier = Modifier.size(32.dp).clip(CircleShape).background(theme.pageColor).tap(onToggle),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play),
+                contentDescription = if (playing) "暂停" else "继续",
+                tint = theme.inkColor,
+                modifier = Modifier.size(17.dp),
+            )
+        }
+        // 原来这里是一条 weight(1f) 把 × 顶到最右边，两颗之间空出一大截；改成固定 2dp
+        Spacer(Modifier.size(2.dp))
+        Box(
+            modifier = Modifier.size(width = 26.dp, height = 40.dp).tap(onClose),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_close),
+                contentDescription = "停止听书",
+                tint = theme.faintColor,
+                modifier = Modifier.size(16.dp),
+            )
         }
     }
 }

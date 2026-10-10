@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「原文」：四角括号。点了收起听书页、把正文翻到正在念的那一段。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,4h5v1.8H5.8V9H4zM20,4v5h-1.8V5.8H15V4zM4,20v-5h1.8v3.2H9V20zM20,20h-5v-1.8h3.2V15H20z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8.6,11.2h6.8v1.6H8.6z" />
+</vector>

@@ -25,9 +25,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -57,12 +59,13 @@ import kotlin.math.roundToInt
 
 /** 顶栏那颗返回箭头（参考截图里阅读页左上就是它，不写"书架"两个字）。 */
 @Composable
-fun BackChevron(theme: ReaderTheme, onClick: () -> Unit) {
+fun BackChevron(theme: ReaderTheme, flush: Boolean = false, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(width = 40.dp, height = 40.dp)
             .tap(onClick),
-        contentAlignment = Alignment.Center,
+        // flush = 把墨迹贴到框的左沿：面板里那颗要和下面内容的左边缘对齐（框还是 40dp，命中区不缩）
+        contentAlignment = if (flush) Alignment.CenterStart else Alignment.Center,
     ) {
         Icon(
             painter = painterResource(R.drawable.ic_back),
@@ -171,7 +174,7 @@ private fun PanelHeader(title: String, theme: ReaderTheme, onBack: () -> Unit) {
         modifier = Modifier.fillMaxWidth().height(46.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BackChevron(theme, onBack)
+        BackChevron(theme, flush = true, onClick = onBack)
         Spacer(Modifier.weight(1f))
         Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = theme.inkColor)
         Spacer(Modifier.weight(1f))
@@ -603,5 +606,51 @@ fun BoxScope.FontPickerPanel(
             Spacer(Modifier.weight(1f))
             Switch(checked = cjkOnly, onCheckedChange = { cjkOnly = it })
         }
+    }
+}
+
+/**
+ * 底部抽屉：整幅宽、只有顶部两颗 16dp 圆角，和阅读页那四处弹层同一份外壳
+ * （手机端要挑东西的浮层一律走这个，居中弹窗算没做）。先铺一层透明接盘，点抽屉外任何一处就收。
+ *
+ * 配色由调用方给：阅读页那几屏是 `ReaderTheme`，外壳那四页是 `Chrome`，两套 token 不能在这里挑一边。
+ */
+@Composable
+internal fun BoxScope.Sheet(
+    background: Color,
+    ink: Color,
+    faint: Color,
+    title: String?,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Box(Modifier.fillMaxSize().tap(onDismiss))
+    Column(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
+            .background(background)
+            // 抽屉自己吃掉落在空白处的点击：不然那一枪漏到接盘上，整层会被自己收掉
+            .pointerInput(Unit) { detectTapGestures { } }
+            .padding(horizontal = 14.dp),
+    ) {
+        if (title != null) Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ink)
+            Spacer(Modifier.weight(1f))
+            Box(modifier = Modifier.size(40.dp).tap(onDismiss), contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_close),
+                    contentDescription = "关闭",
+                    tint = faint,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        // 内容按现在这五行量下来是 ~353dp，所以帽子给到 420dp：他要的是"高一点、别在里面滚"，
+        // 420 装得下又不顶到状态栏。真超了（他自己抄了十几条音色）才在里面滚
+        Column(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+        ) { content() }
     }
 }

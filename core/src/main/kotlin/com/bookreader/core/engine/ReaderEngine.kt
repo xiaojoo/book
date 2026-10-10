@@ -164,7 +164,44 @@ class ReaderEngine(
         val c = ParagraphCursor(book.cache)
         val start = c.startAtOrBefore(clamped)
         val p = c.paragraphAt(start)
-        return p.start until (p.end - 1).coerceAtLeast(p.start + 1)
+        // `p.end` 就是段末那个换行的位置，所以最后一个真字符在 `p.end - 1`。
+        // 原来写的是 `until (p.end - 1)`（= 到 p.end-2），把句号也削掉了：
+        // 表现是听书/词典取到的那段少结尾一个字，而且折行的末行盖不上底色
+        return start until p.end.coerceAtLeast(start + 1)
+    }
+
+    /** 这一段有没有正文（原文里段与段之间保留的空行会被 `paragraphRange` 认成"一行空段"）。 */
+    private fun LongRange.hasText(): Boolean =
+        book.cache.slice(first, (last - first + 1).toInt()).isNotBlank()
+
+    /**
+     * 这一段之后的那一段，跳过保留的空行；到书末返回 null。听书浮窗的「下一段」用。
+     * 起点是 `after.last + 2` 而不是 +1：+1 落在那个换行上，`startAtOrBefore` 会把它算回**当前**这一段，
+     * 于是永远找不到下一段（每一轮都原地踏步，只能靠单调保护退出）。
+     */
+    @Synchronized
+    fun nextParagraph(after: LongRange): LongRange? {
+        var at = after.last + 2
+        while (at < totalChars) {
+            val r = paragraphRange(at)
+            if (r.first > after.last && r.hasText()) return r
+            if (r.last + 1 <= at) break
+            at = r.last + 1
+        }
+        return null
+    }
+
+    /** 这一段之前的那一段，同样跳过空行；到书首返回 null。 */
+    @Synchronized
+    fun prevParagraph(before: LongRange): LongRange? {
+        var at = before.first - 2
+        while (at >= 0) {
+            val r = paragraphRange(at)
+            if (r.last < before.first && r.hasText()) return r
+            if (r.first - 1 >= at) break
+            at = r.first - 1
+        }
+        return null
     }
 
     @Synchronized

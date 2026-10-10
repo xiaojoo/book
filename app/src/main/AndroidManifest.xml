@@ -1,13 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 只有「词典」这一颗用得到：本机读文件、入库、排版全程不联网。
+         加了它就要在 AI 设置页里说清楚"这一条链路会把选中的那段文字发出去"。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="长文阅读"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!-- usesCleartextTraffic 是给内网 Ollama / LM Studio / 自建中转留的口子（他选的那档"两种都收"）。
+             代价：http:// 地址上秘钥和正文都是明文走网，所以填 http 时界面必须标出来。 -->
 
         <activity
             android:name=".MainActivity"
