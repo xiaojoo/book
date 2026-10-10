@@ -118,7 +118,7 @@ fun LibraryScreen(
     Box(Modifier.fillMaxSize().background(Chrome.page)) {
         Column(Modifier.fillMaxSize()) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 23.dp, end = 12.dp, top = 12.dp, bottom = 6.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 23.dp, end = 12.dp, top = 12.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("书架", fontSize = 19.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
@@ -160,8 +160,8 @@ fun LibraryScreen(
             // 两种排法共用同一份 books / 同一个开书和长按删的手势，只有行怎么摆不同
             if (shelfList) {
                 LazyColumn(
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(books, key = { it.id }) { meta ->
@@ -248,8 +248,12 @@ private fun DeleteBookSheet(title: String, onDismiss: () -> Unit, onDelete: () -
         onDismissRequest = onDismiss,
         containerColor = Chrome.card,
         shape = RoundedCornerShape(topStart = SHEET_RADIUS, topEnd = SHEET_RADIUS),
+        // 不要顶上那颗拖拽小把手：这两层都不靠拖（点外面、点「取消」都回得去），
+        // 摆一颗把手是暗示一个不存在的动作
+        dragHandle = null,
     ) {
-        Column(Modifier.padding(horizontal = 19.dp)) {
+        // 顶内衬 = 左右内衬（19dp）：把手没了之后「取消 / 删除」那一行原本贴着圆角边
+        Column(Modifier.padding(horizontal = 19.dp, vertical = 19.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "取消",
@@ -308,11 +312,11 @@ private fun BookRow(
     val cover = coverOf(meta.title)
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(Chrome.card)
+                .fillMaxWidth()
+            // 不再套卡片：行直接铺在页面底色上（他给的参考图就是没有卡片那一层）
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
-            .padding(12.dp),
+            // 上下收到 8dp、行缝 10→4dp（他要"间隙小一点"）；左右仍 12dp，封面那条左线才不动
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (cover != null) {
@@ -323,11 +327,11 @@ private fun BookRow(
                 modifier = Modifier.size(width = 48.dp, height = 64.dp).clip(RoundedCornerShape(4.dp)),
             )
         } else {
-            // 行底是 Chrome.card，占位封面用 Chrome.page：同一个色阶里往下退一档，不再造新颜色
+            // 行底现在是 Chrome.page，占位封面退一档用 Chrome.chip：还是同一套 token，不再造新颜色
             Box(
                 modifier = Modifier
                     .size(width = 48.dp, height = 64.dp)
-                    .background(Chrome.page, RoundedCornerShape(4.dp)),
+                    .background(Chrome.chip, RoundedCornerShape(4.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(meta.title.take(2), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
@@ -348,10 +352,8 @@ private fun BookRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(if (who.isEmpty()) stat else "$who · $stat", fontSize = 13.sp, color = Chrome.faint)
-                if (unread != null && unread > 0) {
-                    Spacer(Modifier.size(5.dp))
-                    Box(Modifier.size(7.dp).background(Chrome.dot, CircleShape))
-                }
+                // 原来这里是一颗 7dp 红点（他点的去掉了）：同一行文字已经写着"N章未读"，
+                // 红点是同一件事说两遍。连它前面那 5dp 的占位一起删 —— 留着一个空 Spacer 就是死控件
             }
             Text(
                 if (whole) "${meta.kind.uppercase()} 原件整页" else "${meta.chapterCount} 章 · ${formatChars(meta.totalChars)}",
