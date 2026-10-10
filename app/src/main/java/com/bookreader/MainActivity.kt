@@ -23,6 +23,7 @@ import com.bookreader.data.BookLibrary
 import com.bookreader.data.ReaderPrefs
 import com.bookreader.core.model.BookMeta
 import com.bookreader.ui.AppScaffold
+import com.bookreader.ui.AiSettingsScreen
 import com.bookreader.ui.FeaturedScreen
 import com.bookreader.ui.LibraryScreen
 import com.bookreader.ui.Chrome
@@ -38,14 +39,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity(), VolumeKeyHost {
-    /** 阅读页开着「音量键翻页」时挂上来，离开就置空。 */
-    override var volumeHook: ((Boolean) -> Unit)? = null
+    /** 阅读页开着「音量键翻页」时挂上来，离开就置空。返回 false = 这一枪交回系统调音量。 */
+    override var volumeHook: ((Boolean) -> Boolean)? = null
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val hook = volumeHook
         if (hook != null && (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN)) {
-            hook(keyCode == KeyEvent.KEYCODE_VOLUME_UP)
-            return true
+            if (hook(keyCode == KeyEvent.KEYCODE_VOLUME_UP)) return true
         }
         return super.onKeyDown(keyCode, event)
     }
@@ -76,6 +76,8 @@ private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
     var openBook by rememberSaveable { mutableStateOf<String?>(null) }
     var notice by rememberSaveable { mutableStateOf<String?>(null) }
     var tab by rememberSaveable { mutableStateOf(MainTab.Shelf) }
+    // AI 设置是另开的一屏，不是弹窗（他点名要的形态）；和阅读页一样盖在壳上面
+    var aiSettings by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(incoming) {
         val uri = incoming ?: return@LaunchedEffect
@@ -94,7 +96,9 @@ private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
     LaunchedEffect(tab, openBook) { Chrome.night = ReaderTheme.of(prefs.themeIndex).night }
 
     val id = openBook
-    if (id == null) {
+    if (aiSettings) {
+        AiSettingsScreen(prefs = prefs, onBack = { aiSettings = false })
+    } else if (id == null) {
         AppScaffold(tab = tab, onTab = { tab = it }) {
             when (tab) {
                 MainTab.Shelf -> LibraryScreen(
@@ -106,7 +110,7 @@ private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
 
                 MainTab.Featured -> FeaturedScreen()
                 MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openBook = it })
-                MainTab.Me -> MeScreen(library, prefs)
+                MainTab.Me -> MeScreen(library, prefs, onOpenAi = { aiSettings = true })
             }
         }
     } else {

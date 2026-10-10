@@ -363,8 +363,8 @@ private fun BookRow(
     }
 }
 
-/** 参考截图里有的书有封面；没封面的书用书名前两字占位，不放假图冒充。 */
-private fun coverOf(title: String): Int? = when {
+/** 参考截图里有的书有封面；没封面的书用书名前两字占位，不放假图冒充。听书浮窗也读这一颗。 */
+internal fun coverOf(title: String): Int? = when {
     title.contains("剑来") || title.contains("jianlai", ignoreCase = true) -> R.drawable.cover_jianlai
     else -> null
 }

@@ -122,6 +122,91 @@ class ReaderPrefs(context: Context) {
         set(v) = p.edit().putBoolean("shelfList", v).apply()
 
     /**
+     * AI 服务三项。地址和模型名不是秘密（它们只说"往哪发"），直接放 prefs；
+     * 秘钥只存 [SecretStore] 封过的密文，读的时候才在本机解开。
+     */
+    var aiBaseUrl: String
+        get() = p.getString("aiBaseUrl", "") ?: ""
+        set(v) = p.edit().putString("aiBaseUrl", v.trim()).apply()
+
+    var aiModel: String
+        get() = p.getString("aiModel", "") ?: ""
+        set(v) = p.edit().putString("aiModel", v.trim()).apply()
+
+    /** Base64 的 AES/GCM 密文。解不开（换机、恢复备份、被改过）就当没有，界面会要求重填。 */
+    var aiKeyCipher: String
+        get() = p.getString("aiKeyCipher", "") ?: ""
+        set(v) = p.edit().putString("aiKeyCipher", v).apply()
+
+    /** 词典这一档整体开关：关掉之后长按那颗「词典」回到原来那句实话，不发请求 */
+    var aiDict: Boolean
+        get() = p.getBoolean("aiDict", true)
+        set(v) = p.edit().putBoolean("aiDict", v).apply()
+
+    /**
+     * 语音合成（听书）这一档和词典**分开填**：它们通常不是一家（DeepSeek 没有语音口），
+     * 而且秘钥也不同。四项齐全才走 AI，缺任何一项就退回系统语音引擎。
+     * `aiVoiceKind` 存的是 `AiSpeech.Kind` 的名字，读的时候兜底到 OpenAi（老版本没这个键）。
+     */
+    var aiVoiceKind: String
+        get() = p.getString("aiVoiceKind", "OpenAi") ?: "OpenAi"
+        set(v) = p.edit().putString("aiVoiceKind", v).apply()
+
+    var aiVoiceBaseUrl: String
+        get() = p.getString("aiVoiceBaseUrl", "") ?: ""
+        set(v) = p.edit().putString("aiVoiceBaseUrl", v.trim()).apply()
+
+    var aiVoiceModel: String
+        get() = p.getString("aiVoiceModel", "") ?: ""
+        set(v) = p.edit().putString("aiVoiceModel", v.trim()).apply()
+
+    /** 音色：OpenAI 那档是 alloy / nova…，MiniMax 那档是 voice_id */
+    var aiVoiceId: String
+        get() = p.getString("aiVoiceId", "") ?: ""
+        set(v) = p.edit().putString("aiVoiceId", v.trim()).apply()
+
+    var aiVoiceKeyCipher: String
+        get() = p.getString("aiVoiceKeyCipher", "") ?: ""
+        set(v) = p.edit().putString("aiVoiceKeyCipher", v).apply()
+
+    /**
+     * 他自己在设置页填的"这个模型能用的音色"那一列，逗号 / 空格 / 换行分隔，**按服务商各存一份**：
+     * OpenAI 的 `alloy` 和阿里的 `longanhuan_v3.1` 不通用，混在一列里选了必然 400。
+     * 音色名各家没有能查的列表接口，所以这一列只能人抄一遍；听书页「更多」里能挑的就是它。
+     */
+    fun aiVoiceChoices(kind: String): String = p.getString("aiVoiceChoices.$kind", "") ?: ""
+
+    fun setAiVoiceChoices(kind: String, v: String) {
+        p.edit().putString("aiVoiceChoices.$kind", v.trim()).apply()
+    }
+
+    /**
+     * 听书纠错那张白名单，每行一条 `银行=银航`。发语音接口之前替换，**屏幕上的正文不变**。
+     * 这三家接口只吃纯文本（没有 SSML / 音素口），所以"指定读音"只有换成单音字这一条路走得通。
+     */
+    var aiFixes: String
+        get() = p.getString("aiFixes", "") ?: ""
+        set(v) = p.edit().putString("aiFixes", v).apply()
+
+    /** 念完这一段自己接下一段。默认关：合成按字符计费，开着就是连着扣。 */
+    var listenAutoNext: Boolean
+        get() = p.getBoolean("listenAutoNext", false)
+        set(v) = p.edit().putBoolean("listenAutoNext", v).apply()
+
+    /** 不抢音频焦点：别的音乐/播客继续响，两边混着放。 */
+    var listenShareFocus: Boolean
+        get() = p.getBoolean("listenShareFocus", false)
+        set(v) = p.edit().putBoolean("listenShareFocus", v).apply()
+
+    /**
+     * 听书是否走 AI：四项齐全才算。缺任何一项就退回系统语音引擎 ——
+     * 半配的状态（有地址没音色）发出去必然 400，不如不发，让界面能说清缺哪一项。
+     */
+    val aiVoiceReady: Boolean
+        get() = aiVoiceBaseUrl.isNotBlank() && aiVoiceModel.isNotBlank() && aiVoiceId.isNotBlank() &&
+            aiVoiceKeyCipher.isNotBlank()
+
+    /**
      * 版心。三档设置**当参数传进来而不是在这里读 prefs** —— SharedPreferences 不是可观察状态，
      * 在这里读它，调用方的作用域就不会在档位变化时重算，表现就是"改了行间距/边距要退回书架重开才生效"。
      *

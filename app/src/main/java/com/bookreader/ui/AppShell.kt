@@ -458,6 +458,7 @@ fun MarksScreen(
 fun MeScreen(
     library: BookLibrary,
     prefs: ReaderPrefs,
+    onOpenAi: () -> Unit,
 ) {
     val context = LocalContext.current
     var books by remember { mutableStateOf(library.list()) }
@@ -563,9 +564,24 @@ fun MeScreen(
             }
             item {
                 Card {
-                    Line("隐私设置", on = { note = "本机不上传任何数据：书、位置、书签都只存在这台手机上" })
+                    Line("隐私设置", on = {
+                        note = if (prefs.aiBaseUrl.isBlank()) {
+                            "本机不上传任何数据：书、位置、书签都只存在这台手机上"
+                        } else {
+                            "书、位置、书签仍然只在本机；只有 AI 词典会把你要查的那一段发到 " +
+                                prefs.aiBaseUrl + "，其它功能一个字节都不发"
+                        }
+                    })
                     Hairline()
                     Line("偏好设置", trailing = prefsSummary(prefs), on = { prefsSheet = true })
+                    Hairline()
+                    // AI 服务这一档必须在这一页看得见：藏在阅读页里等于没做（他点过这条）
+                    Line(
+                        "AI 服务",
+                        sub = "长按「词典」的翻译和拼音；听书不走这里",
+                        trailing = if (prefs.aiBaseUrl.isBlank() && prefs.aiKeyCipher.isBlank()) "未配置" else "已配置",
+                        on = onOpenAi,
+                    )
                     Hairline()
                     Line("其他设置", on = { note = "其他项要接书源服务端，本机没有" })
                 }
