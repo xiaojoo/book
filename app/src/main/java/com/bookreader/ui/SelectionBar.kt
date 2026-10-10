@@ -5,7 +5,6 @@ import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,7 +71,9 @@ fun SelectionBar(
                 verticalArrangement = Arrangement.spacedBy(3.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { onAction(action) },
+                    // tap 而不是 clickable：这一颗按下去不许亮（他要的"取消选择的 hover"，
+                    // 和别处那 33 处同一套；clickable 自带 Material 水波，是那一轮的漏网）
+                    .tap { onAction(action) },
             ) {
                 Image(
                     painter = painterResource(icon),

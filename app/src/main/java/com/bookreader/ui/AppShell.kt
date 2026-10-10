@@ -578,7 +578,7 @@ fun MeScreen(
                     // AI 服务这一档必须在这一页看得见：藏在阅读页里等于没做（他点过这条）
                     Line(
                         "AI 服务",
-                        sub = "长按「词典」的翻译和拼音；听书不走这里",
+                        sub = "长按「词典」的翻译和拼音；「听书」的语音也在这里配",
                         trailing = if (prefs.aiBaseUrl.isBlank() && prefs.aiKeyCipher.isBlank()) "未配置" else "已配置",
                         on = onOpenAi,
                     )
@@ -773,9 +773,13 @@ private fun PrefSheet(prefs: ReaderPrefs, onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         containerColor = Chrome.card,
         shape = RoundedCornerShape(topStart = SHEET_RADIUS, topEnd = SHEET_RADIUS),
+        // 不要顶上那颗拖拽小把手：这两层都不靠拖（点外面、点「取消」都回得去），
+        // 摆一颗把手是暗示一个不存在的动作
+        dragHandle = null,
     ) {
         Column(Modifier.padding(bottom = 20.dp)) {
-            Text("偏好设置", fontSize = 16.sp, color = Chrome.ink, modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 4.dp))
+            // 去掉把手之后标题就贴到圆角那条边上了：顶内衬给到和左边同一个数（16dp）
+            Text("偏好设置", fontSize = 16.sp, color = Chrome.ink, modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp))
             SwitchLine("音量键翻页", volume) { volume = it; prefs.volumePaging = it }
             SwitchLine("阅读时屏幕常亮", keep) { keep = it; prefs.keepScreenOn = it }
             SwitchLine("点屏幕两侧都往后翻", both) { both = it; prefs.bothSidesNext = it }
