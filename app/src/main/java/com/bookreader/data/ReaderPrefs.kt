@@ -277,6 +277,36 @@ class ReaderPrefs(context: Context) {
         p.edit().putString("marks.$bookId", list.joinToString(";") { "${it.chapterIndex}|${it.absoluteOffset}" }).apply()
     }
 
+    /**
+     * 从书架上移除：只是这一本不再出现在列表里，本机那份正文 / 索引 / 书签 / 阅读位置一个字都不动 ——
+     * 再导入同一个文件会重新出现（那是另一条新记录，旧记录还在这里，两边都不丢东西）。
+     */
+    fun isRemoved(bookId: String): Boolean = p.getBoolean("removed.$bookId", false)
+
+    fun setRemoved(bookId: String, on: Boolean) {
+        // 复活时把键摘掉而不是写个 false：架上每本都留一条 false 就是没人读的噪声
+        p.edit().apply { if (on) putBoolean("removed.$bookId", true) else remove("removed.$bookId") }.apply()
+    }
+
+    /** 置顶：书架两种排法都排在前头（排序在界面那一层做，这里只存开关）。 */
+    fun isPinned(bookId: String): Boolean = p.getBoolean("pin.$bookId", false)
+
+    fun setPinned(bookId: String, on: Boolean) {
+        p.edit().putBoolean("pin.$bookId", on).apply()
+    }
+
+    /**
+     * 真删一本书时把它那串"按书存"的键一起摘掉：`pos. / marks. / page. / auto. / zoom. / fontscale. /
+     * pdfPage. / removed. / pin.` 都是 `<前缀>.<bookId>`，留着就是永远读不到的死字节
+     * （书架按目录列，这些键再没有任何一处会遍历）。
+     */
+    fun clearBook(bookId: String) {
+        val suffix = ".$bookId"
+        val doomed = p.all.keys.filter { it.endsWith(suffix) }
+        if (doomed.isEmpty()) return
+        p.edit().apply { doomed.forEach { remove(it) } }.apply()
+    }
+
     companion object {
         const val KEY_FONT = "fontSizeSp"
         const val KEY_THEME = "theme"

@@ -3,6 +3,8 @@ package com.bookreader.ui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,6 +52,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -367,20 +371,68 @@ fun MarksScreen(
         out
     }
 
+    // 一本一堆，tab 上那些书名就是这一列：顺序跟着 library.list()（= 书架那一列的顺序）
+    val groups = remember(rows) {
+        rows.distinctBy { it.bookId }.map { head -> head to rows.filter { it.bookId == head.bookId } }
+    }
+    var pick by remember { mutableStateOf(0) }
+
     Column(Modifier.fillMaxSize().background(Chrome.page)) {
-        ScreenHeader("书签", "${rows.size} 条")
         if (rows.isEmpty()) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("还没有书签", fontSize = 16.sp, color = Chrome.ink)
                 Text("读书时点底部「书签」就把当前这一行记下来", fontSize = 13.sp, color = Chrome.faint)
             }
         } else {
+            // 顶行不再单独印书名（他点的就是这一格"这个不要了，tab 从这里开始"）：
+            // 左边是那排可横滑的 tab，右边留住条数，右内衬仍是 16dp = 原来标题那一档，位置一个字没挪
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    groups.forEachIndexed { i, (head, _) ->
+                        WholeChip(
+                            head.bookTitle,
+                            modifier = Modifier.height(32.dp),
+                            selected = i == pick,
+                            // 10dp = 下面那叠书签卡片的圆角，同一页里两套圆角就是没对齐
+                            radius = 10.dp,
+                        ) { pick = i }
+                    }
+                }
+                // 条数：底色 / 圆角 / 字色都和未选中那颗 tab 同一档（它就是这一排里的一颗），
+                // 左边留的空气 = 颗与颗之间那 8dp。
+                // 盒宽钉死 50dp：内衬 12dp×2 之外留给字的是 26dp=71.5px，「6 条」50px、「12 条」64px
+                // 都装得下并居中；上一版给的是上限 40dp，字要 42.3dp 才被夹掉半个「条」、空位全跑到右边。
+                Box(
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .width(50.dp)
+                        .height(32.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Chrome.chip)
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "${groups[pick].second.size} 条",
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        textAlign = TextAlign.Center,
+                        color = Chrome.ink,
+                    )
+                }
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 16.dp),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(rows, key = { "${it.bookId}-${it.offset}" }) { row ->
+                items(groups[pick].second, key = { "${it.bookId}-${it.offset}" }) { row ->
                     var open by remember(row) { mutableStateOf(false) }
                     // 折起来确实被截掉一段才允许展开；两行放得下的，那颗箭头置灰
                     var overTwo by remember(row) { mutableStateOf(false) }
@@ -397,8 +449,9 @@ fun MarksScreen(
                             .padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            // 卡片第一行从书名换成章节名：书名已经在标题和 tab 上，同一件事不说第二遍
                             Text(
-                                row.bookTitle,
+                                row.chapterTitle,
                                 fontSize = 15.sp,
                                 color = Chrome.ink,
                                 modifier = Modifier.weight(1f),
@@ -420,7 +473,8 @@ fun MarksScreen(
                             }
                         }
                         Text(
-                            "${row.chapterTitle} · 第 ${row.offset} 字",
+                            // 章节名提到第一行去了，这一行只剩字数：一行里印两遍章节名是同一件事说两遍
+                            "第 ${row.offset} 字",
                             fontSize = 12.sp,
                             color = Chrome.faint,
                             modifier = Modifier.padding(top = 2.dp),
