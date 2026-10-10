@@ -39,6 +39,19 @@ class BookLibrary(private val context: Context) {
 
     fun delete(id: String): Boolean = dir(id).deleteRecursively()
 
+    /**
+     * 改名只动清单里那一行。书名在书架、书签页、阅读页顶栏、听书页、封面占位那十几处都是从
+     * manifest 读的，所以这里改一处就处处跟着变 —— 不用每个表面各存一份覆盖值（那样迟早有一处忘了读）。
+     */
+    fun rename(id: String, title: String): Boolean {
+        val f = File(dir(id), IndexCodec.MANIFEST)
+        if (!f.isFile) return false
+        val m = LinkedHashMap(IndexCodec.readManifest(f))
+        m["title"] = title
+        IndexCodec.writeManifest(f, m)
+        return true
+    }
+
     /** 整页渲染那一类的原件（kind=pdf / kind=pptx 各有一份）。 */
     fun pdfFile(id: String): File = File(dir(id), PDF_FILE)
 

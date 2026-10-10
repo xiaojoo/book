@@ -83,6 +83,9 @@ private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
         val uri = incoming ?: return@LaunchedEffect
         val title = library.displayName(uri).substringBeforeLast('.')
         library.list().firstOrNull { it.title == title }?.let {
+            // 之前在书架上"移除"过的那本，再导入一次就该回到架上（他点名的语义：移除只动列表、
+            // 数据留着）；不清这个标记的话它会一直藏在列表外，只是被打开而已
+            if (prefs.isRemoved(it.id)) prefs.setRemoved(it.id, false)
             openBook = it.id
             return@LaunchedEffect
         }

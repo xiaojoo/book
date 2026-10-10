@@ -407,8 +407,9 @@ fun ListenScreen(
                 SwitchRow(theme, "自动读下一段", "念完自己接下一段 —— 每多一段就多一次合成费", autoNext) { onAutoNext(it) }
                 SwitchRow(theme, "允许其他应用一起播", "不抢音频焦点，音乐 / 播客继续响", shareFocus) { onShareFocus(it) }
                 Spacer(Modifier.height(8.dp))
-                // 标题和选项同一行：这一层已经够高了，名字占一行浪费
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                // 标题和选项同一行：这一层已经够高了，名字占一行浪费。
+                // 行高 52dp = 下面「缓存历史」那一档（真机量过普通项行距 143px = 52.0dp）
+                Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("音色", fontSize = 15.sp, color = theme.inkColor)
                     Spacer(Modifier.width(8.dp))
                     if (voices.isEmpty()) {
@@ -425,9 +426,10 @@ fun ListenScreen(
                             voices.forEachIndexed { i, v ->
                                 WholeChip(
                                     v,
-                                    modifier = Modifier.height(32.dp),
+                                    // 32dp → 28dp：这一行的主角是那一排名字，胶囊再高一点就把行顶满了
+                                    modifier = Modifier.height(28.dp),
                                     selected = v == voiceId,
-                                    radius = 16.dp,
+                                    radius = 14.dp,
                                 ) {
                                     onVoice(v)
                                     // 换音色只对"下一次合成"有效：手里这段已经是旧音色，重新生成要再扣一次钱
@@ -439,15 +441,16 @@ fun ListenScreen(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                // 背景：和快捷面板那排色块同一批档，点了立刻换（这一屏和正文共用一个 themeIndex）
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                // 背景：和快捷面板那排色块同一批档，点了立刻换（这一屏和正文共用一个 themeIndex）。
+                // 行高同 52dp；色块高 = 上面那颗胶囊的高（28dp），宽按原来 34:22 的比例给到 44dp
+                Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("背景", fontSize = 15.sp, color = theme.inkColor)
                     Spacer(Modifier.width(8.dp))
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                         ReaderTheme.SWATCHES.forEachIndexed { i, p ->
                             Box(
                                 modifier = Modifier
-                                    .size(width = 34.dp, height = 22.dp)
+                                    .size(width = 44.dp, height = 28.dp)
                                     .clip(CircleShape)
                                     .background(p.pageColor)
                                     .then(

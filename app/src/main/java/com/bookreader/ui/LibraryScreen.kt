@@ -9,6 +9,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,12 +26,15 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,13 +72,21 @@ fun LibraryScreen(
     onOpen: (BookMeta) -> Unit,
     notice: String? = null,
 ) {
-    var books by remember { mutableStateOf(library.list()) }
+    var books by remember { mutableStateOf(library.list().shelfOrder(prefs)) }
     var busy by remember { mutableStateOf<Pair<String, Float>?>(null) }
     var note by remember(notice) { mutableStateOf(notice) }
-    var pendingDelete by remember { mutableStateOf<BookMeta?>(null) }
+    // 三个点和长按开的是同一层（四个动作）；「删除书籍」那一步再单独弹一次框
+    var actionsFor by remember { mutableStateOf<BookMeta?>(null) }
+    var renameFor by remember { mutableStateOf<BookMeta?>(null) }
+    var confirmDeleteFor by remember { mutableStateOf<BookMeta?>(null) }
     var menu by remember { mutableStateOf(false) }
     var shelfList by remember { mutableStateOf(prefs.shelfList) }
     val scope = rememberCoroutineScope()
+    // 置顶会把那一行插到当前视口的上面，不滚回顶就是"点下去没反应"（真机撞到的）
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+
+    fun reload() { books = library.list().shelfOrder(prefs) }
 
     fun startImport(uri: android.net.Uri) {
         busy = "正在导入" to 0f
@@ -85,7 +97,7 @@ fun LibraryScreen(
                 }
             }
             outcome.onSuccess { meta ->
-                books = library.list()
+                reload()
                 note = if (BookMeta.WHOLE_PAGE.contains(meta.kind)) {
                     "已入库：${meta.title}，${meta.pages} 页"
                 } else {
@@ -130,7 +142,8 @@ fun LibraryScreen(
                     Icon(
                         painterResource(R.drawable.ic_more),
                         contentDescription = "书架选项",
-                        tint = Chrome.ink,
+                        // 和行里那三颗点同一档灰色（他点的：两处都要灰）
+                        tint = Chrome.faint,
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -163,13 +176,15 @@ fun LibraryScreen(
                     contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxSize(),
+                    state = listState,
                 ) {
                     items(books, key = { it.id }) { meta ->
                         BookRow(
                             meta = meta,
                             position = prefs.loadPosition(meta.id),
                             onOpen = { onOpen(meta) },
-                            onLongPress = { pendingDelete = meta },
+                            onLongPress = { actionsFor = meta },
+                            onMore = { actionsFor = meta },
                         )
                     }
                 }
@@ -180,13 +195,14 @@ fun LibraryScreen(
                     horizontalArrangement = Arrangement.spacedBy(46.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxSize(),
+                    state = gridState,
                 ) {
                     items(books, key = { it.id }) { meta ->
                         BookCard(
                             meta = meta,
                             position = prefs.loadPosition(meta.id),
                             onOpen = { onOpen(meta) },
-                            onLongPress = { pendingDelete = meta },
+                            onLongPress = { actionsFor = meta },
                         )
                     }
                     item { AddBookCard(onClick = { pick() }) }
@@ -222,56 +238,166 @@ fun LibraryScreen(
         }
     }
 
-    pendingDelete?.let { meta ->
-        DeleteBookSheet(
-            title = meta.title,
-            onDismiss = { pendingDelete = null },
-            onDelete = {
-                library.delete(meta.id)
-                books = library.list()
-                pendingDelete = null
-                note = "已删除《${meta.title}》"
+    actionsFor?.let { meta ->
+        BookActionSheet(
+            meta = meta,
+            pinned = prefs.isPinned(meta.id),
+            onDismiss = { actionsFor = null },
+            onRemove = {
+                prefs.setRemoved(meta.id, true)
+                reload()
+                actionsFor = null
+                note = "已从书架移除《${meta.title}》：本机那份正文、书签、阅读位置都还在，再导入同一个文件会重新出现"
             },
+            onRename = {
+                actionsFor = null
+                renameFor = meta
+            },
+            onPin = {
+                prefs.setPinned(meta.id, !prefs.isPinned(meta.id))
+                reload()
+                actionsFor = null
+                // 置顶把这一行插到当前视口上面，不滚回顶就是"点下去没反应"（真机撞到的：
+                // 列表停在 delta 那一行，被置顶的那本在它上面，屏幕上看不到任何变化）
+                scope.launch {
+                    listState.scrollToItem(0)
+                    gridState.scrollToItem(0)
+                }
+            },
+            onDelete = {
+                actionsFor = null
+                confirmDeleteFor = meta
+            },
+        )
+    }
+
+    renameFor?.let { meta ->
+        RenameBookSheet(
+            meta = meta,
+            onDismiss = { renameFor = null },
+            onSave = { title ->
+                library.rename(meta.id, title)
+                reload()
+                renameFor = null
+                note = "书名已改成《$title》"
+            },
+        )
+    }
+
+    confirmDeleteFor?.let { meta ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteFor = null },
+            // 他点名要的就是这一句，所以不加第二行说明
+            title = { Text("确认将《${meta.title}》删除？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    library.delete(meta.id)
+                    // 书都删了还把按书存的那串键留在 prefs 里 = 永远读不到的死字节，一并摘掉
+                    prefs.clearBook(meta.id)
+                    reload()
+                    confirmDeleteFor = null
+                    note = "已删除《${meta.title}》"
+                }) { Text("删除", color = Chrome.danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteFor = null }) { Text("取消") } },
         )
     }
 }
 
+/** 置顶的排前面，其余保持书架原来的顺序（按目录名列出来 = 新的在前）。`sortedByDescending` 是稳定排序，不会打乱没置顶那一段。 */
+private fun List<BookMeta>.shelfOrder(prefs: ReaderPrefs): List<BookMeta> =
+    filterNot { prefs.isRemoved(it.id) }.sortedByDescending { prefs.isPinned(it.id) }
+
 /**
- * 删这本书的二次确认：从底部推上来的抽屉，外壳和「偏好设置」那颗同一份（`ModalBottomSheet` + `Chrome.card`），
- * 顶行也和整页那一类的弹层一个规矩 —— 左「取消」纯文字、右实心红「删除」。
- * 模态框改成抽屉是他这条要求；文案一个字没改：说清删的是入库副本、原文件不动。
+ * 一本书的四个动作。两个入口开同一层：长按这一行、或点这一行右边那颗 ⋯。
+ * 「移除书架」和「删除书籍」是两件事 —— 前者只从列表里摘掉、本机那份一个字不动；
+ * 后者才真删，删之前再单独弹一次框（那一步回不去）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DeleteBookSheet(title: String, onDismiss: () -> Unit, onDelete: () -> Unit) {
+private fun BookActionSheet(
+    meta: BookMeta,
+    pinned: Boolean,
+    onDismiss: () -> Unit,
+    onRemove: () -> Unit,
+    onRename: () -> Unit,
+    onPin: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    BookSheet(
+        onDismiss = onDismiss,
+        // 这一层里有两个动作是回不去的，所以最上面先说清"这是哪一本"；书名长就换行，不裁
+        header = { Text(meta.title, fontSize = 16.sp, color = Chrome.ink, lineHeight = 22.sp) },
+    ) {
+        BookActionRow("移除书架", onClick = onRemove)
+        BookActionRow("重命名", onClick = onRename)
+        // 点完这一颗书名那一行右边的标记要跟着变，所以标题跟着状态走，不写死"置顶"
+        BookActionRow(if (pinned) "取消置顶" else "置顶", onClick = onPin)
+        BookActionRow("删除书籍", danger = true, onClick = onDelete)
+        Spacer(Modifier.height(6.dp))
+    }
+}
+
+/** 一行一个动作：52dp 高、整行都是命中区；「删除书籍」那颗红字。 */
+@Composable
+private fun BookActionRow(label: String, danger: Boolean = false, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.fillMaxWidth().height(52.dp).tap(onClick),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(label, fontSize = 15.sp, color = if (danger) Chrome.danger else Chrome.ink)
+    }
+}
+
+/** 改名：底部抽屉里一格输入（要输入的浮层不做居中弹窗），空着或没改时那颗「保存」置灰。 */
+@Composable
+private fun RenameBookSheet(
+    meta: BookMeta,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var tmp by remember(meta.id) { mutableStateOf(meta.title) }
+    BookSheet(
+        onDismiss = onDismiss,
+        header = { Text("重命名", fontSize = 16.sp, color = Chrome.ink) },
+    ) {
+        OutlinedTextField(
+            value = tmp,
+            onValueChange = { tmp = it.take(40) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 「取消」按他点的撤了：这一层点抽屉外面、或按系统返回都能回得去，不是没有出口
+            Spacer(Modifier.weight(1f))
+            SheetAction(
+                "保存",
+                Chrome.accent,
+                enabled = tmp.isNotBlank() && tmp.trim() != meta.title,
+                onClick = { onSave(tmp.trim()) },
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+    }
+}
+
+/** 两本书动作那层的同一份外壳：底部推上来、`Chrome.card`、顶上一对圆角、没有拖拽把手。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookSheet(onDismiss: () -> Unit, header: @Composable () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = Chrome.card,
         shape = RoundedCornerShape(topStart = SHEET_RADIUS, topEnd = SHEET_RADIUS),
-        // 不要顶上那颗拖拽小把手：这两层都不靠拖（点外面、点「取消」都回得去），
-        // 摆一颗把手是暗示一个不存在的动作
         dragHandle = null,
     ) {
-        // 顶内衬 = 左右内衬（19dp）：把手没了之后「取消 / 删除」那一行原本贴着圆角边
         Column(Modifier.padding(horizontal = 19.dp, vertical = 19.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "取消",
-                    fontSize = 15.sp,
-                    color = Chrome.ink,
-                    modifier = Modifier.tap(onDismiss).padding(vertical = 6.dp, horizontal = 2.dp),
-                )
-                Spacer(Modifier.weight(1f))
-                SheetAction("删除", Chrome.danger, onClick = onDelete)
-            }
-            Text(title, fontSize = 16.sp, color = Chrome.ink, modifier = Modifier.padding(top = 16.dp))
-            Text(
-                "会删掉已入库的正文索引和这本书的阅读位置、书签。原文件不动。",
-                fontSize = 13.sp,
-                color = Chrome.faint,
-                lineHeight = 19.sp,
-                modifier = Modifier.padding(top = 4.dp, bottom = 20.dp),
-            )
+            header()
+            Spacer(Modifier.height(10.dp))
+            content()
         }
     }
 }
@@ -306,6 +432,7 @@ private fun BookRow(
     position: com.bookreader.core.model.BookPosition?,
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
+    onMore: () -> Unit,
 ) {
     val whole = BookMeta.WHOLE_PAGE.contains(meta.kind)
     val unread = if (whole) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
@@ -315,8 +442,9 @@ private fun BookRow(
                 .fillMaxWidth()
             // 不再套卡片：行直接铺在页面底色上（他给的参考图就是没有卡片那一层）
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
-            // 上下收到 8dp、行缝 10→4dp（他要"间隙小一点"）；左右仍 12dp，封面那条左线才不动
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            // 上下收到 8dp、行缝 10→4dp（他要"间隙小一点"）；左仍 12dp（封面那条左线才不动），
+            // 右边不给内衬：让行末那颗 ⋯ 的框和顶栏那颗落在同一条线上（两边留一样宽的间隙）
+            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (cover != null) {
@@ -346,7 +474,26 @@ private fun BookRow(
                 unread != null -> "${unread}章未读"
                 else -> "${meta.chapterCount} 章"
             }
-            Text(meta.title, fontSize = 16.sp, color = Chrome.ink, lineHeight = 22.sp)
+            // 书名和那颗 ⋯ 同一行：⋯ 和长按开的是同一个抽屉（两个入口、一份动作），
+            // 44dp 命中框 + 22dp 图标 = 顶栏那三颗点同一份，所以两颗的墨右在同一条线上
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    meta.title,
+                    fontSize = 16.sp,
+                    color = Chrome.ink,
+                    lineHeight = 22.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(modifier = Modifier.size(44.dp).tap(onMore), contentAlignment = Alignment.Center) {
+                    Icon(
+                        painterResource(R.drawable.ic_more),
+                        contentDescription = "《${meta.title}》的选项",
+                        // 灰的：和顶栏那三颗点同一档，行里这颗不比书名抢眼
+                        tint = Chrome.faint,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
             Row(
                 modifier = Modifier.padding(top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
