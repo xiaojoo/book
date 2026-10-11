@@ -1,0 +1,31 @@
+{
+  "id": "ranwen",
+  "name": "燃文小说网",
+  "homeUrl": "https://www.ranwen8.cc/",
+  "note": "2026-10-11 从这台机实测：搜「剑来」出结果，目录一页到底（无分页下拉）。作者列在第三个 td，是纯文本",
+  "charset": "utf-8",
+  "search": {
+    "url": "https://www.ranwen8.cc/search.html",
+    "method": "POST",
+    "data": "{submit: 搜索, s: %s}",
+    "item": "div.padding > div > table > tbody > tr",
+    "bookName": "td:nth-child(1) > a",
+    "author": "td:nth-child(3)",
+    "latestChapter": "td:nth-child(2) > a",
+    "lastUpdateTime": "td:nth-child(4)",
+    "bookUrl": "td:nth-child(1) > a@href"
+  },
+  "toc": {
+    "item": "ul.chapterlist > li > a"
+  },
+  "chapter": {
+    "content": "#content",
+    "filter": ["\\(本章完\\)", "燃文小说网.*?最新章节", "天才一秒记住.*?地址.*?"]
+  },
+  "crawl": {
+    "concurrency": 3,
+    "minIntervalMs": 500,
+    "maxIntervalMs": 1500,
+    "maxAttempts": 3
+  }
+}

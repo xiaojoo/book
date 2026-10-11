@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏那一条进度用的小图标：向下箭头 + 一条落点横线。
+     状态栏只染单色，所以整张都是同一支笔；不复用 ic_import_local（那颗是"从本机导入文件"）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#000000">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11,4 L13,4 L13,12.17 L15.59,9.59 L17,11 L12,16 L7,11 L8.41,9.59 L11,12.17 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5,18 L19,18 L19,20 L5,20 Z" />
+</vector>

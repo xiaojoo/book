@@ -137,15 +137,17 @@ fun LibraryScreen(
     Box(Modifier.fillMaxSize().background(Chrome.page)) {
         Column(Modifier.fillMaxSize()) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 23.dp, end = 12.dp, top = 12.dp, bottom = 2.dp),
+                // 上/下 12dp + 20sp：和「搜书」「精选」那两页的 ScreenHeader 同一档，
+                // 换 tab 时标题那一行不再跳（原来是 bottom=2dp、19sp，比另两页矮 27px）
+                modifier = Modifier.fillMaxWidth().height(ScreenHeaderHeight).padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("书架", fontSize = 19.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
+                Text("书架", fontSize = 20.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
                 Text("  ${books.size} 本", fontSize = 13.sp, color = Chrome.faint)
                 Spacer(Modifier.weight(1f))
                 // 「导入书籍」那颗文字按钮换成三个点：这一行的右边现在只管两件事（这一屏怎么排 + 从哪拿书），
                 // 都收进弹框，不再各占一颗按钮
-                Box(modifier = Modifier.size(44.dp).tap { menu = true }, contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(44.dp).tap { menu = true }, contentAlignment = Alignment.CenterEnd) {
                     Icon(
                         painterResource(R.drawable.ic_more),
                         contentDescription = "书架选项",
@@ -157,7 +159,7 @@ fun LibraryScreen(
             }
 
             busy?.let { (label, progress) ->
-                Column(Modifier.fillMaxWidth().padding(horizontal = 23.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     Text("$label ${(progress * 100).toInt()}%", fontSize = 13.sp, color = Chrome.faint)
                     LinearProgressIndicator(
                         progress = { progress },
@@ -173,14 +175,14 @@ fun LibraryScreen(
                     it,
                     fontSize = 13.sp,
                     color = Chrome.faint,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 23.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
 
             // 两种排法共用同一份 books / 同一个开书和长按删的手势，只有行怎么摆不同
             if (shelfList) {
                 LazyColumn(
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 16.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxSize(),
                     state = listState,
@@ -198,7 +200,7 @@ fun LibraryScreen(
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(start = 23.dp, end = 23.dp, top = 10.dp, bottom = 16.dp),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(46.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxSize(),
@@ -449,9 +451,9 @@ private fun BookRow(
                 .fillMaxWidth()
             // 不再套卡片：行直接铺在页面底色上（他给的参考图就是没有卡片那一层）
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
-            // 上下收到 8dp、行缝 10→4dp（他要"间隙小一点"）；左仍 12dp（封面那条左线才不动），
-            // 右边不给内衬：让行末那颗 ⋯ 的框和顶栏那颗落在同一条线上（两边留一样宽的间隙）
-            .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+            // 上下 8dp、行缝 4dp 没动；左内衬撤掉——左线现在整页统一由列表的 contentPadding 16dp 给，
+            // 行内再叠 12dp 就会比标题和图墙突出 12px。右边一直不给内衬：行末那颗 ⋯ 的框和顶栏那颗同一条线
+            .padding(top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (cover != null) {
@@ -494,7 +496,7 @@ private fun BookRow(
                     lineHeight = 22.sp,
                     modifier = Modifier.weight(1f),
                 )
-                Box(modifier = Modifier.size(44.dp).tap(onMore), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(44.dp).tap(onMore), contentAlignment = Alignment.CenterEnd) {
                     Icon(
                         painterResource(R.drawable.ic_more),
                         contentDescription = "《${meta.title}》的选项",

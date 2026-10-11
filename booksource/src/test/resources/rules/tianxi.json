@@ -1,0 +1,37 @@
+{
+  "id": "tianxi",
+  "name": "新天禧（合成夹具）",
+  "homeUrl": "http://www.example-tx.com/",
+  "note": "测的是 POST 搜索（关键词要同时填进地址和请求体）、目录下拉框分页、以及限流站返回空正文",
+  "charset": "gbk",
+  "search": {
+    "url": "http://www.example-tx.com/s.php?q=%s",
+    "method": "POST",
+    "data": "{submit: Search, keyword: %s}",
+    "item": "ul.shulist > li",
+    "bookName": "a.book",
+    "author": "span.au",
+    "category": "span.cat",
+    "wordCount": "span.size",
+    "latestChapter": "span.new > a",
+    "bookUrl": "a.book@href"
+  },
+  "toc": {
+    "url": "http://www.example-tx.com/book/77/index%s.html",
+    "item": "dl > dd > a",
+    "nextPage": "#indexselect > option"
+  },
+  "chapter": {
+    "content": "#booktxt",
+    "filter": [
+      "首发网址.+。",
+      "支持（新天禧小说.*?】"
+    ]
+  },
+  "crawl": {
+    "concurrency": 5,
+    "minIntervalMs": 800,
+    "maxIntervalMs": 2000,
+    "maxAttempts": 4
+  }
+}

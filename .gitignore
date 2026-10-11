@@ -15,3 +15,6 @@ tools/*_tmp.py
 # 造夹具的产物和下载的参考包（19MB epub / 29MB txt，不进仓库）
 scratch/
 tools/__pycache__/
+
+# 真站抓回来的页面夹具：里面夹着原书正文，不进公开仓库（没有它们时那 10 条按跳过算）
+booksource/src/test/resources/live/

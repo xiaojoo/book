@@ -17,6 +17,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -137,6 +142,8 @@ val SHEET_RADIUS = 10.dp
 
 enum class MainTab(val label: String, val iconRes: Int) {
     Shelf("书架", R.drawable.ic_tab_shelf),
+    // 搜书单独占一格：藏在书架那颗 ⋯ 里等于没做（他点过这条）。精选那格原样留着
+    Search("搜书", R.drawable.ic_search),
     Featured("精选", R.drawable.ic_tab_featured),
     Marks("书签", R.drawable.ic_tab_marks),
     Me("我的", R.drawable.ic_tab_me),
@@ -146,6 +153,7 @@ enum class MainTab(val label: String, val iconRes: Int) {
 fun AppScaffold(
     tab: MainTab,
     onTab: (MainTab) -> Unit,
+    barVisible: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     // 系统导航条也铺界面底色：它是底栏往下那条，留着卡片白就等于同一条栏有两个主人
@@ -154,52 +162,67 @@ fun AppScaffold(
         modifier = Modifier
             .fillMaxSize()
             .background(Chrome.page)
-            .safeDrawingPadding(),
+            // 键盘那一格要排掉：safeDrawing 含 ime，键盘一开整层（连着底栏）被顶上去。
+            // 他要的是底栏不动、键盘盖在上面；需要自己躲键盘的那几处（搜书的结果列表）
+            // 在自己的内衬里加 ime 高度，不靠壳来抬。
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)),
     ) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) { content() }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Chrome.page)
-                .drawBehind {
-                    // 1px 分界：这台机 1dp 会渲成 3px
-                    drawLine(Chrome.hairline, Offset.Zero, Offset(size.width, 0f), 1f)
-                }
-                .height(52.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            MainTab.values().forEach { item ->
-                val on = item == tab
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxSize()
-                        .tap { onTab(item) },
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(item.iconRes),
-                        contentDescription = item.label,
-                        tint = if (on) Chrome.accent else Chrome.faint,
-                        modifier = Modifier.size(22.dp),
-                    )
-                    Text(
-                        item.label,
-                        fontSize = 11.sp,
-                        color = if (on) Chrome.accent else Chrome.faint,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
+        if (barVisible) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Chrome.page)
+                    .drawBehind {
+                        // 1px 分界：这台机 1dp 会渲成 3px
+                        drawLine(Chrome.hairline, Offset.Zero, Offset(size.width, 0f), 1f)
+                    }
+                    .height(52.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+            ) {
+                MainTab.values().forEach { item ->
+                    val on = item == tab
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                            .tap { onTab(item) },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            painter = painterResource(item.iconRes),
+                            contentDescription = item.label,
+                            tint = if (on) Chrome.accent else Chrome.faint,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Text(
+                            item.label,
+                            fontSize = 11.sp,
+                            color = if (on) Chrome.accent else Chrome.faint,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * 顶部标题那一行的高度，三页共用一个数。
+ *
+ * 为什么是定高而不是 `vertical = 12dp`：书架那一行右边那颗 ⋯ 的命中框是 44dp（=121px），
+ * 行高会被它撑到 121px，标题（60px）在行里上下居中就被推下去 (121-60)/2 = 30.5px ——
+ * 同一个 12dp 内衬，两页的标题墨差出 31px。定高 46dp（=126.5px）之后 44dp 那颗装得下、
+ * 不再决定行高，三页的标题都落在行顶往下 (126.5-60)/2 = 33.25px ≈ 12dp 处。
+ */
+val ScreenHeaderHeight = 46.dp
+
 @Composable
 fun ScreenHeader(title: String, trailing: String? = null) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().height(ScreenHeaderHeight).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, fontSize = 20.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
