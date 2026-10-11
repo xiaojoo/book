@@ -1,0 +1,32 @@
+{
+  "id": "xhytd",
+  "name": "黄易天地（合成夹具）",
+  "homeUrl": "http://www.example-xhytd.com/",
+  "note": "测试用：DOM 形状照真实站那一类（列表表格 + span 分列），域名和书名都是假的",
+  "charset": "",
+  "search": {
+    "url": "http://www.example-xhytd.com/search.html?name=%s",
+    "method": "GET",
+    "item": "#main > div.novelslist2 > ul > li",
+    "bookName": "span.s2.wid > a",
+    "author": "span.s4.wid > a",
+    "latestChapter": "span.s3.wid3 > a",
+    "lastUpdateTime": "span.s6.wid6",
+    "bookUrl": "span.s2.wid > a@href"
+  },
+  "toc": {
+    "item": "#list > dl > dt:nth-of-type(2) ~ dd > a"
+  },
+  "chapter": {
+    "content": "#content",
+    "filter": [
+      "\\(本章完\\)"
+    ]
+  },
+  "crawl": {
+    "concurrency": 4,
+    "minIntervalMs": 300,
+    "maxIntervalMs": 1200,
+    "maxAttempts": 3
+  }
+}

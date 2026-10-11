@@ -79,8 +79,30 @@ class BookLibrary(private val context: Context) {
             checkNotNull(input) { "读不到所选文件" }
             staged.outputStream().buffered(1 shl 16).use { out -> input.copyTo(out) }
         }
-        val id = "${System.currentTimeMillis()}-${title.replace(UNSAFE, "").take(40)}"
+        return importFile(staged, title, onProgress = onProgress)
+    }
+
+    /**
+     * 已经是本地一个文件的那条入口：SAF 导入拷完临时件走它，搜书下载下来的整本也走它
+     * （下载器交出的就是一份 .txt）。书名在这里显式传：下载来的那本，书名是搜索命中里那个，
+     * 不是文件名（文件名是我们临时起的 `dl-1699...txt`）。
+     *
+     * **这个文件归它管**：入库完就删。库要留的那份已经另存进书目录了，
+     * 在 cache 里再留一份只会变成没人清的垃圾。
+     */
+    /**
+     * @param into 传一本书的 id 就是**更新它**：写回同一个目录、同一个 id。
+     *   为什么值得留这个口子：进度、书签、置顶全按 id 记在 prefs 里，换新 id 就等于
+     *   "更新一本连载"把人已读到的位置抹掉。追加新章不会动前面章节的偏移，所以老位置仍然指得准。
+     */
+    fun importFile(staged: File, title: String, into: String? = null, onProgress: (Double) -> Unit = {}): BookMeta {
+        val ext = staged.extension
+        val id = into ?: "${System.currentTimeMillis()}-${title.replace(UNSAFE, "").take(40)}"
         val dir = File(root, id)
+        if (into != null) {
+            // 清掉上一版的中间件再重灌：留着旧的 chunk 会让新书的偏移指到旧字节上
+            dir.listFiles()?.forEach { if (it.name != "cover.jpg") it.delete() }
+        }
         val t0 = System.nanoTime()
         return try {
             val ebook = EbookText()

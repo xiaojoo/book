@@ -1,0 +1,31 @@
+{
+  "id": "mengshu",
+  "name": "梦书中文",
+  "homeUrl": "http://www.mcxs.la/",
+  "note": "2026-10-11 从这台机实测：搜「剑来」出结果。非大陆 IP 可能搜不到（站点自己限 IP）",
+  "charset": "utf-8",
+  "search": {
+    "url": "http://www.mcxs.la/search.html",
+    "method": "POST",
+    "data": "{name: %s}",
+    "item": "div.novelslist2 > ul > li",
+    "bookName": "span.s2.wid > a",
+    "author": "span.s4.wid > a",
+    "latestChapter": "span.s3.wid3 > a",
+    "lastUpdateTime": "span.s6.wid6",
+    "bookUrl": "span.s2.wid > a@href"
+  },
+  "toc": {
+    "item": "#list > dl > dt:nth-of-type(2) ~ dd > a"
+  },
+  "chapter": {
+    "content": "#content",
+    "filter": ["\\(本章完\\)", "请收藏本站[^。]*。?", "最新章节到手机阅读", "(?s)天才一秒记住.{0,80}?无广告！", "(?s)章节错误.{0,10}点此报送.{0,120}?请耐心等待。"]
+  },
+  "crawl": {
+    "concurrency": 3,
+    "minIntervalMs": 500,
+    "maxIntervalMs": 1500,
+    "maxAttempts": 3
+  }
+}

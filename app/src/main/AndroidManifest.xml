@@ -5,6 +5,13 @@
     <!-- 只有「词典」这一颗用得到：本机读文件、入库、排版全程不联网。
          加了它就要在 AI 设置页里说清楚"这一条链路会把选中的那段文字发出去"。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 下载走 WorkManager 的前台那一档：Android 14 起 dataSync 是单独的权限，
+         不给的话 setForeground 直接抛，任务退回"进程在才活着"。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 13 起通知要运行时权限。不给也能下（前台服务照跑），只是通知栏那条进度不出现，
+         所以界面里的进度不能只靠通知。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -60,6 +67,15 @@
                 <data android:scheme="file" android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
             </intent-filter>
         </activity>
+        <!-- WorkManager 的前台服务：2.12.0 自带的那份清单里 SystemForegroundService **没有**
+             android:foregroundServiceType，而 worker 调了 setForeground(dataSync) ——
+             Android 14 起系统直接拒："foregroundServiceType 0x1 is not a subset of 0x0"，
+             表现是一点下载就崩、并且因为队列里还有没跑完的活，之后每次开应用都崩在启动上。
+             库里没给的就是我们该补的：按官方文档用 tools:node="merge" 把类型并到它那个 service 元素上。 -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
     </application>
 
 </manifest>

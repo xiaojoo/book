@@ -23,10 +23,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.bookreader.data.BookLibrary
+import com.bookreader.data.BookSourceStore
 import com.bookreader.data.ReaderPrefs
 import com.bookreader.core.model.BookMeta
 import com.bookreader.ui.AppScaffold
 import com.bookreader.ui.AiSettingsScreen
+import com.bookreader.ui.BookSearchScreen
 import com.bookreader.ui.FeaturedScreen
 import com.bookreader.ui.LibraryScreen
 import com.bookreader.ui.Chrome
@@ -34,6 +36,7 @@ import com.bookreader.ui.PdfReaderScreen
 import com.bookreader.ui.PptReaderScreen
 import com.bookreader.ui.ReaderTheme
 import com.bookreader.ui.MainTab
+import com.bookreader.ui.SearchPage
 import com.bookreader.ui.MarksScreen
 import com.bookreader.ui.MeScreen
 import com.bookreader.ui.ReaderScreen
@@ -63,10 +66,13 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
         )
         val library = BookLibrary(this)
         val prefs = ReaderPrefs(this)
+        // 书籍源是文件、下载任务是进程内的（断点在磁盘上）：各建一次，随 Activity 活一辈子。
+        // 不放进 remember —— onCreate 里不是组合作用域，而它们本来也不该随重组重建（下载任务表会整张丢）
+        val sources = BookSourceStore(this)
         setContent {
             // 点击反馈全项目都从这颗 Indication 来：换成什么都不画的，涟漪、按住变深、悬停高亮一起没了
             CompositionLocalProvider(LocalIndication provides NoIndication) {
-                Root(library, prefs, incoming = intent?.viewUri())
+                Root(library, prefs, sources, incoming = intent?.viewUri())
             }
         }
     }
@@ -81,10 +87,17 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
 private fun Intent.viewUri(): Uri? = if (action == Intent.ACTION_VIEW) data else null
 
 @Composable
-private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
+private fun Root(
+    library: BookLibrary,
+    prefs: ReaderPrefs,
+    sources: BookSourceStore,
+    incoming: Uri?,
+) {
     var openBook by rememberSaveable { mutableStateOf<String?>(null) }
     var notice by rememberSaveable { mutableStateOf<String?>(null) }
     var tab by rememberSaveable { mutableStateOf(MainTab.Shelf) }
+    // 「任务」「管理」是搜书底下的全屏独立页：状态提在这里，壳才看得见该不该画底栏
+    var searchPage by rememberSaveable { mutableStateOf(SearchPage.Search) }
     // AI 设置是另开的一屏，不是弹窗（他点名要的形态）；和阅读页一样盖在壳上面
     var aiSettings by rememberSaveable { mutableStateOf(false) }
 
@@ -111,7 +124,7 @@ private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
     if (aiSettings) {
         AiSettingsScreen(prefs = prefs, onBack = { aiSettings = false })
     } else if (id == null) {
-        AppScaffold(tab = tab, onTab = { tab = it }) {
+        AppScaffold(tab = tab, onTab = { tab = it }, barVisible = searchPage == SearchPage.Search) {
             when (tab) {
                 MainTab.Shelf -> LibraryScreen(
                     library = library,
@@ -120,6 +133,12 @@ private fun Root(library: BookLibrary, prefs: ReaderPrefs, incoming: Uri?) {
                     notice = notice,
                 )
 
+                MainTab.Search -> BookSearchScreen(
+                    sources = sources,
+                    page = searchPage,
+                    onPage = { searchPage = it },
+                    onOpen = { openBook = it },
+                )
                 MainTab.Featured -> FeaturedScreen()
                 MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openBook = it })
                 MainTab.Me -> MeScreen(library, prefs, onOpenAi = { aiSettings = true })
