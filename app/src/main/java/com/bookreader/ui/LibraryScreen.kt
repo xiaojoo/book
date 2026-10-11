@@ -62,6 +62,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
+ * 那颗 ⋯ 的图标宽。顶栏和每一行**共用这一个数**（他点过：两处都要同一档），
+ * 所以调它一次就把两颗一起带走，不会出现顶栏小、行里大。
+ * 命中框仍是 44dp —— 要小的是看得见的三个点，不是按得中的地方。
+ */
+private val MORE_ICON = 18.dp
+
+/**
  * 书架。网格尺寸是量出来的（参考截图 1080 宽）：左右 64px=23dp、封面 232x318=85x116dp、列间距 128px=46dp。
  * Fixed(3) + 46dp 间距 + 23dp 内边距正好把每格算成 85dp，所以这里写的是间距而不是格子宽。
  */
@@ -142,9 +149,9 @@ fun LibraryScreen(
                     Icon(
                         painterResource(R.drawable.ic_more),
                         contentDescription = "书架选项",
-                        // 和行里那三颗点同一档灰色（他点的：两处都要灰）
+                        // 和行里那三颗点同一档灰色（他点的：两处都要灰）、同一档大小（18dp，见下面那行）
                         tint = Chrome.faint,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(MORE_ICON),
                     )
                 }
             }
@@ -475,7 +482,10 @@ private fun BookRow(
                 else -> "${meta.chapterCount} 章"
             }
             // 书名和那颗 ⋯ 同一行：⋯ 和长按开的是同一个抽屉（两个入口、一份动作），
-            // 44dp 命中框 + 22dp 图标 = 顶栏那三颗点同一份，所以两颗的墨右在同一条线上
+            // 44dp 命中框 + 18dp 图标 = 顶栏那三颗点同一份，所以两颗的墨右在同一条线上。
+            // 18dp 是他这轮"小一点"落下来的数：×0.82（22→18），这台机 2.75 倍下三个点的墨宽
+            // 45.4px → 37.1px、单个点 ⌀10.1px → 8.25px。命中框不动（44dp）—— 要小的是看得见的点，
+            // 不是按得中的地方
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     meta.title,
@@ -490,7 +500,7 @@ private fun BookRow(
                         contentDescription = "《${meta.title}》的选项",
                         // 灰的：和顶栏那三颗点同一档，行里这颗不比书名抢眼
                         tint = Chrome.faint,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(MORE_ICON),
                     )
                 }
             }
