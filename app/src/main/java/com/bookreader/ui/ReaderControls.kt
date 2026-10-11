@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -342,7 +343,7 @@ private fun SlideBar(
     onChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var widthPx by remember { mutableStateOf(1f) }
+    var widthPx by remember { mutableFloatStateOf(1f) }
     fun ratio(x: Float) = (x / widthPx).coerceIn(0.04f, 1f)
     Box(
         modifier = modifier
@@ -638,7 +639,9 @@ internal fun BoxScope.Sheet(
         if (title != null) Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = ink)
             Spacer(Modifier.weight(1f))
-            Box(modifier = Modifier.size(40.dp).tap(onDismiss), contentAlignment = Alignment.Center) {
+            // 墨迹贴到框的右沿（和那几页「‹ 返回」贴左沿同一条规矩）：居中放的话 ✕ 右边的间隙
+            // 比标题左边的间隙宽 12dp，同一层里左右两条线就对不上
+            Box(modifier = Modifier.size(40.dp).tap(onDismiss), contentAlignment = Alignment.CenterEnd) {
                 Icon(
                     painter = painterResource(R.drawable.ic_close),
                     contentDescription = "关闭",

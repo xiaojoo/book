@@ -210,6 +210,37 @@ class AiSpeechTest {
         return out.toByteArray()
     }
 
+    /**
+     * 「缓存范围」那一档到底缓存哪几章。判据钉的是"从正在听这一章**之后**数 N 章"：
+     * 当前章不在里面（它正一段一段播着、一段一段进缓存），越界要自己收住，`null` 才是整本。
+     */
+    @Test
+    fun chapterWindowStartsAfterTheChapterYouAreHearingAndClamps() {
+        assertEquals(listOf(3, 4, 5, 6, 7), AiSpeech.chapterWindow(2, 10, 5))
+        // 读到第 8 章、总共 10 章、要 50 章 ⇒ 只剩第 9 章，不吐到 53、也不吐负数
+        assertEquals(listOf(9), AiSpeech.chapterWindow(8, 10, 50))
+        // 最后一章之后没有章了
+        assertEquals(emptyList<Int>(), AiSpeech.chapterWindow(9, 10, 5))
+        // 「全部章节」= 整本，含当前章
+        assertEquals((0 until 10).toList(), AiSpeech.chapterWindow(3, 10, null))
+        assertEquals(emptyList<Int>(), AiSpeech.chapterWindow(0, 0, 5))
+    }
+
+    /**
+     * 用真机那本书第一章切出来的 18 段当样本：被阿里 400 拒掉的那一段（`|----|----|`）
+     * 判 false，念得出字的（含只有数字的那一行）判 true。
+     */
+    @Test
+    fun onlyTextWithPronounceableCharactersGetsSent() {
+        listOf("剑来", "引用：天雨虽宽，不润无根之草。", "| 名 | 值 |", "| 剑 | 来 |", "1. 有序第一",
+            "fun main() {", "    println(\"泥瓶巷\")").forEach {
+            assertTrue("$it 里全是竖线、连字符以外还有字，该发", AiSpeech.speakable(it))
+        }
+        listOf("|----|----|", "— — — — — —", "}", "", "      ", "（）", "***").forEach {
+            assertFalse("$it 一个音都发不出来，发过去就是 400", AiSpeech.speakable(it))
+        }
+    }
+
     private fun le(v: Int) = byteArrayOf(
         (v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte(),
         ((v shr 16) and 0xFF).toByte(), ((v shr 24) and 0xFF).toByte(),

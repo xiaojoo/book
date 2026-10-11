@@ -36,6 +36,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -53,7 +55,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -119,13 +120,12 @@ fun PptReaderScreen(
     onBack: () -> Unit,
 ) {
     val density = LocalDensity.current
-    val screen = LocalConfiguration.current
     val view = LocalView.current
-    ApplySystemBars(Chrome.pageArgb, Chrome.pageArgb, darkIcons = !Chrome.night)
+    ApplySystemBars(darkIcons = !Chrome.night)
     BackHandler(onBack = onBack)
     SideEffect { view.keepScreenOn = prefs.keepScreenOn }
 
-    val widthPx = (screen.screenWidthDp * density.density).roundToInt()
+    val widthPx = contentSizePx().width
     var deck by remember { mutableStateOf<PptxDeck?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     val images = remember { PptxImages() }
@@ -185,8 +185,8 @@ private fun PptBody(
     val pager = rememberPagerState(start) { pageCount }
     val scope = rememberCoroutineScope()
     // 缩放是双指手势的临时状态，不落库；播放和速度也一样，关掉这一屏就回到「没在放」
-    var zoom by remember { mutableStateOf(1f) }
-    var autoSeconds by remember { mutableStateOf(8) }
+    var zoom by remember { mutableFloatStateOf(1f) }
+    var autoSeconds by remember { mutableIntStateOf(8) }
     var playing by remember { mutableStateOf(false) }
 
     LaunchedEffect(pager) {
@@ -223,7 +223,7 @@ private fun PptBody(
     }
 
     var viewport by remember { mutableStateOf(IntSize.Zero) }
-    Box(Modifier.fillMaxSize().safeDrawingPadding().background(Chrome.page)) {
+    Box(Modifier.fillMaxSize().background(Chrome.page).safeDrawingPadding()) {
         HorizontalPager(
             state = pager,
             // 放大到比屏宽之后，横向那一把gesture要给页面自己拖着看，不能再被 pager 抢去翻页

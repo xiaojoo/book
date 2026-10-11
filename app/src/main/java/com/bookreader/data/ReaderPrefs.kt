@@ -1,6 +1,7 @@
 package com.bookreader.data
 
 import android.content.Context
+import androidx.core.content.edit
 import com.bookreader.core.model.BookPosition
 import com.bookreader.core.model.PageStyle
 
@@ -13,7 +14,7 @@ class ReaderPrefs(context: Context) {
 
     var fontSizeSp: Float
         get() = p.getFloat(KEY_FONT, 17f)
-        set(v) = p.edit().putFloat(KEY_FONT, v.coerceIn(12f, 34f)).apply()
+        set(v) = p.edit { putFloat(KEY_FONT, v.coerceIn(12f, 34f)) }
 
     /** 下面四个都是"档位派生出来的值"：面板上按的是档，不是连续滑块。 */
     val lineHeightMultiplier: Float get() = LINE_PRESETS[linePreset]
@@ -22,69 +23,69 @@ class ReaderPrefs(context: Context) {
 
     var themeIndex: Int
         get() = p.getInt(KEY_THEME, 0)
-        set(v) = p.edit().putInt(KEY_THEME, v).apply()
+        set(v) = p.edit { putInt(KEY_THEME, v) }
 
     var keepScreenOn: Boolean
         get() = p.getBoolean(KEY_KEEP, true)
-        set(v) = p.edit().putBoolean(KEY_KEEP, v).apply()
+        set(v) = p.edit { putBoolean(KEY_KEEP, v) }
 
     /** 0=简洁(瞬切) 1=平移。上下/仿真没做，UI 里点了会提示，不写进这里。 */
     var turnMode: Int
         get() = p.getInt("turnMode", 0)
-        set(v) = p.edit().putInt("turnMode", v).apply()
+        set(v) = p.edit { putInt("turnMode", v) }
 
     /** 行间距档位：0松散 1较宽 2适中 3紧凑 4密集 */
     var linePreset: Int
         get() = p.getInt("linePreset", 2)
-        set(v) = p.edit().putInt("linePreset", v.coerceIn(0, 4)).apply()
+        set(v) = p.edit { putInt("linePreset", v.coerceIn(0, 4)) }
 
     /** 边距档位：0较窄 1适中 2较宽 */
     var marginPreset: Int
         get() = p.getInt("marginPreset", 1)
-        set(v) = p.edit().putInt("marginPreset", v.coerceIn(0, 2)).apply()
+        set(v) = p.edit { putInt("marginPreset", v.coerceIn(0, 2)) }
 
     var paragraphIndent: Boolean
         get() = p.getBoolean("indentOn", true)
-        set(v) = p.edit().putBoolean("indentOn", v).apply()
+        set(v) = p.edit { putBoolean("indentOn", v) }
 
     var volumePaging: Boolean
         get() = p.getBoolean("volumePaging", false)
-        set(v) = p.edit().putBoolean("volumePaging", v).apply()
+        set(v) = p.edit { putBoolean("volumePaging", v) }
 
     /** 点左右两侧都往后翻（参考截图里那颗开关） */
     var bothSidesNext: Boolean
         get() = p.getBoolean("bothSidesNext", false)
-        set(v) = p.edit().putBoolean("bothSidesNext", v).apply()
+        set(v) = p.edit { putBoolean("bothSidesNext", v) }
 
     /** 护眼模式：叠一层暖色，不是系统级滤光 */
     var eyeCare: Boolean
         get() = p.getBoolean("eyeCare", false)
-        set(v) = p.edit().putBoolean("eyeCare", v).apply()
+        set(v) = p.edit { putBoolean("eyeCare", v) }
 
     /** 亮度：-1f 表示跟随系统 */
     var brightness: Float
         get() = p.getFloat("brightness", -1f)
-        set(v) = p.edit().putFloat("brightness", v).apply()
+        set(v) = p.edit { putFloat("brightness", v) }
 
     /** 休息提醒分钟数，0=不提醒 */
     var restMinutes: Int
         get() = p.getInt("restMinutes", 0)
-        set(v) = p.edit().putInt("restMinutes", v).apply()
+        set(v) = p.edit { putInt("restMinutes", v) }
 
     /** 繁→简：只对繁体正文有效果，简体书开了也一个字不改（ICU 是恒等变换） */
     var convertTraditional: Boolean
         get() = p.getBoolean("t2s", false)
-        set(v) = p.edit().putBoolean("t2s", v).apply()
+        set(v) = p.edit { putBoolean("t2s", v) }
 
     /** 自动阅读 */
     var autoRead: Boolean
         get() = p.getBoolean("autoRead", false)
-        set(v) = p.edit().putBoolean("autoRead", v).apply()
+        set(v) = p.edit { putBoolean("autoRead", v) }
 
     /** 自动阅读速度档，单位是"行/分钟" —— 上下和按页两种模式共用这一个口径 */
     var autoSpeedPreset: Int
         get() = p.getInt("autoSpeed", 1)
-        set(v) = p.edit().putInt("autoSpeed", v.coerceIn(0, AUTO_LINES_PER_MIN.lastIndex)).apply()
+        set(v) = p.edit { putInt("autoSpeed", v.coerceIn(0, AUTO_LINES_PER_MIN.lastIndex)) }
 
     val autoLinesPerMinute: Int get() = AUTO_LINES_PER_MIN[autoSpeedPreset]
 
@@ -94,32 +95,31 @@ class ReaderPrefs(context: Context) {
      */
     var recentSearches: List<String>
         get() = (p.getString("recentSearch", "") ?: "").split(';').filter { it.isNotBlank() }
-        set(v) = p
-            .edit()
-            .putString(
+        set(v) = p.edit {
+            putString(
                 "recentSearch",
                 v.map { it.replace(";", "").trim() }.filter { it.isNotEmpty() }.distinct().take(8).joinToString(";"),
             )
-            .apply()
+        }
 
     /** 正文字体：null = 系统默认 */
     var fontPath: String?
         get() = p.getString("fontPath", null)
-        set(v) = p.edit().putString("fontPath", v).apply()
+        set(v) = p.edit { putString("fontPath", v) }
 
     /** 昵称：只存在这台机上，没有账号体系。 */
     var nickname: String
         get() = p.getString("nickname", "2015XIAO") ?: "2015XIAO"
-        set(v) = p.edit().putString("nickname", v.take(12)).apply()
+        set(v) = p.edit { putString("nickname", v.take(12)) }
 
     var fontLabel: String
         get() = p.getString("fontLabel", "系统默认") ?: "系统默认"
-        set(v) = p.edit().putString("fontLabel", v).apply()
+        set(v) = p.edit { putString("fontLabel", v) }
 
     /** 书架排布：false = 图墙（三列封面），true = 列表（一行一本）。默认图墙，和改之前一致。 */
     var shelfList: Boolean
         get() = p.getBoolean("shelfList", false)
-        set(v) = p.edit().putBoolean("shelfList", v).apply()
+        set(v) = p.edit { putBoolean("shelfList", v) }
 
     /**
      * AI 服务三项。地址和模型名不是秘密（它们只说"往哪发"），直接放 prefs；
@@ -127,21 +127,21 @@ class ReaderPrefs(context: Context) {
      */
     var aiBaseUrl: String
         get() = p.getString("aiBaseUrl", "") ?: ""
-        set(v) = p.edit().putString("aiBaseUrl", v.trim()).apply()
+        set(v) = p.edit { putString("aiBaseUrl", v.trim()) }
 
     var aiModel: String
         get() = p.getString("aiModel", "") ?: ""
-        set(v) = p.edit().putString("aiModel", v.trim()).apply()
+        set(v) = p.edit { putString("aiModel", v.trim()) }
 
     /** Base64 的 AES/GCM 密文。解不开（换机、恢复备份、被改过）就当没有，界面会要求重填。 */
     var aiKeyCipher: String
         get() = p.getString("aiKeyCipher", "") ?: ""
-        set(v) = p.edit().putString("aiKeyCipher", v).apply()
+        set(v) = p.edit { putString("aiKeyCipher", v) }
 
     /** 词典这一档整体开关：关掉之后长按那颗「词典」回到原来那句实话，不发请求 */
     var aiDict: Boolean
         get() = p.getBoolean("aiDict", true)
-        set(v) = p.edit().putBoolean("aiDict", v).apply()
+        set(v) = p.edit { putBoolean("aiDict", v) }
 
     /**
      * 语音合成（听书）这一档和词典**分开填**：它们通常不是一家（DeepSeek 没有语音口），
@@ -150,24 +150,24 @@ class ReaderPrefs(context: Context) {
      */
     var aiVoiceKind: String
         get() = p.getString("aiVoiceKind", "OpenAi") ?: "OpenAi"
-        set(v) = p.edit().putString("aiVoiceKind", v).apply()
+        set(v) = p.edit { putString("aiVoiceKind", v) }
 
     var aiVoiceBaseUrl: String
         get() = p.getString("aiVoiceBaseUrl", "") ?: ""
-        set(v) = p.edit().putString("aiVoiceBaseUrl", v.trim()).apply()
+        set(v) = p.edit { putString("aiVoiceBaseUrl", v.trim()) }
 
     var aiVoiceModel: String
         get() = p.getString("aiVoiceModel", "") ?: ""
-        set(v) = p.edit().putString("aiVoiceModel", v.trim()).apply()
+        set(v) = p.edit { putString("aiVoiceModel", v.trim()) }
 
     /** 音色：OpenAI 那档是 alloy / nova…，MiniMax 那档是 voice_id */
     var aiVoiceId: String
         get() = p.getString("aiVoiceId", "") ?: ""
-        set(v) = p.edit().putString("aiVoiceId", v.trim()).apply()
+        set(v) = p.edit { putString("aiVoiceId", v.trim()) }
 
     var aiVoiceKeyCipher: String
         get() = p.getString("aiVoiceKeyCipher", "") ?: ""
-        set(v) = p.edit().putString("aiVoiceKeyCipher", v).apply()
+        set(v) = p.edit { putString("aiVoiceKeyCipher", v) }
 
     /**
      * 他自己在设置页填的"这个模型能用的音色"那一列，逗号 / 空格 / 换行分隔，**按服务商各存一份**：
@@ -177,7 +177,7 @@ class ReaderPrefs(context: Context) {
     fun aiVoiceChoices(kind: String): String = p.getString("aiVoiceChoices.$kind", "") ?: ""
 
     fun setAiVoiceChoices(kind: String, v: String) {
-        p.edit().putString("aiVoiceChoices.$kind", v.trim()).apply()
+        p.edit { putString("aiVoiceChoices.$kind", v.trim()) }
     }
 
     /**
@@ -186,17 +186,25 @@ class ReaderPrefs(context: Context) {
      */
     var aiFixes: String
         get() = p.getString("aiFixes", "") ?: ""
-        set(v) = p.edit().putString("aiFixes", v).apply()
+        set(v) = p.edit { putString("aiFixes", v) }
 
-    /** 念完这一段自己接下一段。默认关：合成按字符计费，开着就是连着扣。 */
+    /**
+     * 连续播放：念完这一段自己接下一段。默认关：合成按字符计费，开着就是连着扣。
+     * **到本章最后一句就停** —— 跨不跨章是下面那颗「自动下一章」的事。
+     */
     var listenAutoNext: Boolean
         get() = p.getBoolean("listenAutoNext", false)
-        set(v) = p.edit().putBoolean("listenAutoNext", v).apply()
+        set(v) = p.edit { putBoolean("listenAutoNext", v) }
+
+    /** 本章念完接着念下一章（正文跟着翻过去）。只在「连续播放」开着时点得动。 */
+    var listenAutoNextChapter: Boolean
+        get() = p.getBoolean("listenAutoNextChapter", false)
+        set(v) = p.edit { putBoolean("listenAutoNextChapter", v) }
 
     /** 不抢音频焦点：别的音乐/播客继续响，两边混着放。 */
     var listenShareFocus: Boolean
         get() = p.getBoolean("listenShareFocus", false)
-        set(v) = p.edit().putBoolean("listenShareFocus", v).apply()
+        set(v) = p.edit { putBoolean("listenShareFocus", v) }
 
     /**
      * 听书是否走 AI：四项齐全才算。缺任何一项就退回系统语音引擎 ——
@@ -238,7 +246,7 @@ class ReaderPrefs(context: Context) {
     }
 
     fun savePosition(bookId: String, pos: BookPosition) {
-        p.edit().putString("pos.$bookId", "${pos.chapterIndex}|${pos.absoluteOffset}").apply()
+        p.edit { putString("pos.$bookId", "${pos.chapterIndex}|${pos.absoluteOffset}") }
     }
 
     fun loadPosition(bookId: String): BookPosition? {
@@ -254,7 +262,7 @@ class ReaderPrefs(context: Context) {
      * 一本没有字符偏移的书，位置只能是一页一页的号。
      */
     fun saveWholePage(bookId: String, page: Int) {
-        p.edit().putInt("page.$bookId", page.coerceAtLeast(0)).apply()
+        p.edit { putInt("page.$bookId", page.coerceAtLeast(0)) }
     }
 
     fun loadWholePage(bookId: String): Int = p.getInt("page.$bookId", 0)
@@ -269,12 +277,12 @@ class ReaderPrefs(context: Context) {
 
     fun addBookmark(bookId: String, pos: BookPosition) {
         val list = bookmarks(bookId).filter { it.absoluteOffset != pos.absoluteOffset } + pos
-        p.edit().putString("marks.$bookId", list.joinToString(";") { "${it.chapterIndex}|${it.absoluteOffset}" }).apply()
+        p.edit { putString("marks.$bookId", list.joinToString(";") { "${it.chapterIndex}|${it.absoluteOffset}" }) }
     }
 
     fun removeBookmark(bookId: String, pos: BookPosition) {
         val list = bookmarks(bookId).filter { it.absoluteOffset != pos.absoluteOffset }
-        p.edit().putString("marks.$bookId", list.joinToString(";") { "${it.chapterIndex}|${it.absoluteOffset}" }).apply()
+        p.edit { putString("marks.$bookId", list.joinToString(";") { "${it.chapterIndex}|${it.absoluteOffset}" }) }
     }
 
     /**
@@ -285,27 +293,76 @@ class ReaderPrefs(context: Context) {
 
     fun setRemoved(bookId: String, on: Boolean) {
         // 复活时把键摘掉而不是写个 false：架上每本都留一条 false 就是没人读的噪声
-        p.edit().apply { if (on) putBoolean("removed.$bookId", true) else remove("removed.$bookId") }.apply()
+        p.edit { if (on) putBoolean("removed.$bookId", true) else remove("removed.$bookId") }
     }
 
     /** 置顶：书架两种排法都排在前头（排序在界面那一层做，这里只存开关）。 */
     fun isPinned(bookId: String): Boolean = p.getBoolean("pin.$bookId", false)
 
     fun setPinned(bookId: String, on: Boolean) {
-        p.edit().putBoolean("pin.$bookId", on).apply()
+        p.edit { putBoolean("pin.$bookId", on) }
     }
 
     /**
      * 真删一本书时把它那串"按书存"的键一起摘掉：`pos. / marks. / page. / auto. / zoom. / fontscale. /
-     * pdfPage. / removed. / pin.` 都是 `<前缀>.<bookId>`，留着就是永远读不到的死字节
+     * pdfPage. / removed. / pin. / voiceCh.` 都是 `<前缀>.<bookId>`，留着就是永远读不到的死字节
      * （书架按目录列，这些键再没有任何一处会遍历）。
      */
     fun clearBook(bookId: String) {
         val suffix = ".$bookId"
         val doomed = p.all.keys.filter { it.endsWith(suffix) }
         if (doomed.isEmpty()) return
-        p.edit().apply { doomed.forEach { remove(it) } }.apply()
+        p.edit { doomed.forEach { remove(it) } }
     }
+
+    /**
+     * 已经**整章**缓存过的章号（写的是全集，不是增量）。
+     *
+     * **为什么要存盘**：这一份原来只是阅读页里的一个 `remember`，退出这本书再进来就空了 ——
+     * 音频明明还在本机，目录页右边却又变回「缓存」（他报的这条）。
+     *
+     * 值前面带**语音签名**（服务商 + 模型 + 音色）：换掉任何一项，之前存的那些音频就不是这一档的了
+     * （缓存键里本来就有这三样），整套标记当场作废，而不是继续写着「已缓存」骗人。
+     *
+     * 一个已知的偏乐观：音频落在 `cacheDir` 里，系统"清除缓存"能整片清掉，这个标记不会跟着掉。
+     * 偏乐观只让他少点一次预缓存 —— 真去听的那一段缺文件时照样会当场合成，不多掏一次钱；
+     * 反过来（标记掉了、文件还在）才是会让他把同一章缓存两遍的那一侧，所以那一侧修死了。
+     */
+    fun cachedChapters(bookId: String): Set<Int> {
+        val raw = p.getString("voiceCh.$bookId", "") ?: ""
+        val at = raw.indexOf(':')
+        if (at < 0 || raw.substring(0, at) != voiceSignature()) return emptySet()
+        return raw.substring(at + 1).split(',').mapNotNull { it.toIntOrNull() }.toSet()
+    }
+
+    fun setCachedChapters(bookId: String, indices: Set<Int>) {
+        p.edit {
+            if (indices.isEmpty()) remove("voiceCh.$bookId")
+            else putString("voiceCh.$bookId", "${voiceSignature()}:${indices.sorted().joinToString(",")}")
+        }
+    }
+
+    private fun voiceSignature() = "$aiVoiceKind/$aiVoiceModel/$aiVoiceId"
+
+    /**
+     * 听书页目录里那个「缓存范围」：0 = 不自动（默认 —— 合成按字符计费，不该有任何东西在你没按过的情况下掏钱），
+     * 5 / 15 / 50 = 从正在听这一章之后数几章，-1 = 全部章节。
+     */
+    var listenCacheScope: Int
+        get() = p.getInt("listenCacheScope", 0)
+        set(v) {
+            p.edit { putInt("listenCacheScope", v) }
+        }
+
+    /**
+     * 自动缓存那颗开关。**默认关**：开着它 = 每换一章就自己往后发一批合成请求，那是会一直扣钱的东西，
+     * 不该是任何人没点过的默认态。
+     */
+    var listenCacheAuto: Boolean
+        get() = p.getBoolean("listenCacheAuto", false)
+        set(v) {
+            p.edit { putBoolean("listenCacheAuto", v) }
+        }
 
     companion object {
         const val KEY_FONT = "fontSizeSp"

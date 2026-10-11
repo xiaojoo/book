@@ -5,6 +5,7 @@ import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.util.LruCache
+import androidx.core.graphics.createBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -62,7 +63,7 @@ class PdfDoc private constructor(
             cache.get(index)?.let { return@withLock it }
             val size = pageSizes[index]
             val h = (size.heightPx.toLong() * targetWidthPx / size.widthPx).coerceAtLeast(1L).toInt()
-            val bmp = Bitmap.createBitmap(targetWidthPx, h, Bitmap.Config.ARGB_8888)
+            val bmp = createBitmap(targetWidthPx, h, Bitmap.Config.ARGB_8888)
             val outcome = runCatching {
                 renderer.openPage(index).use { it.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) }
             }

@@ -1,12 +1,15 @@
 package com.bookreader
 
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.InteractionSource
@@ -52,6 +55,12 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 官方推荐的 edge-to-edge：两条系统栏透明，底色由各屏自己铺到栏后面（见 ApplySystemBars 的注释）。
+        // 两条都给全透明 —— 导航栏那一档默认带一层 scrim，会把我们铺好的页面底色盖灰
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+        )
         val library = BookLibrary(this)
         val prefs = ReaderPrefs(this)
         setContent {

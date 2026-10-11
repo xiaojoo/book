@@ -33,6 +33,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -42,7 +44,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -83,14 +84,13 @@ fun PdfReaderScreen(
     onBack: () -> Unit,
 ) {
     val density = LocalDensity.current
-    val screen = LocalConfiguration.current
     val view = LocalView.current
-    ApplySystemBars(Chrome.pageArgb, Chrome.pageArgb, darkIcons = !Chrome.night)
+    ApplySystemBars(darkIcons = !Chrome.night)
     BackHandler(onBack = onBack)
     SideEffect { view.keepScreenOn = prefs.keepScreenOn }
 
-    // 页宽 = 屏宽：pdf 是定版面的东西，缩到比屏宽还小只是把字糊掉
-    val widthPx = (screen.screenWidthDp * density.density).roundToInt()
+    // 页宽 = 正文宽：pdf 是定版面的东西，缩到比屏宽还小只是把字糊掉
+    val widthPx = contentSizePx().width
 
     var doc by remember { mutableStateOf<PdfDoc?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -143,13 +143,13 @@ private fun PdfBody(
     var chrome by remember { mutableStateOf(true) }
     val start = prefs.loadWholePage(bookId).coerceIn(0, doc.pageCount - 1)
     val listState = rememberLazyListState(start)
-    var current by remember { mutableStateOf(start) }
+    var current by remember { mutableIntStateOf(start) }
     // 抽屉自己报上来的高度，正文的底部留白跟着它走（写死一个数要么压字、要么空一大片）
-    var barHPx by remember { mutableStateOf(0) }
+    var barHPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     // 缩放是这一屏的双指手势状态，不落库：抽屉撤了就没有"复位"那颗按钮，存着一个 2.5 倍
     // 下次打开反而看不出为什么
-    var zoom by remember { mutableStateOf(1f) }
+    var zoom by remember { mutableFloatStateOf(1f) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(listState) {
@@ -195,10 +195,11 @@ private fun PdfBody(
     Box(
         Modifier
             .fillMaxSize()
-            // 整屏收进安全区：不收的话底下那条"第 N / M 页"会被系统导航条盖住 ——
-            // 导航条底色和页面底色同源（ApplySystemBars 涂的就是 Chrome.page），看着就像控件凭空没了
-            .safeDrawingPadding()
-            .background(Chrome.page),
+            // 顺序是"先铺满底色、再让开安全区"：edge-to-edge 之后系统栏是透明的，
+            // 栏背后那条就是这一句铺的 Chrome.page（反过来写底色只铺到安全区里，栏背后会露窗口背景）。
+            // 让开安全区本身不能省：底下那条"第 N / M 页"会被系统导航条盖住，看着就像控件凭空没了
+            .background(Chrome.page)
+            .safeDrawingPadding(),
     ) {
         var viewport by remember { mutableStateOf(IntSize.Zero) }
         LazyColumn(
@@ -276,13 +277,13 @@ private fun PdfBody(
 private fun PdfPageView(doc: PdfDoc, index: Int, zoom: Float, renderBucket: Int) {
     var shown by remember(index) { mutableStateOf<android.graphics.Bitmap?>(null) }
     val size = doc.pageSizes[index]
-    val screenDp = LocalConfiguration.current.screenWidthDp
+    val screenDp = with(LocalDensity.current) { contentSizePx().width.toDp() }
     LaunchedEffect(index, doc, renderBucket) { shown = doc.page(index) }
     // 缩放 >1 时这一页比屏宽，横向拖着看局部；竖向仍然走外面那个列表（两个方向不抢同一把手势）
     Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
         Box(
             Modifier
-                .width((screenDp * zoom).dp)
+                .width(screenDp * zoom)
                 .aspectRatio(size.widthPx.toFloat() / size.heightPx.toFloat())
                 // 还没渲出来的那一格也刷白：和 pdf 页面同色，滚动时不会闪出灰块
                 .background(Color.White),

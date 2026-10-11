@@ -22,13 +22,13 @@ fun PageView(
     pageStart: Long,
     style: PageStyle,
     theme: ReaderTheme,
+    modifier: Modifier = Modifier,
     typeface: Typeface? = null,
     selection: LongRange? = null,
     selectionColor: Int = 0,
     marks: List<LongRange> = emptyList(),
     markColor: Int = 0,
     styles: com.bookreader.core.model.StyleIndex = com.bookreader.core.model.StyleIndex.EMPTY,
-    modifier: Modifier = Modifier,
 ) {
     val textSizePx = style.fontSizePx
     val paint = readerPaint(theme, textSizePx, typeface)

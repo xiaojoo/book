@@ -28,7 +28,10 @@ object TraditionalText {
 
     private fun cached(): Cached {
         local.get()?.let { return it }
-        val t = runCatching { android.icu.text.Transliterator.getInstance(ID) }
+        // 这一句 SDK 判断写在调用点本地：`available` 那层它隔着两个函数，lint 跟不到，
+        // 于是按"没判版本"报 NewApi（Error，会掐掉 lint 这道关）。写在这里既是真兜底也过了关
+        val t = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) null
+        else runCatching { android.icu.text.Transliterator.getInstance(ID) }
             .onFailure { Log.w(TAG, "这台机没有 $ID：${it.message}") }
             .getOrNull()
         return Cached(t).also { local.set(it) }
