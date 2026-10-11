@@ -286,6 +286,34 @@ class ReaderPrefs(context: Context) {
     }
 
     /**
+     * 整页那一族（pdf / pptx）的书签：**只有页码**。
+     *
+     * 不复用 [bookmarks]：那一串存的是"第几章 + 第几个字"，而 pdf/pptx 走的是原版面渲染，
+     * 既没有章节也没有字符偏移 —— 把页码硬塞进 offset 字段，书签页上就会写出"第 0 章 第 5 字"这种假话。
+     * 存的也是 1 基的页号：它就是要显示出来的那个数，别再在每一处读它的地方各加一次 1。
+     */
+    fun pageBookmarks(bookId: String): List<Int> =
+        (p.getString("pageMarks.$bookId", "") ?: "").split(';')
+            .mapNotNull { it.trim().toIntOrNull() }.filter { it > 0 }.distinct().sorted()
+
+    fun addPageBookmark(bookId: String, page: Int) {
+        val on = page + 1
+        // distinct：同一页按两次「插入书签」不该在列表里出现两行"第 5 页"
+        val list = (pageBookmarks(bookId) + on).distinct().sorted()
+        p.edit { putString("pageMarks.$bookId", list.joinToString(";")) }
+    }
+
+    /**
+     * 删一条页码书签。参数和 [addPageBookmark] 一样是**查看器那一头的 0 基页号**（界面传进来的都是它），
+     * 存的才是 1 基：两边口径不一致就是"按了 ✕ 列表一动不动"——上一版减的是 0 基那个数，
+     * 而列表里全是 1 基，一条都减不掉。
+     */
+    fun removePageBookmark(bookId: String, page: Int) {
+        val list = pageBookmarks(bookId) - (page + 1)
+        p.edit { if (list.isEmpty()) remove("pageMarks.$bookId") else putString("pageMarks.$bookId", list.joinToString(";")) }
+    }
+
+    /**
      * 从书架上移除：只是这一本不再出现在列表里，本机那份正文 / 索引 / 书签 / 阅读位置一个字都不动 ——
      * 再导入同一个文件会重新出现（那是另一条新记录，旧记录还在这里，两边都不丢东西）。
      */

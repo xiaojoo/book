@@ -83,6 +83,7 @@ import com.bookreader.core.ingest.PptxShape
 import com.bookreader.core.ingest.PptxSlide
 import com.bookreader.core.ingest.PptxTable
 import com.bookreader.core.ingest.PptxText
+import com.bookreader.core.ingest.search
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.ReaderPrefs
 import kotlinx.coroutines.Dispatchers
@@ -180,6 +181,9 @@ private fun PptBody(
     onBack: () -> Unit,
 ) {
     var chrome by remember { mutableStateOf(true) }
+    // 抽屉里再往下开的一层（书签 / 缩略图 / 查找）
+    var sheet by remember { mutableStateOf(WholeSheet.None) }
+    var note by remember { mutableStateOf<String?>(null) }
     val pageCount = deck.slides.size
     val start = prefs.loadWholePage(bookId).coerceIn(0, pageCount - 1)
     val pager = rememberPagerState(start) { pageCount }
@@ -188,6 +192,13 @@ private fun PptBody(
     var zoom by remember { mutableFloatStateOf(1f) }
     var autoSeconds by remember { mutableIntStateOf(8) }
     var playing by remember { mutableStateOf(false) }
+    val (night, onNight) = rememberNightToggle(prefs)
+    val (rotate, onRotate) = rememberScreenRotate()
+    var marksTick by remember { mutableIntStateOf(0) }
+    val marks = remember(marksTick) { prefs.pageBookmarks(bookId) }
+    // 查找：整本 deck 都在内存里（版面模型早就读完了），所以打字的时候直接扫，不用后台线程
+    var query by remember { mutableStateOf("") }
+    val hits = remember(query) { deck.search(query, limit = 100) }
 
     LaunchedEffect(pager) {
         snapshotFlow { pager.currentPage }.collect { prefs.saveWholePage(bookId, it) }
@@ -213,6 +224,8 @@ private fun PptBody(
     fun surfaceTap(widthPx: Int, x: Float) {
         if (chrome) {
             chrome = false
+            sheet = WholeSheet.None
+            note = null
             return
         }
         when (ReaderGestures.zoneOf(widthPx, x)) {
@@ -220,6 +233,13 @@ private fun PptBody(
             TapZone.Next -> go(pager.currentPage + 1)
             TapZone.ToggleBars -> chrome = true
         }
+    }
+
+    // 返回键一层一层退：子面板 → 上下两条栏 → 退出这本 deck
+    BackHandler(enabled = sheet != WholeSheet.None) { sheet = WholeSheet.None }
+    BackHandler(enabled = sheet == WholeSheet.None && chrome) {
+        chrome = false
+        note = null
     }
 
     var viewport by remember { mutableStateOf(IntSize.Zero) }
@@ -238,7 +258,15 @@ private fun PptBody(
                 .pinchZoom { f -> zoom = (zoom * f).coerceIn(ZOOM_MIN, ZOOM_MAX) },
         )
 
-        if (chrome) {
+        if (sheet == WholeSheet.Thumbs) {
+            WholePageThumbs(
+                current = pager.currentPage,
+                pageCount = pageCount,
+                ratio = { deck.widthEmu.toFloat() / deck.heightEmu },
+                onClose = { sheet = WholeSheet.None },
+                onJump = { go(it) },
+            ) { i, cellW -> SlideCanvas(deck, deck.slides[i], cellW, images) }
+        } else if (chrome) {
             Column(Modifier.fillMaxSize()) {
                 Row(
                     modifier = Modifier
@@ -256,20 +284,79 @@ private fun PptBody(
                 }
                 Spacer(Modifier.weight(1f))
                 // 底栏就是这个抽屉本身：点屏幕中间把它放出来，不用再点页码弹一层
-                WholePageDrawer(
-                    current = pager.currentPage,
-                    pageCount = pageCount,
-                    onJump = { n -> go(n - 1) },
-                    onDismiss = { chrome = false },
-                    playing = playing,
-                    onPlayToggle = { playing = !playing },
-                    autoSeconds = autoSeconds,
-                    onAutoSeconds = {
-                        autoSeconds = it
-                        playing = true
-                    },
-                    onHeight = { },
-                )
+                when (sheet) {
+                    WholeSheet.Marks -> WholePageMarksPanel(
+                        pages = marks,
+                        pageCount = pageCount,
+                        current = pager.currentPage,
+                        note = note,
+                        ratio = { deck.widthEmu.toFloat() / deck.heightEmu },
+                        onJump = { go(it) },
+                        onDelete = {
+                            prefs.removePageBookmark(bookId, it)
+                            marksTick++
+                            // 删完最后一条就不留话：那一层自己会收掉，收掉之后还顶一句提示就是噪声
+                            note = if (prefs.pageBookmarks(bookId).isEmpty()) null else "第 ${it + 1} 页的书签已删掉"
+                        },
+                        onBack = { sheet = WholeSheet.None },
+                        onEmpty = {
+                            sheet = WholeSheet.None
+                            chrome = false
+                        },
+                        onHeight = { },
+                    ) { i, cellW -> SlideCanvas(deck, deck.slides[i], cellW, images) }
+
+                    WholeSheet.Search -> WholePageSearchPanel(
+                        query = query,
+                        onQuery = { query = it },
+                        hits = hits,
+                        onJump = { go(it) },
+                        onBack = { sheet = WholeSheet.None },
+                        onHeight = { },
+                    )
+
+                    else -> WholePageDrawer(
+                        current = pager.currentPage,
+                        pageCount = pageCount,
+                        onJump = { go(it) },
+                        markCount = marks.size,
+                        onAddMark = {
+                            note = if (marks.contains(pager.currentPage + 1)) {
+                                "第 ${pager.currentPage + 1} 页已经在书签里了"
+                            } else {
+                                prefs.addPageBookmark(bookId, pager.currentPage)
+                                marksTick++
+                                "第 ${pager.currentPage + 1} 页已存进书签"
+                            }
+                        },
+                        onShowMarks = { sheet = WholeSheet.Marks },
+                        onThumbnails = { sheet = WholeSheet.Thumbs },
+                        // pptx 查得了：版面模型里每个 run 的原文都在
+                        onSearch = { sheet = WholeSheet.Search },
+                        searchNote = null,
+                        tocNote = "幻灯片是一页一页，没有章节层级",
+                        note = note,
+                        plays = WholePagePlays(
+                            playing = playing,
+                            fromCurrent = { playing = true },
+                            fromFirst = {
+                                go(0)
+                                playing = true
+                            },
+                            onToggle = { playing = !playing },
+                            autoSeconds = autoSeconds,
+                            onAutoSeconds = {
+                                autoSeconds = it
+                                playing = true
+                            },
+                        ),
+                        night = night,
+                        onNight = onNight,
+                        rotate = rotate,
+                        onRotate = onRotate,
+                        onHeight = { },
+                    )
+                }
             }
         }
     }
@@ -304,18 +391,14 @@ private fun SlideView(
     images: PptxImages,
     zoom: Float,
 ) {
-    val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     // 整页缩放就是把"一屏宽 = 版面宽"这条等式改成"一屏宽 × zoom"，EMU→px 的比例跟着走，
     // 形状、图片、表格、文字全在同一个比例上
     val pageW = (widthPx * zoom).roundToInt().coerceAtLeast(1)
     val scale = pageW / deck.widthEmu.toFloat()
     val heightPx = (deck.heightEmu * scale).roundToInt()
-    val plans = remember(slide.index, pageW) { planSlide(slide, scale, measurer) }
     // 像素换算成 dp 必须过 density：直接把像素数当 dp 写进 size，在这台机上是 2.75 倍大，
     // 画布比屏宽出一截，整页版面就挤在左边一条里（真机上量过：表格那页挤成一列竖排字）
-    val pageWidth = with(density) { pageW.toDp() }
-    val pageHeight = with(density) { heightPx.toDp() }
     val hScroll = rememberScrollState()
     val vScroll = rememberScrollState()
     var viewport by remember { mutableStateOf(IntSize.Zero) }
@@ -342,14 +425,32 @@ private fun SlideView(
                 .requiredHeight(with(density) { max(heightPx, viewport.height).toDp() }),
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(Modifier.width(pageWidth).height(pageHeight).background(Color.White)) {
-                for (plan in plans) {
-                    when (plan) {
-                        is Plan.Text -> drawTextPlan(plan)
-                        is Plan.Picture -> images.get(plan.shape.entry)?.let { drawPicture(it, plan, scale) }
-                        is Plan.Table -> drawTablePlan(plan, scale)
-                    }
-                }
+            SlideCanvas(deck, slide, pageW, images)
+        }
+    }
+}
+
+/**
+ * 按给定像素宽把一版版面画出来。正文和「缩略图」那一屏共用这一份画法 ——
+ * 缩略图里不能带正文那两个滚动容器（滚动套滚动会把网格自己的滚动吃掉，而且格子根本滚不动）。
+ */
+@Composable
+internal fun SlideCanvas(deck: PptxDeck, slide: PptxSlide, widthPx: Int, images: PptxImages) {
+    val measurer = rememberTextMeasurer()
+    val scale = widthPx / deck.widthEmu.toFloat()
+    val heightPx = (deck.heightEmu * scale).roundToInt()
+    val plans = remember(slide.index, widthPx) { planSlide(slide, scale, measurer) }
+    Canvas(
+        Modifier
+            .width(with(LocalDensity.current) { widthPx.toDp() })
+            .height(with(LocalDensity.current) { heightPx.coerceAtLeast(1).toDp() })
+            .background(Color.White),
+    ) {
+        for (plan in plans) {
+            when (plan) {
+                is Plan.Text -> drawTextPlan(plan)
+                is Plan.Picture -> images.get(plan.shape.entry)?.let { drawPicture(it, plan, scale) }
+                is Plan.Table -> drawTablePlan(plan, scale)
             }
         }
     }
@@ -479,8 +580,8 @@ private fun DrawScope.drawTablePlan(plan: Plan.Table, scale: Float) {
     for (cell in plan.cells) drawText(cell.layout, topLeft = Offset(cell.x, cell.y))
 }
 
-/** 图片按条目名缓存解码结果：翻页来回滑时不该每次都重新解 png。 */
-private class PptxImages {
+/** 图片按条目名缓存解码结果：翻页来回滑时不该每次都重新解 png。书签页那一格小图也用这一份。 */
+internal class PptxImages {
     private var zip: ZipFile? = null
     private val cache = object : LruCache<String, Bitmap>(48 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount

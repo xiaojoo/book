@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「从首页」：两张叠着的页，前面那张里放三角。后面那张只画露出来的右上角。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M8,4.5h11.5a2,2 0 0,1 2,2V18" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineJoin="round"
+        android:pathData="M5,7.5h11.5a2,2 0 0,1 2,2v9a2,2 0 0,1 -2,2h-11.5a2,2 0 0,1 -2,-2v-9a2,2 0 0,1 2,-2z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.2,11.1l4.6,2.9l-4.6,2.9z" />
+</vector>

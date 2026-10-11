@@ -2,6 +2,7 @@ package com.bookreader.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -37,8 +39,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import java.io.File
@@ -49,17 +53,26 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bookreader.R
+import com.bookreader.core.model.BookMeta
+import com.bookreader.core.ingest.PptxDeck
+import com.bookreader.core.ingest.PptxDoc
 import com.bookreader.data.BookLibrary
+import com.bookreader.data.PdfDoc
 import com.bookreader.data.ReaderPrefs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 一套外壳底色（书架/精选/书签/我的）。夜间的墨色和强调色取自 `ReaderTheme.Night` 同一批值，
@@ -336,7 +349,62 @@ private class MarkRow(
     val chapterTitle: String,
     val offset: Long,
     val full: String,
+    /** 整页那一族（pdf / pptx）的书签：只有页码（1 基）。null = 正文那一族的字符书签。 */
+    val page: Int? = null,
 )
+
+/**
+ * 书签页给页码书签配图那一件事的临时渲染器。
+ *
+ * 整页那一族没有文字摘录可印 —— 那一页长什么样只能把原件渲出来，所以这一页会为"有书签的那几本"
+ * 各开一次原件（不是全部书：一本 1000 页的 pdf 光数版面比例就要几百毫秒，没书签就不该开）。
+ * 离开这一页就关掉：PdfRenderer 和 zip 都是要还的文件句柄。
+ */
+private class MarkArt(
+    val pdf: PdfDoc? = null,
+    val deck: PptxDeck? = null,
+    val images: PptxImages? = null,
+) {
+    /** 那一页的宽/高比例。书签指的页号越界时按第一页算，不让它去碰数组外面。 */
+    fun ratio(page: Int): Float = when {
+        pdf != null -> {
+            val s = pdf.pageSizes[(page - 1).coerceIn(0, pdf.pageCount - 1)]
+            s.widthPx.toFloat() / s.heightPx
+        }
+        deck != null -> deck.widthEmu.toFloat() / deck.heightEmu
+        else -> 0.75f
+    }
+
+    suspend fun bitmap(page: Int, widthPx: Int): android.graphics.Bitmap? =
+        pdf?.thumbnail((page - 1).coerceIn(0, pdf.pageCount - 1), widthPx)
+
+    fun close() {
+        pdf?.close()
+        images?.close()
+    }
+}
+
+/** 书签页那一格小图：pdf 拿位图，pptx 直接按版面画（和阅读页「缩略图」同一份画法，两处不会长得不一样）。 */
+@Composable
+private fun MarkThumb(art: MarkArt?, page: Int, widthPx: Int) {
+    Box(Modifier.fillMaxSize().background(Color.White)) {
+        val a = art ?: return@Box
+        if (a.pdf != null) {
+            var bmp by remember(a, page) { mutableStateOf<android.graphics.Bitmap?>(null) }
+            LaunchedEffect(a, page) { bmp = a.bitmap(page, widthPx * 2) }
+            val b = bmp ?: return@Box
+            Image(
+                bitmap = b.asImageBitmap(),
+                contentDescription = "第 $page 页",
+                contentScale = androidx.compose.ui.layout.ContentScale.FillWidth,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (a.deck != null && a.images != null) {
+            val i = (page - 1).coerceIn(0, a.deck.slides.lastIndex)
+            SlideCanvas(a.deck, a.deck.slides[i], widthPx, a.images)
+        }
+    }
+}
 
 /** 书签：跨书的标记列表。点一条 = 把那本书的位置设成它再打开。 */
 @Composable
@@ -345,10 +413,17 @@ fun MarksScreen(
     prefs: ReaderPrefs,
     onOpen: (String) -> Unit,
 ) {
-    val rows = remember {
+    // 删一条就 +1：prefs 不是可观察状态，不重算这一列的话删完那行还留在屏幕上
+    var tick by remember { mutableIntStateOf(0) }
+    val rows = remember(tick) {
         val out = ArrayList<MarkRow>()
         library.list().forEach { meta ->
             val marks = prefs.bookmarks(meta.id)
+            val pages = prefs.pageBookmarks(meta.id)
+            if (marks.isEmpty() && pages.isEmpty()) return@forEach
+            // 页码书签一条都不碰排版引擎：pdf/pptx 的原件里没有"第几章第几个字"这件事，
+            // 拿它去 open() 只会白读一遍文件
+            pages.forEach { out.add(MarkRow(meta.id, meta.title, "", 0L, "", it)) }
             if (marks.isEmpty()) return@forEach
             // 一本只开一次：章节名和预览都从这一次的随机读里拿
             runCatching {
@@ -377,12 +452,45 @@ fun MarksScreen(
         rows.distinctBy { it.bookId }.map { head -> head to rows.filter { it.bookId == head.bookId } }
     }
     var pick by remember { mutableIntStateOf(0) }
+    // 删到只剩更少书的时候，选中的那一格要跟着收住：不然 groups[pick] 会越界，整页崩在删完最后一条上
+    val at = pick.coerceIn(0, (groups.size - 1).coerceAtLeast(0))
+
+    // 页码书签那一格要配图，就得为"有页码书签的那几本"各开一次原件（后台开，开好一本亮一本）
+    val needArt = remember(rows) { rows.filter { it.page != null }.map { it.bookId }.distinct() }
+    val art = remember { mutableStateMapOf<String, MarkArt>() }
+    // 开过了但没开出来的那几本也要记一笔：不然那一格永远白着，看着像还在转
+    var artDone by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(needArt) {
+        needArt.forEach { id ->
+            if (art.containsKey(id) || id in artDone) return@forEach
+            val meta = library.list().firstOrNull { it.id == id } ?: return@forEach
+            val built = withContext(Dispatchers.IO) {
+                runCatching {
+                    when (meta.kind) {
+                        BookMeta.PDF -> library.pdfFile(id).takeIf { it.isFile }?.let { MarkArt(pdf = PdfDoc.open(it, 220)) }
+                        BookMeta.PPTX -> library.deckFile(id).takeIf { it.isFile }?.let { f ->
+                            PptxDoc().load(f)?.let { d -> MarkArt(deck = d, images = PptxImages().apply { open(f) }) }
+                        }
+                        else -> null
+                    }
+                }.getOrNull()
+            }
+            if (built != null) art[id] = built
+            artDone = artDone + id
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            art.values.forEach { it.close() }
+            art.clear()
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(Chrome.page)) {
         if (rows.isEmpty()) {
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("还没有书签", fontSize = 16.sp, color = Chrome.ink)
-                Text("读书时点底部「书签」就把当前这一行记下来", fontSize = 13.sp, color = Chrome.faint)
+                Text("读书时点底部「书签」；pdf / pptx 在抽屉里点「插入书签」", fontSize = 13.sp, color = Chrome.faint)
             }
         } else {
             // 顶行不再单独印书名（他点的就是这一格"这个不要了，tab 从这里开始"）：
@@ -399,7 +507,7 @@ fun MarksScreen(
                         WholeChip(
                             head.bookTitle,
                             modifier = Modifier.height(32.dp),
-                            selected = i == pick,
+                            selected = i == at,
                             // 10dp = 下面那叠书签卡片的圆角，同一页里两套圆角就是没对齐
                             radius = 10.dp,
                         ) { pick = i }
@@ -420,7 +528,7 @@ fun MarksScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        "${groups[pick].second.size} 条",
+                        "${groups[at].second.size} 条",
                         fontSize = 13.sp,
                         maxLines = 1,
                         textAlign = TextAlign.Center,
@@ -433,7 +541,68 @@ fun MarksScreen(
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 0.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(groups[pick].second, key = { "${it.bookId}-${it.offset}" }) { row ->
+                items(groups[at].second, key = { "${it.bookId}-${it.page ?: it.offset}" }) { row ->
+                    val page = row.page
+                    if (page != null) {
+                        // 整页那一族的一条书签就是一页号：没有正文摘录可印，所以那一格放**那一页本身**
+                        // —— 和阅读页抽屉里「缩略图」同一份画法（pdf 取位图、pptx 按版面画），两处不会长得不一样
+                        val a = art[row.bookId]
+                        val ratio = (a?.ratio(page) ?: 0.75f).coerceIn(0.3f, 3f)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Chrome.card)
+                                .tap {
+                                    prefs.saveWholePage(row.bookId, page - 1)
+                                    onOpen(row.bookId)
+                                }
+                                .padding(start = 8.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            var cellW by remember(row) { mutableIntStateOf(0) }
+                            Box(
+                                modifier = Modifier
+                                    .width(48.dp)
+                                    .aspectRatio(ratio)
+                                    .onSizeChanged { cellW = it.width }
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .border(1.dp, Chrome.hairline, RoundedCornerShape(6.dp)),
+                            ) {
+                                MarkThumb(a, page, cellW)
+                                if (a == null && row.bookId in artDone) {
+                                    // 开不出原件（原件被移走、或这一族我们渲不了）也要说一句，别留一格白让人以为还在转
+                                    Text(
+                                        "无预览",
+                                        fontSize = 10.sp,
+                                        color = Chrome.faint,
+                                        modifier = Modifier.align(Alignment.Center),
+                                    )
+                                }
+                            }
+                            Text(
+                                "第 $page 页",
+                                fontSize = 15.sp,
+                                color = Chrome.ink,
+                                modifier = Modifier.weight(1f).padding(start = 10.dp),
+                            )
+                            Box(
+                                modifier = Modifier.size(40.dp).tap {
+                                    prefs.removePageBookmark(row.bookId, page - 1)
+                                    tick++
+                                },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_close),
+                                    "删除",
+                                    tint = Chrome.faint,
+                                    modifier = Modifier.size(17.dp),
+                                )
+                            }
+                        }
+                        return@items
+                    }
                     var open by remember(row) { mutableStateOf(false) }
                     // 折起来确实被截掉一段才允许展开；两行放得下的，那颗箭头置灰
                     var overTwo by remember(row) { mutableStateOf(false) }
@@ -470,6 +639,24 @@ fun MarksScreen(
                                     modifier = Modifier
                                         .size(18.dp)
                                         .graphicsLayer { rotationZ = if (open) 180f else 0f },
+                                )
+                            }
+                            // 删除：这一页原来一条都删不掉（正文书签和页码书签都没有这颗），
+                            // 只能回阅读页里删 —— 现在两处都能删，口径和抽屉里那一层一样
+                            Box(
+                                modifier = Modifier.size(40.dp).tap {
+                                    prefs.bookmarks(row.bookId)
+                                        .firstOrNull { it.absoluteOffset == row.offset }
+                                        ?.let { prefs.removeBookmark(row.bookId, it) }
+                                    tick++
+                                },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_close),
+                                    "删除",
+                                    tint = Chrome.faint,
+                                    modifier = Modifier.size(17.dp),
                                 )
                             }
                         }
@@ -741,9 +928,12 @@ private fun prefsSummary(prefs: ReaderPrefs): String =
         if (prefs.paragraphIndent) "段首缩进" else "",
     ).filter { it.isNotEmpty() }.joinToString(" · ")
 
-/** 参考图里那颗红色开关：轨道 42x24dp，圆点 20dp，开了整条变红。 */
+/**
+ * 参考图里那颗红色开关：轨道 42x24dp，圆点 20dp，开了整条变红。
+ * 「我的」页和 pdf/pptx 抽屉里那两颗（夜间模式 / 旋转屏幕）共用这一份 —— 同一种东西两个形状就是没对齐。
+ */
 @Composable
-private fun RedSwitch(on: Boolean, onToggle: (Boolean) -> Unit) {
+internal fun RedSwitch(on: Boolean, onToggle: (Boolean) -> Unit) {
     Box(
         modifier = Modifier
             .size(width = 42.dp, height = 24.dp)

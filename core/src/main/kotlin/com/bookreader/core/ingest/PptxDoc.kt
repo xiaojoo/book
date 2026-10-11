@@ -36,6 +36,45 @@ data class PptxSlide(val index: Int, val shapes: List<PptxShape>)
 
 data class PptxDeck(val widthEmu: Int, val heightEmu: Int, val slides: List<PptxSlide>)
 
+/** 查找命中：`page` 是**放映顺序里的下标（0 基）**，和查看器翻页用的是同一个数。 */
+data class PptxHit(val page: Int, val line: String, val at: Int)
+
+/**
+ * 这一页上所有能读到的文字，一段一条。
+ *
+ * 表格单元也要算进来：命中只写在正文里、查表格里那几个字查不到，就是"查找"这颗功能是假的。
+ */
+fun PptxSlide.textLines(): List<String> = shapes.flatMap { shape ->
+    when (shape) {
+        is PptxText -> shape.paras.map { it.runs.joinToString("") { r -> r.text } }
+        is PptxTable -> shape.rows.flatMap { row -> row.flatMap { cell -> cell.map { p -> p.runs.joinToString("") { r -> r.text } } } }
+        is PptxPicture -> emptyList()
+    }
+}.filter { it.isNotBlank() }
+
+/**
+ * 全文查找：返回每个命中所在的页和那一行原文（`at` 是命中在这行里的下标，界面据此画高亮）。
+ *
+ * 只吃 pptx —— pdf 那一侧系统给的 `PdfRenderer` 没有任何取文字的口子（它只把页渲成位图），
+ * 所以抽屉里那颗「查找」在 pdf 上是灰的，并写明为什么，不摆一颗点了没结果的按钮。
+ */
+fun PptxDeck.search(query: String, limit: Int = 200): List<PptxHit> {
+    val q = query.trim()
+    if (q.isEmpty() || limit <= 0) return emptyList()
+    val out = ArrayList<PptxHit>()
+    slides.forEachIndexed { page, slide ->
+        for (line in slide.textLines()) {
+            var i = line.indexOf(q, ignoreCase = true)
+            while (i >= 0) {
+                if (out.size >= limit) return out
+                out += PptxHit(page, line, i)
+                i = line.indexOf(q, i + q.length, ignoreCase = true)
+            }
+        }
+    }
+    return out
+}
+
 /**
  * pptx 的模型层：把 zip 里的 OOXML 读成"每页一张版面"。
  *

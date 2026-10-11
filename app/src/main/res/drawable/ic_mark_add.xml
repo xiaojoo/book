@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「插入书签」：一枚书签 + 右上角一个加号。抽屉里那颗，参考图同款。
+     描边而不是实心：和同一排的「所有书签」「目录」一个线重，实心/描边混排会显得那三颗不是一族。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M4,4.5h9v15.5l-4.5,-3.3l-4.5,3.3z" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineCap="round"
+        android:pathData="M17,4.2v5.6M14.2,7h5.6" />
+</vector>

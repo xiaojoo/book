@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 一台横过来的手机 + 一个转角箭头：旋转屏幕这一档没有现成图标，自绘（平台那套 @android:drawable 的朝向改不动） -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.5,2.5h9a2,2 0 0,1 2,2v11a2,2 0 0,1 -2,2h-9a2,2 0 0,1 -2,-2v-11a2,2 0 0,1 2,-2zM7.5,4.5a0.5,0.5 0 0,0 -0.5,0.5v11a0.5,0.5 0 0,0 0.5,0.5h9a0.5,0.5 0 0,0 0.5,-0.5v-11a0.5,0.5 0 0,0 -0.5,-0.5z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,7.5a4.5,4.5 0 0,1 4.4,3.6l-1.5,0.3A3,3 0 0,0 12,9v1.8L8.6,8.4 12,5.4zM12,16.5a4.5,4.5 0 0,1 -4.4,-3.6l1.5,-0.3A3,3 0 0,0 12,15v-1.8l3.4,2.4L12,18.6z" />
+</vector>
