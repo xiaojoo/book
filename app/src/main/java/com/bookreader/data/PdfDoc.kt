@@ -56,6 +56,39 @@ class PdfDoc private constructor(
         override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
     }
 
+    /**
+     * 缩略图那一档的小位图，和正文那批**各一格缓存**：两者分辨率不同，混在同一格里，
+     * 打开缩略图页会把正在看的那一页挤成糊的（缓存按页号命中，不看分辨率）。
+     */
+    private val thumbs = object : LruCache<Int, Bitmap>(budget() / 4) {
+        override fun sizeOf(key: Int, value: Bitmap): Int = value.byteCount
+    }
+
+    /**
+     * 渲一张缩略图。宽度由界面按格子实际像素给，这里只钉上下限：
+     * 再小就是糊的，再大不是更清楚、只是把缓存吃满（一格 480px 宽在这台机上是 0.9MB）。
+     */
+    suspend fun thumbnail(index: Int, widthPx: Int): Bitmap? = withContext(Dispatchers.IO) {
+        lock.withLock {
+            if (index < 0 || index >= pageCount) return@withLock null
+            thumbs.get(index)?.let { return@withLock it }
+            val w = widthPx.coerceIn(96, 480)
+            val size = pageSizes[index]
+            val h = (size.heightPx.toLong() * w / size.widthPx).coerceAtLeast(1L).toInt()
+            val bmp = createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val outcome = runCatching {
+                renderer.openPage(index).use { it.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) }
+            }
+            if (outcome.isFailure) {
+                bmp.recycle()
+                Log.w(TAG, "pdf 第 $index 页缩略图渲染失败: ${outcome.exceptionOrNull()?.message}")
+                return@withLock null
+            }
+            thumbs.put(index, bmp)
+            bmp
+        }
+    }
+
     /** 渲染一页。越界或原件坏了返回 null，调用方留着占位，不崩。 */
     suspend fun page(index: Int): Bitmap? = withContext(Dispatchers.IO) {
         lock.withLock {
@@ -79,6 +112,7 @@ class PdfDoc private constructor(
 
     override fun close() {
         cache.evictAll()
+        thumbs.evictAll()
         runCatching { renderer.close() }
         runCatching { pfd.close() }
     }

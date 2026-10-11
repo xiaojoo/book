@@ -141,6 +141,10 @@ private fun PdfBody(
     onBack: () -> Unit,
 ) {
     var chrome by remember { mutableStateOf(true) }
+    // 抽屉里再往下开的一层（书签 / 缩略图）。None = 只开抽屉本身
+    var sheet by remember { mutableStateOf(WholeSheet.None) }
+    // 按完一颗之后回的那句话（「第 5 页已存进书签」）：点了没反应和没做是一颗功能
+    var note by remember { mutableStateOf<String?>(null) }
     val start = prefs.loadWholePage(bookId).coerceIn(0, doc.pageCount - 1)
     val listState = rememberLazyListState(start)
     var current by remember { mutableIntStateOf(start) }
@@ -150,6 +154,11 @@ private fun PdfBody(
     // 缩放是这一屏的双指手势状态，不落库：抽屉撤了就没有"复位"那颗按钮，存着一个 2.5 倍
     // 下次打开反而看不出为什么
     var zoom by remember { mutableFloatStateOf(1f) }
+    val (night, onNight) = rememberNightToggle(prefs)
+    val (rotate, onRotate) = rememberScreenRotate()
+    // 页码书签：prefs 不是可观察状态，按完自己 +1 一下让这一列重算
+    var marksTick by remember { mutableIntStateOf(0) }
+    val marks = remember(marksTick) { prefs.pageBookmarks(bookId) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(listState) {
@@ -166,8 +175,9 @@ private fun PdfBody(
     // 渲染宽度按 10% 一档取整再重开位图：拖滑轨每一帧都换分辨率的话，手指还没抬起来已经渲了几十轮。
     // 只渲到 2 倍为止 —— 一张 3 倍的 A4 位图是 3240x4583 = 59MB，会把按 maxMemory/4 的那格缓存
     // 挤得只装得下一页；2 倍时正文已经到 40px 上下，再往上就是摊大已有像素，不是多要细节。
-    val renderBucket = (zoom * 10f).roundToInt().coerceIn(10, 20)
-    LaunchedEffect(renderBucket) { doc.setRenderWidth((widthPx * renderBucket / 10f).roundToInt()) }
+    // 键是**像素宽**不是倍数：转屏时屏宽变了，只盯倍数的话那一页还是拿竖屏像素放大出来的糊图
+    val renderW = (widthPx * (zoom * 10f).roundToInt().coerceIn(10, 20) / 10f).roundToInt()
+    LaunchedEffect(renderW) { doc.setRenderWidth(renderW) }
 
     fun go(index: Int) = scope.launch {
         listState.animateScrollToItem(index.coerceIn(0, doc.pageCount - 1))
@@ -183,6 +193,8 @@ private fun PdfBody(
     fun surfaceTap(widthPx: Int, x: Float) {
         if (chrome) {
             chrome = false
+            sheet = WholeSheet.None
+            note = null
             return
         }
         when (ReaderGestures.zoneOf(widthPx, x)) {
@@ -190,6 +202,14 @@ private fun PdfBody(
             TapZone.Next -> go(current + 1)
             TapZone.ToggleBars -> chrome = true
         }
+    }
+
+    // 返回键一层一层退：抽屉里的子面板 → 上下两条栏 → 退出这本书。
+    // 后组合进来的那颗优先，所以这两颗都在顶栏那颗「返回」的下头
+    BackHandler(enabled = sheet != WholeSheet.None) { sheet = WholeSheet.None }
+    BackHandler(enabled = sheet == WholeSheet.None && chrome) {
+        chrome = false
+        note = null
     }
 
     Box(
@@ -223,11 +243,21 @@ private fun PdfBody(
             ),
             verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            items(doc.pageCount, key = { it }) { i -> PdfPageView(doc, i, zoom, renderBucket) }
+            items(doc.pageCount, key = { it }) { i -> PdfPageView(doc, i, zoom, renderW) }
         }
 
-        if (chrome) {
-            Column(Modifier.fillMaxSize()) {                Row(
+        if (sheet == WholeSheet.Thumbs) {
+            // 整屏覆盖：它有自己的顶栏和出口，不留一条"只能靠返回键出去"的路
+            WholePageThumbs(
+                current = current,
+                pageCount = doc.pageCount,
+                ratio = { i -> doc.pageSizes[i].widthPx.toFloat() / doc.pageSizes[i].heightPx },
+                onClose = { sheet = WholeSheet.None },
+                onJump = { go(it) },
+            ) { i, cellW -> PdfThumb(doc, i, cellW) }
+        } else if (chrome) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(Chrome.card)
@@ -255,30 +285,86 @@ private fun PdfBody(
                 }
                 Spacer(Modifier.weight(1f))
                 // 底栏就是这个抽屉本身：点屏幕中间把它放出来，不用再点页码弹一层
-                WholePageDrawer(
-                    current = current,
-                    pageCount = doc.pageCount,
-                    onJump = { n -> go(n - 1) },
-                    onDismiss = { chrome = false },
-                    playing = null,
-                    onPlayToggle = null,
-                    autoSeconds = null,
-                    onAutoSeconds = null,
-                    onHeight = { barHPx = it },
-                )
+                if (sheet == WholeSheet.Marks) {
+                    WholePageMarksPanel(
+                        pages = marks,
+                        pageCount = doc.pageCount,
+                        current = current,
+                        note = note,
+                        ratio = { i -> doc.pageSizes[i].widthPx.toFloat() / doc.pageSizes[i].heightPx },
+                        onJump = { go(it) },
+                        onDelete = {
+                            prefs.removePageBookmark(bookId, it)
+                            marksTick++
+                            // 删完最后一条就不留话：那一层自己会收掉，收掉之后还顶一句提示就是噪声
+                            note = if (prefs.pageBookmarks(bookId).isEmpty()) null else "第 ${it + 1} 页的书签已删掉"
+                        },
+                        onBack = { sheet = WholeSheet.None },
+                        onEmpty = {
+                            sheet = WholeSheet.None
+                            chrome = false
+                        },
+                        onHeight = { barHPx = it },
+                    ) { i, cellW -> PdfThumb(doc, i, cellW) }
+                } else {
+                    WholePageDrawer(
+                        current = current,
+                        pageCount = doc.pageCount,
+                        onJump = { go(it) },
+                        markCount = marks.size,
+                        onAddMark = {
+                            note = if (marks.contains(current + 1)) {
+                                "第 ${current + 1} 页已经在书签里了"
+                            } else {
+                                prefs.addPageBookmark(bookId, current)
+                                marksTick++
+                                "第 ${current + 1} 页已存进书签"
+                            }
+                        },
+                        onShowMarks = { sheet = WholeSheet.Marks },
+                        onThumbnails = { sheet = WholeSheet.Thumbs },
+                        // pdf 这一族查不了：PdfRenderer 只把页渲成位图，一个字都不给
+                        onSearch = null,
+                        searchNote = "PDF 取不到文字层",
+                        tocNote = "系统渲染器只给整页位图，读不到里面的章节",
+                        note = note,
+                        plays = null,
+                        night = night,
+                        onNight = onNight,
+                        rotate = rotate,
+                        onRotate = onRotate,
+                        onHeight = { barHPx = it },
+                    )
+                }
             }
         }
+    }
+}
+
+/** 缩略图格里的那一张：按格子的实际像素渲，渲完交给 Image 铺满那一格。 */
+@Composable
+private fun PdfThumb(doc: PdfDoc, index: Int, widthPx: Int) {
+    var shown by remember(index, widthPx) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(index, widthPx, doc) { shown = doc.thumbnail(index, widthPx) }
+    val bmp = shown
+    if (bmp != null) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = "第 ${index + 1} 页",
+            contentScale = androidx.compose.ui.layout.ContentScale.FillWidth,
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 
 /** 上一/下一页那两颗已经换成"点屏幕左右 1/3"，这里不再留一颗没人按的按钮。 */
 
 @Composable
-private fun PdfPageView(doc: PdfDoc, index: Int, zoom: Float, renderBucket: Int) {
+private fun PdfPageView(doc: PdfDoc, index: Int, zoom: Float, renderW: Int) {
     var shown by remember(index) { mutableStateOf<android.graphics.Bitmap?>(null) }
     val size = doc.pageSizes[index]
     val screenDp = with(LocalDensity.current) { contentSizePx().width.toDp() }
-    LaunchedEffect(index, doc, renderBucket) { shown = doc.page(index) }
+    LaunchedEffect(index, doc, renderW) { shown = doc.page(index) }
     // 缩放 >1 时这一页比屏宽，横向拖着看局部；竖向仍然走外面那个列表（两个方向不抢同一把手势）
     Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
         Box(

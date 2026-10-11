@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「从当前页」：一个方框里放三角（放映里"就这一页开始"的意思）。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.7"
+        android:strokeLineJoin="round"
+        android:pathData="M5.5,4h13a1.5,1.5 0 0,1 1.5,1.5v13a1.5,1.5 0 0,1 -1.5,1.5h-13a1.5,1.5 0 0,1 -1.5,-1.5v-13a1.5,1.5 0 0,1 1.5,-1.5z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9.6,8.4l6.2,3.6l-6.2,3.6z" />
+</vector>

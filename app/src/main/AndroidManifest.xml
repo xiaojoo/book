@@ -25,7 +25,12 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden">
+            <!-- configChanges：pdf/pptx 抽屉里那颗「旋转屏幕」要真的横过来而不丢现场。
+                 不声明的话转屏会重建 Activity，正在看的那一页、双指放大的倍数、抽屉开着哪一层
+                 全得靠存档恢复（pdf 还要重开一次 renderer）；声明了之后 Compose 只是拿到新的窗口尺寸，
+                 页码和缩放原地留着。 -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
