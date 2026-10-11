@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -103,7 +104,7 @@ fun AiSettingsScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
-    ApplySystemBars(Chrome.pageArgb, Chrome.pageArgb, !Chrome.night)
+    ApplySystemBars(darkIcons = !Chrome.night)
     BackHandler(onBack = onBack)
 
     /** @return 有没有存下去。地址填错时不写 prefs，也不让"试一下"带着错地址去发 */
@@ -255,7 +256,8 @@ fun AiSettingsScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Chrome.page)) {
+    // 底色先铺满整块窗口（含状态栏/导航栏背后），再让内容让开安全区 —— 顺序反了栏背后会露窗口背景
+    Box(Modifier.fillMaxSize().background(Chrome.page).safeDrawingPadding()) {
         Column(Modifier.fillMaxSize()) {
             Row(
                 modifier = Modifier.fillMaxWidth().height(48.dp).padding(start = 8.dp, end = 14.dp),

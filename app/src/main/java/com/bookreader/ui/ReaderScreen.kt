@@ -65,6 +65,8 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -88,7 +90,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -142,24 +143,23 @@ fun ReaderScreen(
     onBack: () -> Unit,
 ) {
     val density = LocalDensity.current
-    val screen = LocalConfiguration.current
     val view = LocalView.current
     val activity = view.context as? Activity
 
     var theme by remember { mutableStateOf(ReaderTheme.of(prefs.themeIndex)) }
-    var fontSizeSp by remember { mutableStateOf(prefs.fontSizeSp) }
-    var linePreset by remember { mutableStateOf(prefs.linePreset) }
-    var marginPreset by remember { mutableStateOf(prefs.marginPreset) }
+    var fontSizeSp by remember { mutableFloatStateOf(prefs.fontSizeSp) }
+    var linePreset by remember { mutableIntStateOf(prefs.linePreset) }
+    var marginPreset by remember { mutableIntStateOf(prefs.marginPreset) }
     var indent by remember { mutableStateOf(prefs.paragraphIndent) }
     var keepOn by remember { mutableStateOf(prefs.keepScreenOn) }
     var volumePaging by remember { mutableStateOf(prefs.volumePaging) }
     var bothSidesNext by remember { mutableStateOf(prefs.bothSidesNext) }
     var eyeCare by remember { mutableStateOf(prefs.eyeCare) }
-    var restMinutes by remember { mutableStateOf(prefs.restMinutes) }
+    var restMinutes by remember { mutableIntStateOf(prefs.restMinutes) }
     var autoRead by remember { mutableStateOf(prefs.autoRead) }
-    var autoSpeedPreset by remember { mutableStateOf(prefs.autoSpeedPreset) }
+    var autoSpeedPreset by remember { mutableIntStateOf(prefs.autoSpeedPreset) }
     var traditional by remember { mutableStateOf(prefs.convertTraditional) }
-    var brightness by remember { mutableStateOf(prefs.brightness) }
+    var brightness by remember { mutableFloatStateOf(prefs.brightness) }
     var turnMode by remember { mutableStateOf(TurnMode.values()[prefs.turnMode]) }
     var panel by remember { mutableStateOf(Panel.None) }
     /** 从目录/书签/搜索跳章时要让滚动缓冲重铺；单纯翻页不算跳。 */
@@ -191,15 +191,26 @@ fun ReaderScreen(
      * 语速。存在这一层而不是听书页里：收起那一屏时组合会被销毁，而播放器手里的速率还在 ——
      * 存在这里才不会"界面写 1.0x、耳朵听着 1.5x"。
      */
-    var listenRate by remember { mutableStateOf(1.0f) }
+    var listenRate by remember { mutableFloatStateOf(1.0f) }
     // 音色当前值：prefs 是 SharedPreferences，不是可观察状态，写完不重算的话界面上那颗勾还停在旧名字上
     var voiceNow by remember { mutableStateOf(prefs.aiVoiceId) }
     // 「更多」里那两颗开关：自动接下一段默认关（每多一段就多一次合成费），混播默认关（照旧抢焦点）
     var autoNext by remember { mutableStateOf(prefs.listenAutoNext) }
+    /** 连续播放念到本章最后一句之后，要不要接着翻到下一章。默认关 —— 开着它是"整本连着扣"。 */
+    var autoNextChapter by remember { mutableStateOf(prefs.listenAutoNextChapter) }
     var shareFocus by remember { mutableStateOf(prefs.listenShareFocus) }
     var historyPage by remember { mutableStateOf(false) }
     var fixesPage by remember { mutableStateOf(false) }
     var voiceHistory by remember { mutableStateOf<List<AiVoiceCache.Entry>>(emptyList()) }
+    // 目录那一页：整本的章 + 每章右边那颗「缓存」；范围那一档只是选范围，点「立即缓存」才发请求
+    var tocPage by remember { mutableStateOf(false) }
+    var tocScope by remember { mutableIntStateOf(prefs.listenCacheScope) }
+    var tocAuto by remember { mutableStateOf(prefs.listenCacheAuto) }
+    // 哪些章整章存过音频。**存盘**（`prefs.cachedChapters`）：原来这是一个纯内存的 remember，
+    // 退出这本书再进来就全空了 —— 音频明明还在本机，目录右边却又变回「缓存」（他报的这条）。
+    // 键上有 `voiceNow`：换了音色，之前那批音频就不是这一档的了（缓存键里就有音色），标记要跟着重读
+    var tocCached by remember(bookId, voiceNow) { mutableStateOf(prefs.cachedChapters(bookId)) }
+    val voiceBatch = remember { VoiceBatch() }
     var floatPos by remember { mutableStateOf(Offset.Zero) }
     /** 动作栏单独一个开关：以前它和"有没有选中"绑死，于是"留着高亮、收起按钮"做不到。 */
     var barUp by remember { mutableStateOf(false) }
@@ -221,10 +232,12 @@ fun ReaderScreen(
     var fontLabel by remember { mutableStateOf(prefs.fontLabel) }
     val typeface = remember(fontState.value) { DeviceFonts.typefaceOf(fontState.value) }
 
+    // 种子要在 remember 外面取：@Composable 不能在 remember 的算子里调
+    val seed = contentSizePx()
     val engine = remember(bookId) {
         val start = prefs.pageStyle(
-            widthPx = screen.screenWidthDp * density.density,
-            heightPx = screen.screenHeightDp * density.density,
+            widthPx = seed.width.toFloat(),
+            heightPx = seed.height.toFloat(),
             pxPerDp = density.density,
             fontScale = density.fontScale,
         )
@@ -257,7 +270,7 @@ fun ReaderScreen(
     }
 
     // 系统栏、常亮、亮度都归这管；亮度 -1 是"跟随系统"，要把窗口属性还原成默认
-    ApplySystemBars(theme.page, theme.page, darkIcons = !theme.night)
+    ApplySystemBars(darkIcons = !theme.night)
     SideEffect {
         view.keepScreenOn = keepOn
         val window = activity?.window ?: return@SideEffect
@@ -269,9 +282,10 @@ fun ReaderScreen(
     // 这三档一定要从本地状态读、不能读 prefs：Compose 只在本作用域读过的状态变化时才重算这个式子，
     // 而 prefs 不是状态。读 prefs 的话改了档位这里不动，就得退回书架重开才生效。
     val marginDp = ReaderPrefs.MARGIN_PRESETS[marginPreset]
+    val seedSize = contentSizePx()
     val style = prefs.pageStyle(
-        widthPx = if (viewport.width > 0) viewport.width.toFloat() else screen.screenWidthDp * density.density,
-        heightPx = if (viewport.height > 0) viewport.height.toFloat() else screen.screenHeightDp * density.density,
+        widthPx = if (viewport.width > 0) viewport.width.toFloat() else seedSize.width.toFloat(),
+        heightPx = if (viewport.height > 0) viewport.height.toFloat() else seedSize.height.toFloat(),
         pxPerDp = density.density,
         fontScale = density.fontScale,
         linePreset = linePreset,
@@ -421,19 +435,26 @@ fun ReaderScreen(
         if (host == null || !volumePaging) {
             onDispose { }
         } else {
-            // 音量键翻页时菜单/弹层先收起来：手在侧边按键，屏幕上还压着一层面板没意义
+            // 音量键只在**屏幕上没压着东西**的时候才翻页。原来反过来：抢了这一枪翻页，还顺手把
+            // 他正开着的菜单/抽屉关掉（他点名的就是这条 —— 菜单在的时候音量键该是系统的音量）
             host.volumeHook = { up ->
-                // 听书会话开着（在放、还是暂停都算）就不拦这一枪：他要的是音量，不是翻页。
-                // 原来判的是 aiPlaying，暂停的那几秒会漏 —— 漏了的表现就是"音量键还是打断了听书"
-                if (listening != null) {
-                    Log.d(TAG_PERF, "volume key $up -> 系统音量（听书会话开着）")
+                // 第一个命中的就是"当时压着的那一层"，写进日志才分得清是哪一颗挡的
+                val open = when {
+                    listening != null -> "听书会话"
+                    listenPage -> "听书页"
+                    tocPage -> "目录页"
+                    historyPage -> "缓存历史"
+                    fixesPage -> "多音字表"
+                    selection != null -> "选段动作栏"
+                    panel != Panel.None -> "抽屉$panel"
+                    bars -> "上下栏"
+                    restPrompt -> "休息提示"
+                    else -> null
+                }
+                if (open != null) {
+                    Log.d(TAG_PERF, "volume key $up -> 系统音量（压着$open）")
                     false
                 } else {
-                    if (panel != Panel.None) {
-                        panel = Panel.None
-                        panelNote = null
-                    }
-                    bars = false
                     Log.d(TAG_PERF, "volume key $up -> 翻页")
                     turn(!up)
                     true
@@ -501,6 +522,7 @@ fun ReaderScreen(
     BackHandler(enabled = true) {
         when {
             historyPage -> historyPage = false
+            tocPage -> tocPage = false
 
             fixesPage -> fixesPage = false
 
@@ -555,15 +577,25 @@ fun ReaderScreen(
      * 合成按字符计费，翻回去重听同一段不该再掏一次钱。要强制重合成只有听书页「更多 → 重新生成」。
      */
     fun speakParagraph(range: LongRange, force: Boolean = false) {
+        // 换段（听书页的上一段/下一段、历史重放、目录跳章、暂停中另选一段）：手里那段要**立刻**收。
+        // 不收到新音频就绪一直叠着念，而界面只有一个播放器状态，看着就是"念了两段、按钮还是暂停"
+        val switching = listening != null && listening != range
         val text = engine.book.cache.slice(range.first, (range.last - range.first + 1).toInt())
         // 多音字白名单只改"发给接口的那串字"：屏幕上高亮和回显的仍是原文。缓存键跟着它走，
         // 所以改了表之后同一段会重新合成一次 —— 那是应该的，旧音频本来就是错读法
         val spoken = AiSpeech.applyFixes(text, prefs.aiFixes)
+        // 整段没有可念的字（markdown 表格的 `|----|----|`、分隔线 `— — —`、光一个 `}`）：
+        // 发过去阿里就是回 400，白等一趟。就地回话，不发请求、不计费
+        if (!AiSpeech.speakable(spoken)) {
+            selectionNote = "这一段没有念得出来的字（全是符号），没发请求"
+            return
+        }
         aiVoice.rate = listenRate
         aiVoice.shareFocus = shareFocus
         listening = range
         listenBusy = true
         voice.stop()
+        if (switching) { aiVoice.stop(); aiPlaying = false }
         selection = range
         selectionNote = "正在合成…"
         scope.launch {
@@ -615,10 +647,25 @@ fun ReaderScreen(
                     // 合成这几秒里他又点了一次「听书」= 取消：不接着播，也不顶出浮窗
                     if (listening == range) {
                         val started = aiVoice.play(file) {
-                            // 「更多 → 自动读下一段」开着：自然放完就自己接下一段（每多一段多一次合成费，
+                            // 「更多 → 连续播放」开着：自然放完就自己接下一段（每多一段多一次合成费，
                             // 所以这颗默认关）。暂停后手动收的、和定时到点停的都不走这一条。
                             if (autoNext && listening == range) {
-                                engine.nextParagraph(range)?.let { speakParagraph(it); return@play }
+                                // 右界是**本章末尾**（他点名的"连续播放按章节结束"）：`nextParagraph`
+                                // 只按偏移走、不看章界，所以章界在这里自己夹
+                                val ch = engine.book.chapters.chapterAt(range.first)
+                                val nx = engine.nextParagraph(range)
+                                if (nx != null && nx.first < ch.endOffset) {
+                                    speakParagraph(nx); return@play
+                                }
+                                // 本章念完了：只有「自动下一章」也开着才跨过去。跨的时候正文要跟着翻 ——
+                                // 听的是下一章、屏幕上还停在上一章，回头点「上一段」就对不上
+                                if (autoNextChapter && ch.index + 1 < engine.chapterCount) {
+                                    val nc = engine.book.chapters[ch.index + 1]
+                                    page = engine.jumpToOffset(nc.startOffset)
+                                    jumpToken++
+                                    speakParagraph(engine.paragraphRange(nc.startOffset))
+                                    return@play
+                                }
                             }
                             // 念完自己收：高亮和浮窗一起退，不用他再点一下
                             listening = null
@@ -649,7 +696,7 @@ fun ReaderScreen(
     }
 
     /** 定时停止：到点自己收。0 = 没设。放在这一层而不是听书页里，收起那一屏也要继续倒计时。 */
-    var sleepEndsAt by remember { mutableStateOf(0L) }
+    var sleepEndsAt by remember { mutableLongStateOf(0L) }
     LaunchedEffect(sleepEndsAt) {
         while (sleepEndsAt > 0L) {
             val left = sleepEndsAt - System.currentTimeMillis()
@@ -659,6 +706,87 @@ fun ReaderScreen(
                 break
             }
             delay(1000)
+        }
+    }
+
+    /**
+     * 目录那一页的「缓存」：把这几章的每一段按**播放时同一套键**合成落盘，之后真听到那一段是命中缓存。
+     *
+     * 三条约束都是钱给的：① 只有点过才发请求（选范围不算）；② 已经存过的段一个请求都不发；
+     * ③ 出错就停下而不是跳过 —— 继续往下发只是把同一个错误重复按字计费。
+     * 取正文那几步留在主线程（`ChunkCache` 里面是无锁的 access-order LinkedHashMap，
+     * 换线程读就是和翻页/播放抢同一份表），慢的那一段（HTTP、写盘）才上 IO。
+     */
+    fun cacheChapters(indices: List<Int>) {
+        if (voiceBatch.running || indices.isEmpty()) return
+        voiceBatch.stop = false
+        voiceBatch.error = null
+        voiceBatch.running = true
+        voiceBatch.done = 0
+        voiceBatch.requests = 0
+        voiceBatch.chars = 0L
+        scope.launch {
+            val plain = withContext(Dispatchers.IO) { SecretStore.decrypt(prefs.aiVoiceKeyCipher) } ?: ""
+            val kind = runCatching { AiSpeech.Kind.valueOf(prefs.aiVoiceKind) }.getOrDefault(AiSpeech.Kind.OpenAi)
+            val voice = prefs.aiVoiceId
+            val finished = ArrayList<Int>()
+            for (ci in indices) {
+                if (voiceBatch.stop) break
+                val ch = engine.book.chapters[ci]
+                var r: LongRange? = engine.paragraphRange(ch.startOffset)
+                while (r != null && r.first < ch.endOffset && !voiceBatch.stop) {
+                    val range = r
+                    val text = engine.book.cache.slice(range.first, (range.last - range.first + 1).toInt())
+                    val spoken = AiSpeech.applyFixes(text, prefs.aiFixes)
+                    // 一个可念的字都没有（markdown 表格的 `|----|----|`、只有星号的分割线）：直接跳过。
+                    // 原来这里只判 isNotBlank，而竖线和连字符不是空白 —— 发过去阿里回 400
+                    // "Please ensure input text is valid"，批量缓存把这一格当成失败，整个第一章停在第 13 段
+                    if (AiSpeech.speakable(spoken)) {
+                        val f = AiVoiceCache.fileFor(context, kind, prefs.aiVoiceModel, voice, spoken)
+                        val haveIt = withContext(Dispatchers.IO) { f.length() > 0L }
+                        if (haveIt) {
+                            withContext(Dispatchers.IO) { AiVoiceCache.heal(f) }
+                        } else {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    f.writeBytes(AiSpeech.wavSizesFixed(AiVoiceClient.synthesize(
+                                        prefs.aiVoiceBaseUrl, plain, kind, prefs.aiVoiceModel, voice, spoken,
+                                    )))
+                                    AiVoiceCache.remember(context, f, bookId, range.first, text.length)
+                                }
+                                voiceBatch.requests++
+                                voiceBatch.chars += text.length
+                            } catch (e: Exception) {
+                                // 点名是哪一段（偏移 + 这段的字数）：只写"第 N 章有一没存上"没法对着目录那页查
+                                voiceBatch.error = "第 ${ci + 1} 章 第 ${range.first} 字那段（${text.length} 字）没存上：" +
+                                    "${e.message ?: e.javaClass.simpleName}，已停下"
+                            }
+                        }
+                    }
+                    voiceBatch.done++
+                    if (voiceBatch.error != null) break
+                    r = engine.nextParagraph(range)
+                }
+                if (voiceBatch.error != null) break
+                finished.add(ci)
+            }
+            // 整章跑完才标"已缓存"：还差一段就不能装作这一章随时能听。存盘 —— 不存的话退出这本书
+            // 再进来，标记全空、目录右边又变回「缓存」，看着像那一章白缓存了（他报的这条）
+            tocCached = tocCached + finished.toSet()
+            prefs.setCachedChapters(bookId, tocCached)
+            voiceHistory = AiVoiceCache.history(context).filter { it.bookId == bookId }
+            voiceBatch.running = false
+        }
+    }
+
+    // 自动缓存开着：在听的前提下换到新的一章，就按那一档自己往后缓存（他点的"不用额外点立即缓存"）。
+    // 只认"这一章跑过一次"：同一章里每段都在推进 listening，不记这一笔就会每段重发一遍
+    var lastAutoChapter by remember { mutableIntStateOf(-1) }
+    LaunchedEffect(listening, tocAuto, tocScope) {
+        val ci = engine.currentChapterIndex
+        if (tocAuto && tocScope != 0 && listening != null && ci != lastAutoChapter && !voiceBatch.running) {
+            lastAutoChapter = ci
+            cacheChapters(cacheRange(tocScope, ci, engine.chapterCount))
         }
     }
 
@@ -815,8 +943,10 @@ fun ReaderScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     selectionNote?.let {
-                        // AI 在路上时给一个转圈的指示：这句回话要等一两秒，没有它看起来像没响应
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // AI 在路上时给一个转圈的指示：这句回话要等一两秒，没有它看起来像没响应。
+                        // 那 6dp 的下方留白原来挂在文字身上 —— 那样这一行居中时，对的是"字 + 6dp"那个盒子，
+                        // 圈就比字的墨中心低 3dp（真机截图里就是它压到下面那行字）。挪到行上，两个中心才同一个
+                        Row(Modifier.padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (listenBusy || dictBusy) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(12.dp),
@@ -826,7 +956,7 @@ fun ReaderScreen(
                                 Spacer(Modifier.size(6.dp))
                             }
                             // 不用强调色（红）：这一行是"发生了什么"的回话，不是要他注意的危险提示
-                            Text(it, fontSize = 12.sp, color = theme.faintColor, modifier = Modifier.padding(bottom = 6.dp))
+                            Text(it, fontSize = 12.sp, color = theme.faintColor)
                         }
                     }
                     if (!barAbove) SelectionArrow(theme.barColor, down = false)
@@ -854,8 +984,10 @@ fun ReaderScreen(
                                 SelectionAction.Listen -> {
                                     val text = engine.book.cache.slice(range.first, (range.last - range.first + 1).toInt())
                                     if (prefs.aiVoiceReady) {
-                                        // 再点一次 = 停：合成要花钱，不能让人靠"等它念完"来取消
-                                        if (listening != null) stopListening() else speakParagraph(range)
+                                        // 再点**同一段** = 停：合成要花钱，不能让人靠"等它念完"来取消。
+                                        // 点**另一段** = 换过去播：暂停中重新选一段再点听书，原来这里只看
+                                        // "有没有会话"，于是把旧的关掉之后新的根本不发声（他报的这条）
+                                        if (listening == range) stopListening() else speakParagraph(range)
                                     } else when {
                                         voice.speak(text) -> selectionNote = "系统语音朗读这一段"
                                         voice.state == 0 -> selectionNote = "语音引擎正在启动，再点一次听书"
@@ -989,6 +1121,7 @@ fun ReaderScreen(
                             ),
                         ),
                         autoNext = autoNext,
+                        autoNextChapter = autoNextChapter,
                         shareFocus = shareFocus,
                         onVoice = { v ->
                             prefs.aiVoiceId = v
@@ -997,6 +1130,10 @@ fun ReaderScreen(
                         onAutoNext = { v ->
                             autoNext = v
                             prefs.listenAutoNext = v
+                        },
+                        onAutoNextChapter = { v ->
+                            autoNextChapter = v
+                            prefs.listenAutoNextChapter = v
                         },
                         onShareFocus = { v ->
                             shareFocus = v
@@ -1009,6 +1146,7 @@ fun ReaderScreen(
                             historyPage = true
                         },
                         onFixes = { fixesPage = true },
+                        onToc = { tocPage = true },
                         onPaper = { picked ->
                             // 和快捷面板那排色块同一个主人：改的就是 themeIndex，回阅读页也是这一档
                             theme = picked
@@ -1045,6 +1183,44 @@ fun ReaderScreen(
                     )
                 }
 
+                if (tocPage) {
+                    ListenTocPage(
+                        theme = theme,
+                        chapters = engine.book.chapters.chapters,
+                        current = engine.currentChapterIndex,
+                        cached = tocCached,
+                        batch = voiceBatch,
+                        scope = tocScope,
+                        auto = tocAuto,
+                        onScope = {
+                            tocScope = it
+                            prefs.listenCacheScope = it
+                        },
+                        onAuto = { v ->
+                            tocAuto = v
+                            prefs.listenCacheAuto = v
+                            // 开关拨到开：这一档当场就跑起来，不用再点「立即缓存」
+                            if (v && tocScope != 0) {
+                                lastAutoChapter = engine.currentChapterIndex
+                                cacheChapters(cacheRange(tocScope, engine.currentChapterIndex, engine.chapterCount))
+                            }
+                        },
+                        onBack = { tocPage = false },
+                        onPick = { ci ->
+                            // 跳章 = 落到那一章的第一个字，然后从那里开始听（这一段该花钱由你点这一行决定）
+                            val r = engine.paragraphRange(engine.book.chapters[ci].startOffset)
+                            tocPage = false
+                            listenPage = true
+                            page = engine.jumpToOffset(r.first)
+                            jumpToken++
+                            speakParagraph(r)
+                        },
+                        onCacheChapter = { ci -> cacheChapters(listOf(ci)) },
+                        onCacheRange = { list -> cacheChapters(list) },
+                        onBatchStop = { voiceBatch.stop = true },
+                    )
+                }
+
                 if (eyeCare) {
                     Box(Modifier.fillMaxSize().background(Color(0x26FF9A3C)))
                 }
@@ -1052,7 +1228,7 @@ fun ReaderScreen(
 
             // 顶/底栏画在听书页**之后**（同一层 Box 的后面），所以听书页开着时它俩会压在人家上面 ——
             // 收起听书页也不该顺手把菜单叫出来：`bars` 保持原值，只是这一会儿不画
-            if (bars && !listenPage && !historyPage && !fixesPage) {
+            if (bars && !listenPage && !historyPage && !fixesPage && !tocPage) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -1899,7 +2075,7 @@ private fun TurnLayer(
     marks: List<LongRange>,
     markColor: Int,
     styles: com.bookreader.core.model.StyleIndex,
-    move: Modifier,
+    modifier: Modifier,
 ) {
     PageView(
         page = page,
@@ -1917,7 +2093,7 @@ private fun TurnLayer(
         styles = styles,
         modifier = Modifier
             .fillMaxSize()
-            .then(move)
+            .then(modifier)
             .padding(start = marginDp.dp, end = marginDp.dp, top = slackDp),
     )
 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -80,7 +81,7 @@ private val SLEEP_MINUTES = listOf(0, 10, 20, 30, 60)
  *
  * **那几颗都做了实**：定时（到点自己停，倒计时活在这一屏之外，收起也继续走）、
  * 语速（`playbackParams` 本地变速 —— 音频已经在手里，不重新合成、不再花一次钱）、
- * 原文（图标，点它收起这一屏并把正文翻到正在念的那一段）、更多（自动读下一段 / 允许其他应用一起播 /
+ * 原文（图标，点它收起这一屏并把正文翻到正在念的那一段）、更多（连续播放 / 自动下一章 / 允许其他应用一起播 /
  * 挑音色 / 换背景 / 缓存历史 / 听书纠错 / 重新生成 —— 这一层没有标题也没有右上角的叉，点外面就收）。
  * 音色这一列来自设置页「可选音色」那一格（[voices]）：不在那一列里的音色这里选不到。
  * 没做实的是**目录**（你说先静态 —— 图标和字都在，点下去只回一句实话，不假装能跳章）
@@ -103,6 +104,7 @@ fun ListenScreen(
     voiceId: String,
     voices: List<String>,
     autoNext: Boolean,
+    autoNextChapter: Boolean,
     shareFocus: Boolean,
     onCollapse: () -> Unit,
     onToggle: () -> Unit,
@@ -116,12 +118,14 @@ fun ListenScreen(
     onVoice: (String) -> Unit,
     onPaper: (ReaderTheme) -> Unit,
     onAutoNext: (Boolean) -> Unit,
+    onAutoNextChapter: (Boolean) -> Unit,
     onShareFocus: (Boolean) -> Unit,
     onHistory: () -> Unit,
     onFixes: () -> Unit,
+    onToc: () -> Unit,
 ) {
     // 那两条留着，但底色必须和这一屏同一个色（不涂的话回到阅读页那一侧，它们是平台灰）
-    ApplySystemBars(theme.pageColor.toArgb(), theme.pageColor.toArgb(), !theme.night)
+    ApplySystemBars(darkIcons = !theme.night)
 
     // 进度靠轮询：MediaPlayer 没有可观察状态
     var pos by remember { mutableIntStateOf(0) }
@@ -152,19 +156,67 @@ fun ListenScreen(
     // 排版结果放在普通数组里而不是 State：它只被下面这个 effect 读，挂成可观察状态会在每次排版时
     // 多推一轮组合，而 onTextLayout 本身就是在排版过程里回调的
     val laidOut = remember { arrayOfNulls<TextLayoutResult>(1) }
+    // 排版结果到了要能"叫醒"下面那个 effect：effect 是在第一次布局**之前**跑的，那时
+    // laidOut[0] 还是 null 就直接 return —— 如果这一段之后句序再也不变（比如从半路打开听书页、
+    // 或者整段只有两句而播放已经过了中点），就再也没有下一次触发，那一段就永远不滚了。
+    // 真机抓到：pos 15751→19544（共 20480）、可滚 169、滚到一直是 0。
+    // 只在高度真的变了才 +1：不写高度判断的话每次布局都推一轮组合，白耗
+    var laidOutTick by remember { mutableIntStateOf(0) }
+    var lastH by remember { mutableIntStateOf(-1) }
     // 只在**换句**那一刻动一次，不跟着 250ms 的进度轮询重发：
     // 跟着轮询的话他自己用手指拨那两行，会被下一枪的 scrollTo 顶回去，看着就是"字排突然变了一下"
-    LaunchedEffect(idx, paragraph, taller) {
-        val l = laidOut[0] ?: return@LaunchedEffect   // 第一次组合还没量出来，换句时就有了
+    val laidOutTick0 = laidOutTick
+    // 每次滚动 = 一个行高。目标和触发键都按"正在念的那一行"算：行顶之间的差正好是一个行高
+    // （正文 lineHeight 25.sp、窗口 25.sp×2 = 两行），所以一步一行，不会出现半行的挪动。
+    // 正在念的那个字：有句末标点取句首；整段一句话说到底的（真机抓到的是 句 0/1 这种）按进度×段长折算。
+    // 原来这一条用的是 maxValue×进度 —— 可滚 113px 折成 6 档、每档挪 18px，不到半个行高，
+    // 就是他报的"滚动的高度小了"
+    val readingAt = if (starts.size > 1) starts[idx]
+    else (paragraph.length * frac).toInt().coerceIn(0, (paragraph.length - 1).coerceAtLeast(0))
+    // 键取行号而不是句序：同一行里换句根本不该动（动了就是把他手指那两行顶回去），行变了才动一次
+    val step = laidOut[0]?.getLineForOffset(readingAt) ?: 0
+    LaunchedEffect(step, paragraph, taller, laidOutTick0) {
+        val l = laidOut[0] ?: return@LaunchedEffect   // 第一次组合还没量出来，布局那一枪会再来一次
         if (!taller) return@LaunchedEffect            // 装不满窗口的段靠"切掉已读"表现进度，不滚
-        // 把正在念的那一句顶到窗口上沿。animateScrollTo 自己会夹进 0..maxValue，
-        // 末句的行顶落在窗口下沿之外时不用在这里补边界
-        winScroll.animateScrollTo(
-            if (starts.size > 1) l.getLineTop(l.getLineForOffset(starts[idx])).roundToInt()
-            // 整段一个句末标点都没有：退回按字符比例滚
-            else (winScroll.maxValue * frac).roundToInt(),
-            animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+        // 把正在念的那一行顶到窗口上沿。animateScrollTo 自己会夹进 0..maxValue，
+        // 末几行的行顶落在窗口下沿之外时不用在这里补边界
+        val target = l.getLineTop(l.getLineForOffset(readingAt)).roundToInt()
+        // 他手指还按着 / 惯性还在甩的时候不抢：等到停下来再补这一次（最多等 4 秒，之后放弃这一枪）。
+        // 注意不能把"正在拖"当成 effect 的键 —— `isScrollInProgress` 在**我们自己**那段 420ms 动画
+        // 期间也是 true，拿它当键会自己把自己重启掉，动画被取消、滚到一直是 0（真机日志抓到的就是这条）
+        var waited = 0
+        while (winScroll.isScrollInProgress && waited < 40) {
+            delay(100)
+            waited++
+        }
+        if (waited >= 40) return@LaunchedEffect
+        val from = winScroll.value
+        winScroll.animateScrollTo(target, animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing))
+        android.util.Log.d(
+            "ListenScroll",
+            "滚：行 $step/${l.lineCount} 起于 $from 到达 ${winScroll.value} 位移 ${winScroll.value - from} " +
+                "行高=${(l.getLineTop(1) - l.getLineTop(0)).roundToInt()}px 可滚=${winScroll.maxValue} pos=$pos dur=$dur",
         )
+    }
+    // 心跳：每 2 秒把这一屏"该不该滚"的全部输入吐一遍。上面那条只在真的滚了的时候才打，
+    // 而"没滚"恰恰是什么都不打 —— 分不清是句序没推进、还是这段没超过两行、还是时长读成 0
+    LaunchedEffect(paragraph) {
+        while (true) {
+            // 句序在这里现算：闭包里抓到的 idx 是"这一轮启动那一刻"的旧值，上次就是被它骗过一次
+            val f = if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f
+            val live = (starts.size * f).toInt().coerceIn(0, (starts.size - 1).coerceAtLeast(0))
+            // 正在念的那一行也现算：滚动单位已经从"句"换成"行"，心跳里得能看到同一把尺子
+            val ll = laidOut[0]
+            val off = if (starts.size > 1) starts[live] else (paragraph.length * f).toInt().coerceIn(0, (paragraph.length - 1).coerceAtLeast(0))
+            android.util.Log.d(
+                "ListenScroll",
+                "句 $live/${starts.size} 行 ${ll?.getLineForOffset(off)}/${ll?.lineCount} " +
+                    "taller=$taller 文高=${laidOut[0]?.size?.height} 窗口=${winPx.toInt()} " +
+                    "滚到=${winScroll.value} 可滚=${winScroll.maxValue} pos=$pos dur=$dur " +
+                    "拖=${winScroll.isScrollInProgress} 段长=${paragraph.length}",
+            )
+            delay(2000)
+        }
     }
     val shown = if (taller) paragraph else paragraph.substring(starts[idx])
 
@@ -189,12 +241,15 @@ fun ListenScreen(
                     )
                 }
                 Spacer(Modifier.weight(1f))
-                Box(modifier = Modifier.size(40.dp).tap(onStop), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(40.dp).tap(onStop), contentAlignment = Alignment.CenterEnd) {
                     Icon(
                         painter = painterResource(R.drawable.ic_close),
                         contentDescription = "停止听书",
                         tint = theme.faintColor,
-                        modifier = Modifier.size(18.dp),
+                        // 左边那颗 ˅ 的墨左沿是贴着内容左线的（间隙 0），这颗要一样：
+                        // ic_close 的墨在 24 格视口的 5.1..18.9（描边 1.8 + 圆头），18dp 下右沿白让
+                        // 18×(24−18.9)/24 = 3.8dp。贴右沿摆框再补这一笔，右边间隙才是 0
+                        modifier = Modifier.size(18.dp).offset(x = 3.8.dp),
                     )
                 }
             }
@@ -260,6 +315,10 @@ fun ListenScreen(
                             // 只在"比两行高"这件事变了的时候写状态：每帧无脑写会把排版再推一轮
                             val t = it.size.height > winPx + 0.5f
                             if (t != taller) taller = t
+                            if (it.size.height != lastH) {
+                                lastH = it.size.height
+                                laidOutTick++
+                            }
                         },
                     )
                 }
@@ -269,13 +328,16 @@ fun ListenScreen(
                         .size(40.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .tap(onOriginal),
-                    contentAlignment = Alignment.Center,
+                    // 这颗要和下面那行「目录」的图标右沿同一条线（命中框还是 40dp，只挪墨）：
+                    // 目录那颗 = 行右 − 6dp 内衬(16.5px) − ic_reader_toc 的墨右余量 7.6px = 行右 − 24.1px；
+                    // 这颗贴右沿摆 = 行右 − ic_original 的墨右余量 10.1px ⇒ 再往左补 5.1dp 才对上
+                    contentAlignment = Alignment.CenterEnd,
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_original),
                         contentDescription = "原文",
                         tint = theme.faintColor,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(22.dp).offset(x = (-5.1).dp),
                     )
                 }
             }
@@ -298,10 +360,8 @@ fun ListenScreen(
                     moreOpen = !moreOpen
                 }
                 Spacer(Modifier.weight(1f))
-                // 目录：他说先静态 —— 图标和字都在，点下去只回一句实话
-                LabelledIcon(theme, R.drawable.ic_reader_toc, "目录", null) {
-                    note = "目录还没接进这一屏：要跳章先点「原文」回正文"
-                }
+                // 目录：这一颗现在真的进那一页（整本的章 + 每章右边那颗「缓存」）
+                LabelledIcon(theme, R.drawable.ic_reader_toc, "目录", null) { onToc() }
             }
 
             Spacer(Modifier.height(26.dp))
@@ -352,7 +412,10 @@ fun ListenScreen(
             // 他点的：这一屏不要"提示操作"的那行字。原来那句"上一段 / 下一段会重新合成，按字符计费"
             // 是常驻说明书，删掉；但这一格的高度要留着，不然有回话时下面整块会跳一下
             Spacer(Modifier.height(14.dp))
-            val line = if (busy) "正在合成这一段…" else note
+            // 合成中这一格不再写字：中间那颗转圈已经说了同一件事，两行字配一个圈就是重复（他点的
+            // "底部那行红色小字不要了，只保留转圈动画"）。但**回话要留** —— 错误和"这一段没有念得出来的字"
+            // 只有这一格会说，藏掉就只剩一个圈在转，出了错没人知道为什么
+            val line = if (busy) null else note
             if (line != null) {
                 Text(
                     line,
@@ -404,7 +467,18 @@ fun ListenScreen(
         if (moreOpen) {
             // 他点的：这一层不要标题、不要右上角那颗 X（点抽屉外面、或点任意一行都收得回去）
             Sheet(theme.barColor, theme.inkColor, theme.faintColor, title = null, onDismiss = { moreOpen = false }) {
-                SwitchRow(theme, "自动读下一段", "念完自己接下一段 —— 每多一段就多一次合成费", autoNext) { onAutoNext(it) }
+                SwitchRow(
+                    theme, "连续播放",
+                    "一直往下播，念到本章最后一句自己停 —— 每多一段就多一次合成费",
+                    autoNext, true,
+                ) { onAutoNext(it) }
+                // 这一颗是上面那颗的延伸：连续播放关着就没有"念完"这一刻，跨章无从谈起 —— 灰着但不藏
+                SwitchRow(
+                    theme, "自动下一章",
+                    if (autoNext) "本章念完接着念下一章，正文跟着翻过去"
+                    else "要先开「连续播放」",
+                    autoNextChapter, autoNext,
+                ) { onAutoNextChapter(it) }
                 SwitchRow(theme, "允许其他应用一起播", "不抢音频焦点，音乐 / 播客继续响", shareFocus) { onShareFocus(it) }
                 Spacer(Modifier.height(8.dp))
                 // 标题和选项同一行：这一层已经够高了，名字占一行浪费。
@@ -503,6 +577,7 @@ private fun SwitchRow(
     text: String,
     note: String,
     on: Boolean,
+    enabled: Boolean = true,
     onChange: (Boolean) -> Unit,
 ) {
     Row(
@@ -517,6 +592,8 @@ private fun SwitchRow(
         Switch(
             checked = on,
             onCheckedChange = onChange,
+            // 灰的那一档交给组件自己出：这版 Material3 的 SwitchDefaults 没有 disabledTrackColor 可填
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = theme.accentColor,
                 checkedThumbColor = theme.barColor,
@@ -573,10 +650,12 @@ private fun SeekRow(theme: ReaderTheme, posMs: Int, durMs: Int, onSeek: (Int) ->
                     .height(3.dp)
                     .background(theme.accentColor, RoundedCornerShape(2.dp)),
             )
+            // 半颗滑块宽：5.5dp 换成像素一次算好，lambda 版要的是整数位移
+            val thumbPx = with(density) { 5.5.dp.toPx() }
             Box(
                 Modifier
                     .size(11.dp)
-                    .offset(x = with(density) { (track.width * frac).toDp() } - 5.5.dp)
+                    .offset { IntOffset((track.width * frac - thumbPx).roundToInt(), 0) }
                     .background(theme.accentColor, CircleShape),
             )
         }

@@ -33,8 +33,12 @@ class PaintBreaker(
         override fun initialValue() = HashMap<Int, Holder>()
     }
 
-    private fun holder(flags: Int): Holder = local.get().getOrPut(flags) {
-        Holder(textSizePx, spacingEm, faceFor(flags))
+    private fun holder(flags: Int): Holder {
+        // ThreadLocal.get() 在 Kotlin 眼里是可空的（注解是 @Nullable），直接 .getOrPut 会报
+        // "Only safe calls are allowed"；我们重写了 initialValue 所以它实际不会是 null，
+        // 但这里补一次兜底比 !! 便宜：真为空就建一个塞回去，不猜
+        val map = local.get() ?: HashMap<Int, Holder>().also { local.set(it) }
+        return map.getOrPut(flags) { Holder(textSizePx, spacingEm, faceFor(flags)) }
     }
 
     /** 样式位 → Typeface。等宽那一档单独走 MONOSPACE，粗体斜体用 create 合成。 */

@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.heightIn
@@ -135,7 +136,7 @@ fun AppScaffold(
     content: @Composable () -> Unit,
 ) {
     // 系统导航条也铺界面底色：它是底栏往下那条，留着卡片白就等于同一条栏有两个主人
-    ApplySystemBars(Chrome.pageArgb, Chrome.pageArgb, darkIcons = !Chrome.night)
+    ApplySystemBars(darkIcons = !Chrome.night)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -375,7 +376,7 @@ fun MarksScreen(
     val groups = remember(rows) {
         rows.distinctBy { it.bookId }.map { head -> head to rows.filter { it.bookId == head.bookId } }
     }
-    var pick by remember { mutableStateOf(0) }
+    var pick by remember { mutableIntStateOf(0) }
 
     Column(Modifier.fillMaxSize().background(Chrome.page)) {
         if (rows.isEmpty()) {
@@ -516,9 +517,9 @@ fun MeScreen(
 ) {
     val context = LocalContext.current
     var books by remember { mutableStateOf(library.list()) }
-    var themeIndex by remember { mutableStateOf(prefs.themeIndex) }
+    var themeIndex by remember { mutableIntStateOf(prefs.themeIndex) }
     // 开夜之前的那一档纸色：关掉夜间要还回原来那档，不是一律拍回"纸白"
-    var dayBefore by remember { mutableStateOf(ReaderTheme.of(prefs.themeIndex).let { if (it.night) 0 else prefs.themeIndex }) }
+    var dayBefore by remember { mutableIntStateOf(ReaderTheme.of(prefs.themeIndex).let { if (it.night) 0 else prefs.themeIndex }) }
     var confirmClean by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var cacheBytes by remember { mutableLongStateOf(0L) }

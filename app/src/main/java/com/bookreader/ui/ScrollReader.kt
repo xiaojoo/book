@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -172,18 +173,21 @@ fun ScrollReader(
         if (h > SAFE_DOC_PX) Log.w(TAG_WINDOW, "滚动文档 ${h.roundToInt()}px 超预算 ${SAFE_DOC_PX.toInt()}px")
     }
 
-    LaunchedEffect(scroll.value, blocks, viewport, lineHeight) {
+    LaunchedEffect(blocks, viewport, lineHeight) {
+        // 官方推荐：滚动量这种每帧都变的值不要在组合期当 key 读（读一次就把这一屏标成"每帧重来"），
+        // 交给 snapshotFlow 观察 —— 它只在值真的变了的那一帧往下发
+        snapshotFlow { scroll.value }.collect { top0 ->
         // 本轮用当前 blocks 现算文档：book 是组合时捕获的，effect 跑到这里 blocks 可能已经换过一版，
         // 拿旧文档去解释新的 scroll.value，量出来的首行就不是屏幕上那一行（换字号退一页就是这么来的）。
         val doc = ScrollBook(blocks)
-        if (viewport == 0 || doc.lines == 0 || blocks.isEmpty()) return@LaunchedEffect
+        if (viewport == 0 || doc.lines == 0 || blocks.isEmpty()) return@collect
         if (anchorPx >= 0) {
             val px = anchorPx
             anchorPx = -1
             if (px > 0) scroll.scrollTo(px)
-            return@LaunchedEffect
+            return@collect
         }
-        val top = scroll.value
+        val top = top0
         // 文档高度取布局自己算出来的 maxValue+viewport，不取本轮捕获的 book —— book 可能还是上一轮的
         val height = scroll.maxValue + viewport
         if (top < lookahead) {
@@ -210,7 +214,7 @@ fun ScrollReader(
                 // 补完这一轮就交卷：本轮捕获的 book 还是补之前的，按新的 scroll.value 去算首行
                 // 会算到锚页下面几页去（量过：存 2486 开出来提交成 5802，正好多了补进来的那一段）。
                 // blocks 是本 effect 的 key，下一轮拿到的是新文档，那时再报首行偏移。
-                return@LaunchedEffect
+                return@collect
             }
         } else if (height - top - viewport < lookahead) {
             val added = after(blocks.last())
@@ -232,10 +236,10 @@ fun ScrollReader(
                 if (shift > 0f) scroll.scrollTo((top - shift).roundToInt().coerceAtLeast(0))
                 blocks = list
                 // 同上：剪了头一段，本轮的 book 已经不对应新的滚动量，下一轮再报位置
-                return@LaunchedEffect
+                return@collect
             }
         }
-        val offset = doc.offsetOf(lineAt(scroll.value, lineHeight, doc.lines)) ?: return@LaunchedEffect
+        val offset = doc.offsetOf(lineAt(scroll.value, lineHeight, doc.lines)) ?: return@collect
         // 位置提交：最多 250ms 一次。自动阅读是连续滚的，"手停下来才提交"那种去抖永远等不到，
         // 所以这里改成节流 + 尾随一次（最后一下没人再触发 effect，就靠这个 delay 兜住）。
         val since = SystemClock.uptimeMillis() - lastCommit[0]
@@ -244,6 +248,7 @@ fun ScrollReader(
         if (offset != sent[0]) {
             sent[0] = offset
             onTopOffset(offset)
+        }
         }
     }
 

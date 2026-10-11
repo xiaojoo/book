@@ -209,6 +209,32 @@ object AiSpeech {
     }
 
     /**
+     * 「缓存范围」那一档要缓存哪几章：从**正在听的这一章之后**数 N 章（他点的原话是
+     * "按读到的章节后面加五章进行缓存"），所以当前这一章不在里面 —— 它正一段一段播着、一段一段进缓存。
+     *
+     * `count = null` 是「全部章节」这一档：整本从头到尾（不是"之后"，全部就是全部）。
+     * 越界自己收：读到第 3 章、总共 5 章、要 50 章 ⇒ 只回第 4、5 章，不吐负数也不吐到 53。
+     */
+    fun chapterWindow(current: Int, total: Int, count: Int?): List<Int> {
+        if (total <= 0) return emptyList()
+        return if (count == null) (0 until total).toList()
+        else ((current + 1).coerceAtMost(total) until (current + 1 + count).coerceAtMost(total)).toList()
+    }
+
+    /**
+     * 这一串值不值得发给合成接口：**至少要有一个念得出来的字**。
+     *
+     * 真机 11:54:45 缓存第一章报 400 `InvalidParameter / Please ensure input text is valid.` ——
+     * 那一格是 markdown 表格的分隔行 `|----|----|`，整段只有竖线和连字符，一个音都发不出来。
+     * 本地按同一套切段复量：第一章 18 段，前 12 段的偏移 0,3,19,42,87,95,103,111,119,124,129,141
+     * 与设备上 index.tsv 记的逐一对上，第 13 段（off=151）就是这一行。
+     *
+     * `isNotBlank()` 挡不住它：竖线、破折号、星号都不是空白。字母和数字算"能念"，
+     * 标点、符号、空白都不算。
+     */
+    fun speakable(text: String): Boolean = text.any { Character.isLetterOrDigit(it) }
+
+    /**
      * 修 wav 头里那两个长度字段。
      *
      * **为什么要修**：阿里这一档回的 wav 把 `RIFF` 长度和 `data` 长度都写成 `0x7FFFFFFF`
