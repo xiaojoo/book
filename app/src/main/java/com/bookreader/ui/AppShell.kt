@@ -1,5 +1,6 @@
 package com.bookreader.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,8 +28,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,7 +48,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
@@ -55,7 +59,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -64,6 +72,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +89,10 @@ import com.bookreader.data.PdfDoc
 import com.bookreader.data.ReaderPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.bookreader.booksource.BookHit
+import com.bookreader.booksource.HttpFetcher
+import com.bookreader.booksource.SearchEngine
+import com.bookreader.data.BookSourceStore
 
 /**
  * 一套外壳底色（书架/精选/书签/我的）。夜间的墨色和强调色取自 `ReaderTheme.Night` 同一批值，
@@ -231,138 +246,28 @@ fun ScreenHeader(title: String, trailing: String? = null) {
     }
 }
 
-private class FeaturedBook(
-    val title: String,
-    val blurb: String,
-    val meta: String,
-    val tags: List<String>,
-    val coverRes: Int,
-)
-
 /**
- * 精选：静态。文案和封面都是从那张参考截图里裁/抄来的样例，只给原型看，上线前必须换成真书源。
- * 版式是量出来的（截图 827 宽 → 设备 1080 宽，系数 1.306）：封面 128x171=61x82dp、
- * 图文间距 25=12dp、行距 204=97dp。列表按书签那一档做成卡片（同一套外壳：12dp 外缩进 +
- * 10dp 圆角 + 10dp 卡缝），所以封面左缘的 19dp 拆成"卡外 12 + 卡内 7"，墨迹位置不变。
+ * 整屏页左上角那颗 ‹ 返回：命中框 44dp 见方（手指点得准），**墨的左边缘贴页面 16dp 那条内容线**。
+ *
+ * 为什么要单独一颗：原先四页各写一份 `Icon(size = 44.dp)`，那是把整个视口当尺寸，墨有 103px 高，
+ * 比参考图那颗（41px）大两倍半；而图标居中在 44dp 框里时墨又落在 25dp 处，比下面每一行的 16dp
+ * 缩进多 9dp，一眼能看出这颗比内容歪。
+ *
+ * 尺寸 18dp 是按参考图定的：18dp 框出来的墨是 24x42px，参考那颗是 24x41px（宽 Δ0、高 Δ1px）。
+ * 左移的 4.2dp 不是从截图凑的，是从图标自己算的：`ic_back.xml` 的墨在 24 单位的视口里从 x=5.6 起，
+ * 占 5.6/24 = 23.3%，18dp 框就是左边天然空 18 x 5.6/24 = 4.2dp —— 把这 4.2dp 补掉，墨正好落在 16dp。
+ * 只有图标偏移，44dp 的命中框还在 16dp 处，不跟着左移。
  */
-private val FEATURED = listOf(
-    FeaturedBook(
-        "省委钦点秘书长，我官路通天",
-        "直系领导自杀，省纪委介入，让王晨迅速成为省委办公厅的众矢之的，内忧外困下，才发现领导早已帮他",
-        "官场 · 38.1万字",
-        listOf("现实题材", "智商在线"),
-        R.drawable.cover_feat1,
-    ),
-    FeaturedBook(
-        "婚内五年后重逢，霍总深情失控跪地求和",
-        "温然嫁给霍驰野六年，分居五年。\n五年后，他怀抱白月光高调回国。",
-        "总裁豪门 · 36.3万字",
-        listOf("虐恋", "白月光"),
-        R.drawable.cover_feat2,
-    ),
-    FeaturedBook(
-        "分居三年，高冷商总跪地求不离",
-        "三年前，因为那个丢失的孩子，温楹给了商灌池一刀，斩断了青梅竹马的情分。",
-        "总裁豪门 · 34.5万字",
-        listOf("甜宠", "现代言情"),
-        R.drawable.cover_feat3,
-    ),
-    FeaturedBook(
-        "一百岁老头子，谁让你装嫩修仙了",
-        "“一百岁了，还在炼气期，这老废物怎么还不去死？”\n面对这样的嘲讽，林默不仅没有生气，反而笑得更蔫",
-        "幻想修真 · 30.3万字",
-        listOf("暗黑", "仙侠"),
-        R.drawable.cover_feat4,
-    ),
-    FeaturedBook(
-        "北疆最狂纨绔：从赐婚进京开始",
-        "｛ 历史爽文，但非无脑爽文，喜欢无脑爽慎入 ｝\n商界传奇林烨，庆功宴上醉倒，一睁眼却成了大夏北",
-        "架空历史 · 35.2万字",
-        listOf("赘婿", "快节奏"),
-        R.drawable.cover_feat5,
-    ),
-    FeaturedBook(
-        "娇软美人出嫁后",
-        "【肤白貌美娇娇女x忠犬直男糙汉，体型差+家长里短】",
-        "古代情缘 · 31.5万字",
-        listOf("轻松", "糙汉"),
-        R.drawable.cover_feat6,
-    ),
-)
-
 @Composable
-fun FeaturedScreen() {
-    var note by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxSize().background(Chrome.page)) {
-        ScreenHeader("精选")
-        note?.let {
-            Text(
-                it,
-                fontSize = 12.sp,
-                color = Chrome.accent,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 19.dp, vertical = 2.dp),
-            )
-        }
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(FEATURED, key = { it.title }) { book ->
-                FeaturedRow(book = book, onClick = {
-                    note = "《${book.title}》是参考截图里的静态样例：书源未接入，加不了书架。"
-                })
-            }
-        }
-    }
-}
-
-@Composable
-private fun FeaturedRow(book: FeaturedBook, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            // 卡片外壳和书签那一档同一份：10dp 圆角 + 卡片底色；左右各 7dp 内衬，加上卡外的
-            // 12dp 正好还是量出来的封面左缘 19dp，改成卡片不该把内容挪位
-            .clip(RoundedCornerShape(10.dp))
-            .background(Chrome.card)
-            .tap(onClick)
-            .padding(start = 7.dp, end = 7.dp, top = 7.dp, bottom = 7.dp),
+fun BackSlot(desc: String, onBack: () -> Unit) {
+    Box(
+        Modifier.size(width = 44.dp, height = 44.dp).tap(onBack),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Image(
-            painter = painterResource(book.coverRes),
-            contentDescription = book.title,
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-            modifier = Modifier
-                .size(width = 61.dp, height = 82.dp)
-                .clip(RoundedCornerShape(4.dp)),
+        Icon(
+            painterResource(R.drawable.ic_back), desc, tint = Chrome.ink,
+            modifier = Modifier.size(18.dp).offset(x = (-4.2).dp),
         )
-        Column(Modifier.padding(start = 12.dp).fillMaxWidth()) {
-            Text(book.title, fontSize = 16.sp, color = Chrome.ink, lineHeight = 22.sp)
-            Text(
-                book.blurb,
-                fontSize = 13.sp,
-                color = Chrome.faint,
-                lineHeight = 18.sp,
-                maxLines = 2,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(book.meta, fontSize = 13.sp, color = Chrome.faint)
-                Spacer(Modifier.weight(1f))
-                book.tags.forEach { tag ->
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 6.dp)
-                            .background(Chrome.chip, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 8.dp, vertical = 3.dp),
-                    ) { Text(tag, fontSize = 11.sp, color = Chrome.faint) }
-                }
-            }
-        }
     }
 }
 
@@ -724,6 +629,7 @@ fun MeScreen(
     library: BookLibrary,
     prefs: ReaderPrefs,
     onOpenAi: () -> Unit,
+    onEditName: () -> Unit,
 ) {
     val context = LocalContext.current
     var books by remember { mutableStateOf(library.list()) }
@@ -734,7 +640,6 @@ fun MeScreen(
     var note by remember { mutableStateOf<String?>(null) }
     var cacheBytes by remember { mutableLongStateOf(0L) }
     var prefsSheet by remember { mutableStateOf(false) }
-    var editName by remember { mutableStateOf(false) }
     var nickname by remember { mutableStateOf(prefs.nickname) }
     val totalChars = books.sumOf { it.totalChars }
     val readChars = books.sumOf { prefs.loadPosition(it.id)?.absoluteOffset ?: 0L }
@@ -755,7 +660,7 @@ fun MeScreen(
                     .size(46.dp)
                     .clip(CircleShape)
                     .background(Chrome.accent.copy(alpha = 0.14f))
-                    .tap { editName = true },
+                    .tap { onEditName() },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -785,7 +690,7 @@ fun MeScreen(
                 painter = painterResource(R.drawable.ic_chevron_right),
                 contentDescription = "昵称",
                 tint = Chrome.faint,
-                modifier = Modifier.size(18.dp).tap { editName = true },
+                modifier = Modifier.size(18.dp).tap { onEditName() },
             )
         }
 
@@ -887,29 +792,6 @@ fun MeScreen(
     if (prefsSheet) {
         PrefSheet(prefs, onDismiss = { prefsSheet = false })
     }
-    if (editName) {
-        var tmp by remember { mutableStateOf(nickname) }
-        AlertDialog(
-            onDismissRequest = { editName = false },
-            title = { Text("昵称") },
-            text = {
-                OutlinedTextField(
-                    value = tmp,
-                    onValueChange = { tmp = it.take(12) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    nickname = tmp.ifBlank { nickname }
-                    prefs.nickname = nickname
-                    editName = false
-                }) { Text("保存", color = Chrome.accent) }
-            },
-            dismissButton = { TextButton(onClick = { editName = false }) { Text("取消") } },
-        )
-    }
     if (confirmClean) {
         AlertDialog(
             onDismissRequest = { confirmClean = false },
@@ -928,6 +810,73 @@ fun MeScreen(
             },
             dismissButton = { TextButton(onClick = { confirmClean = false }) { Text("取消") } },
         )
+    }
+}
+
+/**
+ * 昵称：**单独一屏，不是弹框**（他点名的形态，照他给的图 —— 顶栏 `‹ 昵称 …… 保存`，
+ * 整页正文就是那一行字，光标跟在字后面闪）。顶栏那一格和「AI 服务」同一份尺寸节奏：
+ * 48dp 高、左边一颗 40dp 的 ‹、标题 19sp 中等、右边一颗 17sp 的「保存」。
+ *
+ * 只写这台机上的 prefs，没有账号体系。空着保存 = 不改（原先弹框就是这条规矩，留着）；
+ * 最多 12 个字也和原先一样。底栏整条让位：这一屏挂在壳的最外层，和「AI 服务」同一路。
+ */
+@Composable
+fun NicknameScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
+    // 光标要跟在字的最后（他那张图就是这样）：只给字符串的话 BasicTextField 的游标停在 0，
+    // 进这一页看见的就是光标压在第一个字前面
+    var field by remember { mutableStateOf(TextFieldValue(prefs.nickname, TextRange(prefs.nickname.length))) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = remember { FocusRequester() }
+    BackHandler(onBack = onBack)
+    // 进这一页光标就落在字后面、键盘自己弹起来，不用先点一下（图里就是这个状态）
+    LaunchedEffect(Unit) { focus.requestFocus() }
+
+    fun save() {
+        val v = field.text.trim()
+        if (v.isNotEmpty()) prefs.nickname = v
+        keyboard?.hide()
+        onBack()
+    }
+    Column(Modifier.fillMaxSize().background(Chrome.page).safeDrawingPadding()) {
+        Row(
+            Modifier.fillMaxWidth().height(48.dp).padding(start = 8.dp, end = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(40.dp).tap(onBack), contentAlignment = Alignment.Center) {
+                Icon(painterResource(R.drawable.ic_back), "返回", tint = Chrome.ink, modifier = Modifier.size(20.dp))
+            }
+            Text("昵称", fontSize = 19.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
+            Spacer(Modifier.weight(1f))
+            Text(
+                "保存", fontSize = 17.sp, fontWeight = FontWeight.Medium, color = Chrome.ink,
+                modifier = Modifier.tap { save() }.padding(vertical = 8.dp, horizontal = 6.dp),
+            )
+        }
+        // 输入区照「搜书」那一格同一份几何（他这次贴的就是那一行）：44dp 的一条带、字在带里垂直居中，
+        // 细线就压在带的下沿 —— 于是字的上下两空相等。线用 0.5dp：1dp 在这台机落到 3 设备px，
+        // 0.5dp 取整成 1px，和分类页那条分界同一档。
+        // 顶上不留额外内衬（他点名不要）：44dp 那条带直接接在导航带下沿，字在带里居中 ——
+        // 字顶离导航带下沿那 46px 是"居中"本身要的空气，不是额外加的
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp)) {
+            Box(Modifier.fillMaxWidth().height(44.dp), contentAlignment = Alignment.CenterStart) {
+                BasicTextField(
+                    value = field,
+                    onValueChange = {
+                        // 长度上限还是原先那 12 个字；截了之后游标要跟着收回来，不然它会指到字符串外面
+                        val t = it.text.take(12)
+                        field = TextFieldValue(t, TextRange(it.selection.start.coerceAtMost(t.length), it.selection.end.coerceAtMost(t.length)))
+                    },
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(fontSize = 17.sp, color = Chrome.ink),
+                    cursorBrush = SolidColor(Chrome.accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { save() }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                )
+            }
+            Box(Modifier.fillMaxWidth().height(0.5.dp).background(Chrome.hairline))
+        }
     }
 }
 

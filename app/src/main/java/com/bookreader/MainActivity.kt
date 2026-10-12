@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -29,9 +30,10 @@ import com.bookreader.core.model.BookMeta
 import com.bookreader.ui.AppScaffold
 import com.bookreader.ui.BookInfo
 import com.bookreader.ui.BookInfoPage
+import com.bookreader.ui.NicknameScreen
 import com.bookreader.ui.AiSettingsScreen
 import com.bookreader.ui.BookSearchScreen
-import com.bookreader.ui.FeaturedScreen
+import com.bookreader.ui.FeaturedHomeScreen
 import com.bookreader.ui.LibraryScreen
 import com.bookreader.ui.Chrome
 import com.bookreader.ui.PdfReaderScreen
@@ -39,6 +41,7 @@ import com.bookreader.ui.PptReaderScreen
 import com.bookreader.ui.ReaderTheme
 import com.bookreader.ui.MainTab
 import com.bookreader.ui.SearchPage
+import com.bookreader.ui.TipHost
 import com.bookreader.ui.MarksScreen
 import com.bookreader.ui.MeScreen
 import com.bookreader.ui.ReaderScreen
@@ -74,7 +77,8 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
         setContent {
             // 点击反馈全项目都从这颗 Indication 来：换成什么都不画的，涟漪、按住变深、悬停高亮一起没了
             CompositionLocalProvider(LocalIndication provides NoIndication) {
-                Root(library, prefs, sources, incoming = intent?.viewUri())
+                // 一层气泡铺在全应用最外面：哪一屏的图标按住要报名字，都挂在这一层上画
+                TipHost { Root(library, prefs, sources, incoming = intent?.viewUri()) }
             }
         }
     }
@@ -100,11 +104,21 @@ private fun Root(
     var tab by rememberSaveable { mutableStateOf(MainTab.Shelf) }
     // 「任务」「管理」是搜书底下的全屏独立页：状态提在这里，壳才看得见该不该画底栏
     var searchPage by rememberSaveable { mutableStateOf(SearchPage.Search) }
+    // 精选搜索框右边那颗「分类」、每张卡右上那颗「更多」开的都是一整屏（和搜书的任务/管理同一族），
+    // 底栏要让位。存的是"哪一页"：空 = 精选首页，「#分类」= 分类页，其余就是类目名
+    var featuredPage by rememberSaveable { mutableStateOf("") }
     // AI 设置是另开的一屏，不是弹窗（他点名要的形态）；和阅读页一样盖在壳上面
     var aiSettings by rememberSaveable { mutableStateOf(false) }
+    // 昵称也改成单独一屏（原先是「我的」页上弹一个 AlertDialog，他点名要换掉）；和 AI 设置同一族
+    var editName by rememberSaveable { mutableStateOf(false) }
     // 「本书信息」也是盖在壳上的一整屏（和 AI 设置同一族）。不存盘：它是从某一本书点进去的，
     // 转个屏就退回列表比停在半页信息上更符合直觉，而 rememberSaveable 装这个类还得写 Parcelable
     var info by remember { mutableStateOf<BookInfo?>(null) }
+    // 从目录里某一章进来的话，那一章的序号放这里（-1 = 按阅读进度接着读）。不存盘：转个屏就退回列表，
+    // 和上面那颗 info 同一族
+    var openChapter by remember { mutableIntStateOf(-1) }
+    /** 开一本书的唯一入口：顺手把"从第几章"归零，免得上一本的章序号漏到这一本上。 */
+    val openAt: (String, Int) -> Unit = { id, chapter -> openChapter = chapter; openBook = id }
 
     LaunchedEffect(incoming) {
         val uri = incoming ?: return@LaunchedEffect
@@ -113,11 +127,11 @@ private fun Root(
             // 之前在书架上"移除"过的那本，再导入一次就该回到架上（他点名的语义：移除只动列表、
             // 数据留着）；不清这个标记的话它会一直藏在列表外，只是被打开而已
             if (prefs.isRemoved(it.id)) prefs.setRemoved(it.id, false)
-            openBook = it.id
+            openAt(it.id, -1)
             return@LaunchedEffect
         }
         val outcome = runCatching { withContext(Dispatchers.IO) { library.import(uri) {} } }
-        outcome.onSuccess { openBook = it.id }
+        outcome.onSuccess { openAt(it.id, -1) }
             .onFailure { notice = "打不开这个文件：${it.message ?: it.javaClass.simpleName}" }
         Log.d("ReaderPerf", "view-import ok=${outcome.isSuccess} title=$title")
     }
@@ -131,18 +145,22 @@ private fun Root(
         BookInfoPage(
             info = bookInfo,
             sources = sources.list(),
+            library = library,
             onBack = { info = null },
-            onOpen = { info = null; openBook = it },
+            onOpen = { info = null; openAt(it, -1) },
+            onReadChapter = { i -> info = null; openAt(bookInfo.bookId, i) },
         )
+    } else if (editName) {
+        NicknameScreen(prefs, onBack = { editName = false })
     } else if (aiSettings) {
         AiSettingsScreen(prefs = prefs, onBack = { aiSettings = false })
     } else if (id == null) {
-        AppScaffold(tab = tab, onTab = { tab = it }, barVisible = searchPage == SearchPage.Search) {
+        AppScaffold(tab = tab, onTab = { tab = it; featuredPage = "" }, barVisible = searchPage == SearchPage.Search && !(tab == MainTab.Featured && featuredPage.isNotEmpty())) {
             when (tab) {
                 MainTab.Shelf -> LibraryScreen(
                     library = library,
                     prefs = prefs,
-                    onOpen = { openBook = it.id },
+                    onOpen = { openAt(it.id, -1) },
                     onInfo = { info = it },
                     notice = notice,
                 )
@@ -151,12 +169,18 @@ private fun Root(
                     sources = sources,
                     page = searchPage,
                     onPage = { searchPage = it },
-                    onOpen = { openBook = it },
+                    onOpen = { openAt(it, -1) },
                     onInfo = { info = it },
                 )
-                MainTab.Featured -> FeaturedScreen()
-                MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openBook = it })
-                MainTab.Me -> MeScreen(library, prefs, onOpenAi = { aiSettings = true })
+                MainTab.Featured -> FeaturedHomeScreen(
+                    sources = sources,
+                    page = featuredPage,
+                    onPage = { featuredPage = it },
+                    onInfo = { info = it },
+                    onSearch = { tab = MainTab.Search; searchPage = SearchPage.Search },
+                )
+                MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openAt(it, -1) })
+                MainTab.Me -> MeScreen(library, prefs, onOpenAi = { aiSettings = true }, onEditName = { editName = true })
             }
         }
     } else {
@@ -169,7 +193,7 @@ private fun Root(
         } else if (meta.kind == BookMeta.PPTX) {
             PptReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
         } else {
-            ReaderScreen(bookId = id, library = library, prefs = prefs, onBack = { openBook = null })
+            ReaderScreen(bookId = id, library = library, prefs = prefs, startChapter = openChapter, onBack = { openBook = null })
         }
     }
 }

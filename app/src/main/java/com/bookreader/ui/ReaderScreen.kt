@@ -141,6 +141,8 @@ fun ReaderScreen(
     bookId: String,
     library: BookLibrary,
     prefs: ReaderPrefs,
+    /** >= 0 就是从目录那一行进来：位置让给指定的那一章。阅读进度照旧存着，下次从书架进还在原地。 */
+    startChapter: Int = -1,
     onBack: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -235,7 +237,7 @@ fun ReaderScreen(
 
     // 种子要在 remember 外面取：@Composable 不能在 remember 的算子里调
     val seed = contentSizePx()
-    val engine = remember(bookId) {
+    val engine = remember(bookId, startChapter) {
         val start = prefs.pageStyle(
             widthPx = seed.width.toFloat(),
             heightPx = seed.height.toFloat(),
@@ -243,7 +245,11 @@ fun ReaderScreen(
             fontScale = density.fontScale,
         )
         ReaderEngine(library.open(bookId), { PaintBreaker(it, DeviceFonts.typefaceOf(fontState.value) ?: android.graphics.Typeface.DEFAULT) }, start)
-            .also { e -> prefs.loadPosition(bookId)?.let { p -> e.restore(p) } }
+            .also { e ->
+                prefs.loadPosition(bookId)?.let { p -> e.restore(p) }
+                // 先还原进度、再让位给指定的那一章：顺序反了会被 restore 盖回原地
+                if (startChapter >= 0) e.jumpToChapter(startChapter)
+            }
     }
     DisposableEffect(bookId) { onDispose { engine.close() } }
 

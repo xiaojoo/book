@@ -139,7 +139,31 @@ class SearchExtractionTest {
             "http://www.example-xhytd.com/xiaoshuo/11/900.html",
         )
         println("[正文] " + text.replace("\n", "⏎"))
-        assertEquals("第一行话。\n第二行话。", text)
+        assertEquals("第一行话。\n\n第二行话。", text)
+    }
+
+    /** 段间要交出一个**空行**（两个换行），不是一个换行：阅读器那一格空行照原文判，给一个换行就段段挤在一起。 */
+    @Test
+    fun paragraphsAreSeparatedByABlankLine() {
+        val (r, _) = engine("shuhu")
+        val text = chapterText(
+            r,
+            "<html><body><div id=\"content\"><p>第一段。</p><p>第二段。</p><p>第三段。</p></div></body></html>",
+            "http://www.example-hu.com/0/321/1.html",
+        )
+        assertEquals("第一段。\n\n第二段。\n\n第三段。", text)
+    }
+
+    /** 站点自己已经空了行的，不能加成两道：先滤空行再统一 join，所以几道换行出来都只剩一条空隙。 */
+    @Test
+    fun blankLinesInTheSourceAreNotDoubled() {
+        val (r, _) = engine("xhytd")
+        val text = chapterText(
+            r,
+            "<html><body><div id=\"content\">第一段。<br><br><br>第二段。<br></div></body></html>",
+            "http://www.example-xhytd.com/xiaoshuo/11/900.html",
+        )
+        assertEquals("第一段。\n\n第二段。", text)
     }
 
     @Test
@@ -150,7 +174,7 @@ class SearchExtractionTest {
             "<html><body><div id=\"content\"><p>第一段。</p><p>第二段。</p></div></body></html>",
             "http://www.example-hu.com/0/321/1.html",
         )
-        assertEquals("第一段。\n第二段。", text)
+        assertEquals("第一段。\n\n第二段。", text)
     }
 
     /** 限流站的真实故障是"不报错、正文就是空的"——这里必须交出空串，不能抛，也不能返回一堆标签。 */

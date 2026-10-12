@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 折叠：向上的 V。就是 ic_chevron_down 绕 (12,12) 转 180°（每个点 (x,y)→(24-x,24-y)），
+     所以粗细、开口和下面那颗完全一样，翻上去不会换一支笔。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M18.36,15.6l-1.42,1.42 -4.94,-4.94 -4.94,4.94 -1.42,-1.42 6.36,-6.36z" />
+</vector>
