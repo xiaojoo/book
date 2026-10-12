@@ -98,6 +98,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bookreader.core.model.BookMeta
 import com.bookreader.core.ai.AiProtocol
 import com.bookreader.core.ai.AiSpeech
 import com.bookreader.core.engine.PrefetchManager
@@ -1052,7 +1053,7 @@ fun ReaderScreen(
                     ListenFloat(
                         theme = theme,
                         playing = aiPlaying,
-                        coverRes = coverOf(engine.book.meta.title),
+                        meta = engine.book.meta,
                         title = engine.book.meta.title,
                         modifier = Modifier.offset { IntOffset(at.x.toInt(), at.y.toInt()) },
                         onDrag = { dx, dy ->
@@ -1078,7 +1079,7 @@ fun ReaderScreen(
                         chapterTitle = "第 ${engine.currentChapterIndex + 1} 章 " +
                             engine.book.chapters[engine.currentChapterIndex].title,
                         bookTitle = engine.book.meta.title,
-                        coverRes = coverOf(engine.book.meta.title),
+                        meta = engine.book.meta,
                         paragraph = engine.book.cache.slice(lr.first, (lr.last - lr.first + 1).toInt()),
                         busy = listenBusy,
                         playing = aiPlaying,
@@ -1885,7 +1886,7 @@ private fun BoxScope.DictPanel(
 private fun ListenFloat(
     theme: ReaderTheme,
     playing: Boolean,
-    coverRes: Int?,
+    meta: BookMeta,
     title: String,
     modifier: Modifier = Modifier,
     onDrag: (Float, Float) -> Unit,
@@ -1924,26 +1925,13 @@ private fun ListenFloat(
             .padding(start = 8.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (coverRes != null) {
-            Image(
-                painter = painterResource(coverRes),
-                contentDescription = "打开听书页",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(width = 32.dp, height = 44.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .tap(onOpenPage),
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(width = 32.dp, height = 44.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(theme.pageColor)
-                    .tap(onOpenPage),
-                contentAlignment = Alignment.Center,
-            ) { Text(title.take(1), fontSize = 13.sp, color = theme.inkColor) }
-        }
+        // 浮窗上这一小格和书架、听书页是同一颗：抓到过封面就显示那张，没有就按书名哈希取色
+        BookCover(
+            meta.title, meta.id,
+            Modifier.size(width = 32.dp, height = 44.dp).clip(RoundedCornerShape(3.dp)).tap(onOpenPage),
+            radius = 3.dp,
+            titleOn = false,   // 这一小格只有 32x44dp，写书名会挤成一列竖字
+        )
         Spacer(Modifier.size(8.dp))
         Box(
             modifier = Modifier.size(32.dp).clip(CircleShape).background(theme.pageColor).tap(onToggle),

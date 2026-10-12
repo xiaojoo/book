@@ -4,6 +4,9 @@
   "homeUrl": "http://www.aixiashu.la/",
   "charset": "utf-8",
   "note": "2026-10-11 从这台机实测：首页没有搜索框，口是 /modules/article/search.php（POST searchkey）。#list 里一个 dl 两个 dt，第一个 dt 下面 9 条是倒序，「《剑来》正文」那个 dt 之后 1307 条才是正序。正文用 <br> 分段、不分页、不加密。已知一处是站点自己的数据错：最后 83 条（第1章 少年游…第83章 今日无事）面包屑仍写着剑来，抽出来的正文却是别的书。",
+  "cover": "#fmimg img @src",
+  "intro": "#intro",
+  "hot": {"url": "http://www.aixiashu.la/", "group": "div.content", "item": "ul li", "bookName": "a", "author": "@text", "category": "h2", "bookUrl": "a@href"},
   "search": {
     "url": "http://www.aixiashu.la/modules/article/search.php",
     "method": "POST",

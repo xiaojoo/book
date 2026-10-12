@@ -78,7 +78,8 @@ object Downloads {
         return h.load().sortedByDescending { it.startedAt }
     }
 
-    fun start(ctx: Context, rule: Rule, hit: BookHit, update: Boolean) {
+    /** @param head >0 = 只拉目录开头这几章（界面上那颗「先拉开头」）；0 = 整本。 */
+    fun start(ctx: Context, rule: Rule, hit: BookHit, update: Boolean, head: Int = 0) {
         ensureChannel(ctx)
         val h = history(ctx)
         val rec = h.find(hit.bookUrl) ?: DownloadRecord(
@@ -93,7 +94,7 @@ object Downloads {
             nameOf(hit.bookUrl),
             ExistingWorkPolicy.KEEP,
             OneTimeWorkRequestBuilder<DownloadWorker>()
-                .setInputData(DownloadWorker.input(rule, hit, update))
+                .setInputData(DownloadWorker.input(rule, hit, update, head))
                 // 退避是 WorkRequest 那一层的参数（Configuration.Builder 上没有这个方法）。
                 // 指数而不是线性：源站限流时越急着重试越容易被继续挡。
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, java.time.Duration.ofSeconds(10))

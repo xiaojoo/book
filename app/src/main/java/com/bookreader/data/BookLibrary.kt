@@ -57,6 +57,9 @@ class BookLibrary(private val context: Context) {
 
     fun deckFile(id: String): File = File(dir(id), PPTX_FILE)
 
+    /** 从源站抓回来的那张封面。没抓到的书没这个文件，书架上走默认封面。 */
+    fun coverFile(id: String): File = File(dir(id), COVER_FILE)
+
     fun displayName(uri: Uri): String {
         // file:// 没有 DISPLAY_NAME 可查，只能拿路径末段，否则书架上会全叫"未命名小说"
         if (uri.scheme == "file") return uri.lastPathSegment?.substringAfterLast('/') ?: "未命名小说"
@@ -101,7 +104,7 @@ class BookLibrary(private val context: Context) {
         val dir = File(root, id)
         if (into != null) {
             // 清掉上一版的中间件再重灌：留着旧的 chunk 会让新书的偏移指到旧字节上
-            dir.listFiles()?.forEach { if (it.name != "cover.jpg") it.delete() }
+            dir.listFiles()?.forEach { if (it.name != COVER_FILE) it.delete() }
         }
         val t0 = System.nanoTime()
         return try {
@@ -246,5 +249,6 @@ class BookLibrary(private val context: Context) {
         val MD_EXTENSIONS = setOf("md", "markdown", "mdown")
         const val PDF_FILE = "document.pdf"
         const val PPTX_FILE = "deck.pptx"
+        const val COVER_FILE = "cover.jpg"
     }
 }

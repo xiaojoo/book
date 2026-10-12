@@ -36,10 +36,15 @@ class BookDownloader(
     fun download(
         hit: BookHit,
         shouldStop: () -> Boolean = { false },
+        /** 0 = 整本。>0 = 只拉目录开头这几章（界面上那颗「先拉开头」），剩下的等「全本」补。
+         *  摆在 onProgress 之前：满项目都是尾随 lambda 传进度回调，尾随 lambda 永远绑最后一个形参。 */
+        limit: Int = 0,
         onProgress: (Int, Int) -> Unit = { _, _ -> },
     ): DownloadOutcome {
-        val chapters = SearchEngine(rule, fetch).catalog(hit.bookUrl)
-        if (chapters.isEmpty()) return DownloadOutcome(hit.bookName, hit.author, 0, 0, emptyList(), "")
+        // 书页只请求一次：目录和简介都在那一页上
+        val head = SearchEngine(rule, fetch).head(hit.bookUrl)
+        val chapters = if (limit <= 0) head.chapters else head.chapters.take(limit)
+        if (chapters.isEmpty()) return DownloadOutcome(hit.bookName, hit.author, 0, 0, emptyList(), "", head.intro, head.chapters.map { it.first })
         val total = chapters.size
         onProgress(0, total)
         val done = AtomicInteger(0)
@@ -76,7 +81,7 @@ class BookDownloader(
         } finally {
             pool.shutdownNow()
         }
-        return assemble(hit, chapters)
+        return assemble(hit, chapters, head.intro, head.chapters.map { it.first })
     }
 
     /** 抓一章：空正文和抛异常都算失败，重试到 maxAttempts。成功返回正文，彻底失败返回 null。 */
@@ -101,7 +106,12 @@ class BookDownloader(
         return if (hi == lo) lo else lo + random.nextInt((hi - lo).toInt() + 1).toLong()
     }
 
-    private fun assemble(hit: BookHit, chapters: List<Pair<String, String>>): DownloadOutcome {
+    private fun assemble(
+        hit: BookHit,
+        chapters: List<Pair<String, String>>,
+        intro: String,
+        outline: List<String>,
+    ): DownloadOutcome {
         val failed = ArrayList<String>()
         val b = StringBuilder()
         chapters.forEachIndexed { i, (name, url) ->
@@ -111,7 +121,7 @@ class BookDownloader(
             }
         }
         val body = b.toString()
-        return DownloadOutcome(hit.bookName, hit.author, chapters.size, body.length, failed, body)
+        return DownloadOutcome(hit.bookName, hit.author, chapters.size, body.length, failed, body, intro, outline)
     }
 
     private fun storeKey(bookUrl: String, chapterUrl: String) = rule.id + "|" + bookUrl + "|" + chapterUrl
@@ -126,6 +136,10 @@ data class DownloadOutcome(
     /** 没抓到的章名，按目录顺序。空 = 全本齐。 */
     val failed: List<String>,
     val body: String,
+    /** 书页上那段内容简介（规则没写这一格就是空串）。 */
+    val intro: String = "",
+    /** **整本**的章名，按目录顺序 —— 和 limit 无关：只拉两章时大纲也该看得见全书。 */
+    val outline: List<String> = emptyList(),
 ) {
     val complete: Boolean get() = failed.isEmpty()
 }

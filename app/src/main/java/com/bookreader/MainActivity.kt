@@ -27,6 +27,8 @@ import com.bookreader.data.BookSourceStore
 import com.bookreader.data.ReaderPrefs
 import com.bookreader.core.model.BookMeta
 import com.bookreader.ui.AppScaffold
+import com.bookreader.ui.BookInfo
+import com.bookreader.ui.BookInfoPage
 import com.bookreader.ui.AiSettingsScreen
 import com.bookreader.ui.BookSearchScreen
 import com.bookreader.ui.FeaturedScreen
@@ -100,6 +102,9 @@ private fun Root(
     var searchPage by rememberSaveable { mutableStateOf(SearchPage.Search) }
     // AI 设置是另开的一屏，不是弹窗（他点名要的形态）；和阅读页一样盖在壳上面
     var aiSettings by rememberSaveable { mutableStateOf(false) }
+    // 「本书信息」也是盖在壳上的一整屏（和 AI 设置同一族）。不存盘：它是从某一本书点进去的，
+    // 转个屏就退回列表比停在半页信息上更符合直觉，而 rememberSaveable 装这个类还得写 Parcelable
+    var info by remember { mutableStateOf<BookInfo?>(null) }
 
     LaunchedEffect(incoming) {
         val uri = incoming ?: return@LaunchedEffect
@@ -121,7 +126,15 @@ private fun Root(
     LaunchedEffect(tab, openBook) { Chrome.night = ReaderTheme.of(prefs.themeIndex).night }
 
     val id = openBook
-    if (aiSettings) {
+    val bookInfo = info
+    if (bookInfo != null) {
+        BookInfoPage(
+            info = bookInfo,
+            sources = sources.list(),
+            onBack = { info = null },
+            onOpen = { info = null; openBook = it },
+        )
+    } else if (aiSettings) {
         AiSettingsScreen(prefs = prefs, onBack = { aiSettings = false })
     } else if (id == null) {
         AppScaffold(tab = tab, onTab = { tab = it }, barVisible = searchPage == SearchPage.Search) {
@@ -130,6 +143,7 @@ private fun Root(
                     library = library,
                     prefs = prefs,
                     onOpen = { openBook = it.id },
+                    onInfo = { info = it },
                     notice = notice,
                 )
 
@@ -138,6 +152,7 @@ private fun Root(
                     page = searchPage,
                     onPage = { searchPage = it },
                     onOpen = { openBook = it },
+                    onInfo = { info = it },
                 )
                 MainTab.Featured -> FeaturedScreen()
                 MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openBook = it })

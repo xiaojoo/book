@@ -45,7 +45,7 @@ class BookDownloadTest {
     private val hit = BookHit("shuhu", "小说虎", "南方有乔木", "木木", bookUrl)
 
     private fun tocPage(names: List<String>) =
-        "<html><body><div id=\"list\"><dl>" +
+        "<html><body><div id=\"intro\">一段简介。</div><div id=\"list\"><dl>" +
             names.mapIndexed { i, n -> "<dd><a href=\"/0/321/${i + 1}.html\">$n</a></dd>" }.joinToString("") +
             "</dl></div></body></html>"
 
@@ -68,6 +68,30 @@ class BookDownloadTest {
 
     private fun downloader(r: Rule, s: Script, store: ChapterStore, sleeps: MutableList<Long>) =
         BookDownloader(r, s, store, sleep = { sleeps.add(it) }, clock = { 1_000L }, random = Random(7))
+
+    /**
+     * 「先拉开头」：目录整本读回来（大纲要它、简介也在这一页），但**只有前 N 章发正文请求**。
+     *
+     * 这条要单独判是因为"多拉了"的表现不是报错，是安静地一次打人家站几百个请求 ——
+     * 界面看着一切正常，只有请求数知道。
+     */
+    @Test
+    fun aHeadDownloadFetchesOnlyTheFirstChaptersAndStillHandsOutTheIntro() {
+        val six = listOf("第一章 起", "第二章 承", "第三章 转", "第四章 合", "第五章 外", "第六章 传")
+        val s = Script(pages(mapOf(1 to "一。", 2 to "二。", 3 to "三。", 4 to "四。", 5 to "五。", 6 to "六。"), six))
+        val out = downloader(rule(), s, MemoryStore(), mutableListOf()).download(hit, limit = 2)
+        val hits = s.requests.count { it.endsWith(".html") }
+        println("[开头] 章=${out.chapters} 正文请求=$hits 简介=${out.intro}")
+        assertEquals("成书只有开头两章", 2, out.chapters)
+        assertEquals("第三到第六章一次请求都不该发", 2, hits)
+        assertEquals("书页只请求一次（目录和简介同一页拿）", 1, s.count("http://www.example-hu.com/0/321/"))
+        assertTrue(out.body.contains("一。") && out.body.contains("二。"))
+        assertTrue("后四章不该混进书里", !out.body.contains("三。") && !out.body.contains("六。"))
+        assertEquals("简介要一起交出去，界面上「本书信息」读它", "一段简介。", out.intro)
+        assertEquals("只拉两章，大纲仍要给全六章", 6, out.outline.size)
+        assertEquals("第六章 传", out.outline.last())
+        assertTrue("全本齐：开头包没有缺章，缺章那一栏要留空", out.complete)
+    }
 
     @Test
     fun chaptersAssembleInCatalogOrderEvenWhenThreadsFinishOutOfOrder() {

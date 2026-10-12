@@ -18,12 +18,33 @@ data class Rule(
     /** 站点响应体的字符集；空 = 先看 HTTP 头，再看 meta 标签，最后按 UTF-8。老站一大半是 GBK。 */
     val charset: String,
     val search: SearchRule?,
+    /** 书页上那张封面图的 pick 写法（`#fmimg img @src`）。空 = 这条源不取封面，书架上走默认封面。 */
+    val cover: String,
+    /** 书页上"内容简介"那一格的 pick 写法（`#intro`）。空 = 这本书没有简介可取。 */
+    val intro: String,
+    /** 首页/榜单页上那些分类块。空 = 这条源没有热门可抓，精选那一页就不列它。 */
+    val hot: HotRule?,
     val toc: TocRule,
     val chapter: ChapterRule,
     val crawl: CrawlRule,
 ) {
     val canSearch: Boolean get() = search != null
 }
+
+/**
+ * 热门/榜单：一条源往往把首页切成好几个分类块（`group`），块上写着分类名（`category`），
+ * 块里每一本书是 `item`。分两级选是因为分类名挂在块上、不在每一行里 ——
+ * 只按行选就把"这本书属于哪个分类"丢了，而"阅读爱好"筛的正是它。
+ */
+data class HotRule(
+    val url: String,
+    val group: String,
+    val item: String,
+    val bookName: String,
+    val author: String,
+    val category: String,
+    val bookUrl: String,
+)
 
 /** 搜索：url 里的 %s 换成关键词（自动按 URL 编码）；各取值字段见 [pick]。 */
 data class SearchRule(
@@ -60,6 +81,9 @@ data class CrawlRule(
     val maxAttempts: Int,
 )
 
+/** 一本书的"头"：简介全文 + 完整目录（章名, 章链接）。"大纲"就是目录的前若干条章名。 */
+data class BookHead(val intro: String, val chapters: List<Pair<String, String>>)
+
 /** 一条搜索命中。sourceId/sourceName 带着走：聚合搜索里同一本书会在好几个源里出现。 */
 data class BookHit(
     val sourceId: String,
@@ -76,12 +100,13 @@ data class BookHit(
 
 object RuleLoader {
 
-    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "search", "toc", "chapter", "crawl")
+    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "cover", "intro", "hot", "search", "toc", "chapter", "crawl")
     private val SEARCH = setOf(
         "url", "method", "data", "cookies", "item", "bookName", "author", "category",
         "latestChapter", "lastUpdateTime", "wordCount", "intro", "bookUrl",
     )
     private val TOC = setOf("url", "item", "nextPage")
+    private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl")
     private val CHAPTER = setOf("content", "filter")
     private val CRAWL = setOf("concurrency", "minIntervalMs", "maxIntervalMs", "maxAttempts")
 
@@ -120,6 +145,21 @@ object RuleLoader {
             homeUrl = str(o, "homeUrl", where, required = true),
             note = str(o, "note", where),
             charset = str(o, "charset", where),
+            cover = str(o, "cover", where),
+            intro = str(o, "intro", where),
+            hot = o["hot"]?.let { h ->
+                val m = Json.obj(h)
+                unknown(m, HOT, "$where.hot")
+                HotRule(
+                    url = str(m, "url", "$where.hot").also { legalUrl(it, "$where.hot.url") },
+                    group = str(m, "group", "$where.hot", required = true),
+                    item = str(m, "item", "$where.hot", required = true),
+                    bookName = str(m, "bookName", "$where.hot", required = true),
+                    author = str(m, "author", "$where.hot"),
+                    category = str(m, "category", "$where.hot"),
+                    bookUrl = str(m, "bookUrl", "$where.hot", required = true),
+                )
+            },
             search = search,
             toc = TocRule(
                 url = str(toc, "url", "$where.toc").also { legalUrl(it, "$where.toc.url") },
@@ -141,6 +181,11 @@ object RuleLoader {
         ).also {
             if (it.crawl.maxIntervalMs < it.crawl.minIntervalMs) {
                 throw RuleException("$where.crawl：maxIntervalMs 比 minIntervalMs 还小，这样取到的区间是空的")
+            }
+            // 封面必须写成 `选择器 @src`：不带 @ 的话 pick 会老老实实回那个元素的**文字**，
+            // 于是"取封面"变成拿 alt 属性当图片地址去请求 —— 不报错，就是永远存不下封面
+            if (it.cover.isNotEmpty() && !it.cover.contains('@')) {
+                throw RuleException("$where.cover：得写成「选择器 @src」这种取值写法（例：#fmimg img @src），现在只会取到元素的文字")
             }
         }
     }

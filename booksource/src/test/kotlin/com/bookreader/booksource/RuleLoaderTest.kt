@@ -30,6 +30,7 @@ class RuleLoaderTest {
         println("[模板] id=${r.id} 能搜=${r.canSearch} 目录=${r.toc.item} 正文=${r.chapter.content} filter=${r.chapter.filter}")
         assertTrue("模板得能搜", r.canSearch)
         assertTrue("目录和正文两格都要有选择器", r.toc.item.isNotEmpty() && r.chapter.content.isNotEmpty())
+        assertTrue("封面那格得写成「选择器 @src」，模板里也要写着", r.cover.contains("@"))
         assertTrue("限速区间要取得出", r.crawl.maxIntervalMs >= r.crawl.minIntervalMs)
         assertEquals("charset 要写明，别让人猜", "utf-8", r.charset)
     }
@@ -85,6 +86,44 @@ class RuleLoaderTest {
         val bad = text("/rules/tianxi.json").replace("\"minIntervalMs\": 800", "\"minIntervalMs\": 9000")
         val e = runCatching { RuleLoader.load(bad, "区间反了") }.exceptionOrNull()
         assertTrue("实际：" + e?.message, e is RuleException && e.message!!.contains("maxIntervalMs"))
+    }
+
+    @Test
+    fun aHotBlockMissingItsRowSelectorIsRefusedAndAnUnknownKeyInsideItIsNamed() {
+        val base = text("/rules/shuhu.json")
+        val e1 = runCatching {
+            RuleLoader.load(base.replace("\"toc\":", "\"hot\": { \"url\": \"http://x/\", \"group\": \"c\" }, \"toc\":"), "缺行选择器")
+        }.exceptionOrNull()
+        assertTrue("要指名缺的是哪一格，实际：" + e1?.message,
+            e1 is RuleException && e1.message!!.contains("hot") && e1.message!!.contains("item"))
+        val e2 = runCatching {
+            RuleLoader.load(
+                base.replace("\"toc\":", "\"hot\": { \"group\": \"c\", \"item\": \"li\", \"bookName\": \"a\", \"bookUrl\": \"a@href\", \"ittm\": \"x\" }, \"toc\":"),
+                "拼错键名",
+            )
+        }.exceptionOrNull()
+        assertTrue("要说清是哪个键不认识，实际：" + e2?.message, e2 is RuleException && e2.message!!.contains("ittm"))
+        val ok = RuleLoader.load(
+            base.replace("\"toc\":", "\"hot\": { \"url\": \"http://x/\", \"group\": \"div.content\", \"item\": \"ul li\", \"bookName\": \"a\", \"bookUrl\": \"a@href\" }, \"toc\":"),
+            "一条带榜单的源",
+        )
+        assertEquals("div.content", ok.hot?.group)
+        assertEquals("", ok.hot?.author)
+        assertEquals("夹具那份写着的 intro 要原样带出来", "#intro", ok.intro)
+    }
+
+    @Test
+    fun aCoverSelectorWithoutAnAttributeIsRefusedAtLoadTime() {
+        // 不带 @ 的话 pick 会回那个元素的**文字**（alt 属性那种），"取封面"就变成拿一句话当图片地址去请求，
+        // 不报错、只是永远存不下封面 —— 所以导入时就拒
+        // 夹具那份本来就写着 `#fmimg img @src`，所以是"把它换成不带 @ 的"而不是再注入一格
+        // （再注入会被重复键检查先拦掉，那条判据在 duplicatedKeyIsRefused 里）
+        val e = runCatching {
+            RuleLoader.load(text("/rules/shuhu.json").replace("\"cover\": \"#fmimg img @src\"", "\"cover\": \"#fmimg img\""), "无@的封面")
+        }.exceptionOrNull()
+        assertTrue("实际：" + e?.message, e is RuleException && e.message!!.contains("cover"))
+        val ok = RuleLoader.load(text("/rules/shuhu.json"), "带@的封面")
+        assertEquals("#fmimg img @src", ok.cover)
     }
 
     @Test

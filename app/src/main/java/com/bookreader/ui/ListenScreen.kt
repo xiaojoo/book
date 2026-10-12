@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bookreader.R
+import com.bookreader.core.model.BookMeta
 import com.bookreader.core.layout.sentenceStarts
 import com.bookreader.data.AiVoicePlayer
 import kotlinx.coroutines.delay
@@ -92,7 +93,7 @@ fun ListenScreen(
     theme: ReaderTheme,
     chapterTitle: String,
     bookTitle: String,
-    coverRes: Int?,
+    meta: BookMeta,
     paragraph: String,
     busy: Boolean,
     playing: Boolean,
@@ -260,22 +261,8 @@ fun ListenScreen(
 
             Spacer(Modifier.weight(1f))
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                if (coverRes != null) {
-                    Image(
-                        painter = painterResource(coverRes),
-                        contentDescription = bookTitle,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(width = 170.dp, height = 227.dp).clip(RoundedCornerShape(6.dp)),
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(width = 170.dp, height = 227.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(theme.barColor),
-                        contentAlignment = Alignment.Center,
-                    ) { Text(bookTitle.take(2), fontSize = 30.sp, fontWeight = FontWeight.Medium, color = theme.inkColor) }
-                }
+                // 封面三档退：抓来的 cover.jpg > 样例图 > 按书名哈希取色的默认封面（和书架同一颗）
+                BookCover(meta.title, meta.id, Modifier.size(width = 170.dp, height = 227.dp), radius = 6.dp)
             }
             Spacer(Modifier.weight(1f))
 

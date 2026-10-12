@@ -4,6 +4,9 @@
   "homeUrl": "http://www.mcxs.la/",
   "note": "2026-10-11 从这台机实测：搜「剑来」出结果。非大陆 IP 可能搜不到（站点自己限 IP）",
   "charset": "utf-8",
+  "cover": "#fmimg img @src",
+  "intro": "#intro",
+  "hot": {"url": "http://www.mcxs.la/", "group": "div.content", "item": "ul li", "bookName": "a", "author": "a:nth-child(2)@text", "category": "h2", "bookUrl": "a@href"},
   "search": {
     "url": "http://www.mcxs.la/search.html",
     "method": "POST",

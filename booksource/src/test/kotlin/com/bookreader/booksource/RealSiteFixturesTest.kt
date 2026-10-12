@@ -219,6 +219,61 @@ class RealSiteFixturesTest {
      * 它随包进界面时，「这本书最后 83 章是串页的」就是 Known，而不是等下完才发现。
      */
     @Test
+    fun bothShippedSourcesReadTheIntroOffTheirRealBookPage() {
+        val m = live("mengshu-book.html", "http://www.mcxs.la/1_1639/")
+        val a = live("aixiashu-book.html", "http://www.aixiashu.la/2/2196/")
+        val im = introOf(rule("mengshu"), m.first, m.second)
+        val ia = introOf(rule("aixiashu"), a.first, a.second)
+        println("[简介] 梦书=${im.length} 字  爱下书=${ia.length} 字")
+        // 两家这条是同一本书（剑来）的同一句简介，逐字对得上才算这条规则真的取到了那一格
+        assertTrue("梦书那页的 #intro 要取到正文，实际：$im", im.startsWith("大千世界，无奇不有"))
+        assertTrue("爱下书同一格（它在 #intro 里多套了一层 p），实际：$ia", ia.startsWith("大千世界，无奇不有"))
+        // 只差一个空格：梦书那格句末带 &nbsp;，爱下书不带。抹掉空白再比，比的是"取到的是同一段话"
+        assertEquals("两家这条简介抹掉空白后该逐字相同", im.filterNot { it.isWhitespace() }, ia.filterNot { it.isWhitespace() })
+        assertTrue("简介里不该带 HTML 标签", !im.contains('<') && !ia.contains('<'))
+    }
+
+    @Test
+    fun hotBlocksOnBothHomepagesYieldBooksWithTheirCategory() {
+        val m = live("mengshu-home.html", "http://www.mcxs.la/")
+        val a = live("aixiashu-home.html", "http://www.aixiashu.la/")
+        val hm = hotBooks(rule("mengshu"), m.first, m.second)
+        val ha = hotBooks(rule("aixiashu"), a.first, a.second)
+        println("[热门] 梦书=${hm.size} 本（分类=${hm.map { it.category }.distinct().take(4)}）  爱下书=${ha.size} 本")
+        assertTrue("梦书首页六个分类块不该只抓出这么几条：${hm.size}", hm.size >= 30)
+        assertTrue("爱下书首页四个分类块不该只抓出这么几条：${ha.size}", ha.size >= 20)
+        assertTrue("每一条都得带分类名（阅读爱好筛的就是它）", hm.all { it.category.isNotEmpty() } && ha.all { it.category.isNotEmpty() })
+        assertTrue("每一条都得带绝对书链接", hm.all { it.bookUrl.startsWith("http") } && ha.all { it.bookUrl.startsWith("http") })
+        // 两家把作者排在不同地方：梦书是第二个 <a>，爱下书是行里 a 后面那截裸字（`@text` + 去行首斜杠）
+        val jianlai = ha.firstOrNull { it.bookName == "剑来" }
+        assertTrue("爱下书榜单里《剑来》的作者要从「/烽火戏诸侯」那截裸字里取出来，实际取到：" + jianlai?.author, jianlai?.author == "烽火戏诸侯")
+        val first = hm.first()
+        assertTrue("梦书那行的作者取的是第二个 a，不是整行文字：" + first.author, first.author.isNotEmpty() && !first.author.contains(first.bookName))
+    }
+
+    @Test
+    fun bothShippedSourcesFindTheCoverOnTheirRealBookPage() {
+        val m = live("mengshu-book.html", "http://www.mcxs.la/1_1639/")
+        val a = live("aixiashu-book.html", "http://www.aixiashu.la/2/2196/")
+        val cm = coverUrl(rule("mengshu"), m.first, m.second)
+        val ca = coverUrl(rule("aixiashu"), a.first, a.second)
+        println("[封面] 梦书=$cm  爱下书=$ca")
+        assertEquals("http://www.mcxs.la/files/article/image/1/1639/1639s.jpg", cm)
+        assertEquals("http://www.aixiashu.la/files/article/image/2/2196/2196s.jpg", ca)
+    }
+
+    @Test
+    fun aSourceThatDeclaresNoCoverYieldsAnEmptyUrlNotACrash() {
+        val bare = RuleLoader.load(
+            String(res("/booksource/ranwen.json"), Charsets.UTF_8).replace("\"id\": \"ranwen\"", "\"id\": \"ranwen\", \"cover\": \"\""),
+            "ranwen-无封面",
+        )
+        assertEquals("没写 cover 就是空串", "", bare.cover)
+        val m = live("mengshu-book.html", "http://www.mcxs.la/1_1639/")
+        assertEquals("规则没写就不去页上乱找", "", coverUrl(bare, m.first, m.second))
+    }
+
+    @Test
     fun aixiashuLastVolumeChaptersPointAtAnotherBooksTextAndNothingInDomSaysSo() {
         val (html, base) = live("aixiashu-chapter-scrambled.html", "http://www.aixiashu.la/2/2196/64638193.html")
         val text = chapterText(rule("aixiashu"), html, base)
