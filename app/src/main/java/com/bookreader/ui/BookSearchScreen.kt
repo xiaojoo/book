@@ -39,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -88,6 +89,21 @@ import kotlinx.coroutines.withContext
  */
 enum class SearchPage { Search, Tasks, Manage }
 
+/** 「先拉开头」那一颗拉几章。10 章够看出这本书要不要，又不至于把整本抓完。 */
+private const val HEAD_CHAPTERS = 10
+
+/** 搜索结果那一行 → 「本书信息」那一页。简介/大纲这一行没有，进去再补抓一次。 */
+private fun infoOf(hit: BookHit) = BookInfo(
+    title = hit.bookName,
+    author = hit.author,
+    category = hit.category,
+    latestChapter = hit.latestChapter,
+    wordCount = hit.wordCount,
+    intro = hit.intro,
+    bookUrl = hit.bookUrl,
+    sourceId = hit.sourceId,
+)
+
 /**
  * 搜书：选一条书籍源 → 输书名 → 出结果 → 点「下载」抓完整本进书架。
  *
@@ -102,6 +118,7 @@ fun BookSearchScreen(
     page: SearchPage,
     onPage: (SearchPage) -> Unit,
     onOpen: (String) -> Unit,
+    onInfo: (BookInfo) -> Unit,
 ) {
     ApplySystemBars(darkIcons = !Chrome.night)
     // 全屏那两页把底栏让掉了，唯一的出口就剩页头那颗 ✕ 和系统返回键 —— 两个都要能回搜书
@@ -306,7 +323,15 @@ fun BookSearchScreen(
                                     reload++
                                 }
                             },
+                            onHead = {
+                                val r = current
+                                if (r == null) note = "先在上面选一条能用的源" else {
+                                    Downloads.start(context, r, h, update = false, head = HEAD_CHAPTERS)
+                                    reload++
+                                }
+                            },
                             onPause = { Downloads.pause(context, h.bookUrl); reload++ },
+                            onInfo = onInfo,
                         )
                     }
                 }
@@ -319,7 +344,7 @@ fun BookSearchScreen(
 
 /** 一次只可能开一页，所以这三页共用一个页头：标题 + 右上角那颗 ✕（唯一的出口要看得见）。 */
 @Composable
-private fun PageHeader(title: String, onClose: () -> Unit) {
+internal fun PageHeader(title: String, onClose: () -> Unit) {
     // 左右都 16dp：标题那一格的左边缘和页头那颗 ✕ 的右边缘在同一条线上（以前右边是 8dp +
     // 一颗居中的图标，墨落在 21.5dp 处，跟左边差 5.5dp，一眼能看出歪）
     Row(
@@ -327,7 +352,8 @@ private fun PageHeader(title: String, onClose: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, fontSize = 19.sp, fontWeight = FontWeight.Medium, color = Chrome.ink, modifier = Modifier.weight(1f))
-        IconAction(R.drawable.ic_close, "关闭这一页", Chrome.faint, box = 44.dp) { onClose() }
+        // 页头这颗不挂气泡：它的名字就写在同一行左边（「下载任务」「管理书籍源」），再说一遍就是重复
+        IconAction(R.drawable.ic_close, "关闭这一页", Chrome.faint, box = 44.dp, tipOn = false) { onClose() }
     }
     SearchHairline()
 }
@@ -347,7 +373,9 @@ private fun SearchResultRow(
     onOpen: (String) -> Unit,
     onNote: (String) -> Unit,
     onStart: (Boolean) -> Unit,
+    onHead: () -> Unit,
     onPause: () -> Unit,
+    onInfo: (BookInfo) -> Unit,
 ) {
     val sub = listOfNotNull(
         hit.author.takeIf { it.isNotEmpty() },
@@ -356,7 +384,9 @@ private fun SearchResultRow(
     ).joinToString(" · ")
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            // 左边那一整块就是「看看这本是什么」的命中区：书名/作者/最新章本来就摆在一起，
+            // 再单独画一颗「详情」就是把同一件事说两遍
+            Column(Modifier.weight(1f).tap { onInfo(infoOf(hit)) }) {
                 Text(hit.bookName, fontSize = 15.sp, color = Chrome.ink, maxLines = 1)
                 Text(
                     (if (sub.isEmpty()) "" else sub + " · ") + hit.sourceName,
@@ -376,7 +406,11 @@ private fun SearchResultRow(
             }
             Spacer(Modifier.width(10.dp))
             when {
-                task == null -> SheetAction("下载", Chrome.accent, rule != null) { onStart(false) }
+                task == null -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // 两颗分开：先拉十章 = 快点能读，下载 = 一次到底。他要的是"全本那颗不动"
+                    SheetAction("先拉开头", Chrome.accent, rule != null) { onHead() }
+                    SheetAction("下载", Chrome.accent, rule != null) { onStart(false) }
+                }
                 task.running -> IconAction(R.drawable.ic_pause, "暂停这一本", Chrome.accent) { onPause() }
                 task.state == DownloadRecord.STATE_FAILED -> IconAction(R.drawable.ic_play, "重试：从没抓完的那一章接着来", Chrome.danger) { onStart(false) }
                 task.resumable -> IconAction(R.drawable.ic_play, "接着下", Chrome.accent) { onStart(false) }
@@ -584,12 +618,15 @@ private fun IconAction(
     tint: Color,
     enabled: Boolean = true,
     box: Dp = 40.dp,
+    tipOn: Boolean = true,
     onClick: () -> Unit,
 ) {
     val src = remember { MutableInteractionSource() }
     val tip = LocalTip.current
     var at by remember { mutableStateOf(Rect.Zero) }
     val pressed = src.collectIsPressedAsState().value
+    // 这一颗的身份证：气泡归"把它挂上去的那一颗"收，凭身份、不凭位置
+    val owner = remember { Any() }
     Box(
         Modifier
             .size(box)
@@ -600,17 +637,36 @@ private fun IconAction(
     ) {
         Icon(painterResource(icon), desc, tint = tint, modifier = Modifier.size(17.dp))
     }
-    // 按住 = 把自己挂到那一格的气泡层上；抬手 = 只收回自己那条（at 是这一颗的位置，别的颗改不动）
-    LaunchedEffect(pressed, at) {
-        if (pressed && at != Rect.Zero) tip.value = Tip(at, desc, box)
-        else if (tip.value?.at == at) tip.value = null
+    // 按住 = 把自己挂到那一格的气泡层上；抬手 = 只收回自己那条
+    LaunchedEffect(pressed, at, tipOn) {
+        if (pressed && tipOn && at != Rect.Zero) tip.value = Tip(at, desc, box, owner)
+        else if (tip.value?.owner === owner) tip.value = null
+    }
+    // 真正治"手移开也不消失"的是这一条：按 ✕ 那一颗会把这一页整个换掉，这颗直接离开组合，
+    // 上面那个 else 分支根本没机会跑；离开组合时不清，气泡就永久留在屏幕上了（他报的就是这个）
+    DisposableEffect(owner) {
+        onDispose { if (tip.value?.owner === owner) tip.value = null }
     }
 }
 
 /** 一颗按住的图标交给气泡层的全部信息：它在窗口里的位置、要写的字、那一格多宽（三角要指着正中）。 */
-private class Tip(val at: Rect, val text: String, val box: Dp)
+private class Tip(val at: Rect, val text: String, val box: Dp, val owner: Any)
 
 private val LocalTip = compositionLocalOf<MutableState<Tip?>> { error("这一格没铺气泡层") }
+
+/**
+ * 气泡压在图标上方还是下方，以及那一格的顶内衬（px，**保证不为负**）。
+ *
+ * 单独抽出来当纯函数算，是因为它喂的是 Compose 的 `padding`：内衬一旦为负，Compose 不夹取而是
+ * 直接抛 `IllegalArgumentException: Padding must be non-negative` 把进程打死。全屏那两页的页头
+ * 离容器顶只剩 34dp，气泡要往上占 36dp → 按住 ✕ 那一瞬间就崩过一次（他报的是"点 ✕ 程序直接退出"）。
+ *
+ * @param risePx 整块气泡的高 = 药丸 26 + 三角 6 + 与图标的间隙 4
+ */
+internal fun tipSlot(atTop: Float, atBottom: Float, rootTop: Float, risePx: Float, gapPx: Float): Pair<Boolean, Float> {
+    val above = atTop - rootTop >= risePx
+    return above to if (above) atTop - rootTop - risePx else atBottom - rootTop + gapPx
+}
 
 /**
  * 按住图标时浮出来的那颗气泡，整颗自己画：系统那颗 Tooltip 要按住约 500ms 才出、样式也归它管，
@@ -621,34 +677,38 @@ private val LocalTip = compositionLocalOf<MutableState<Tip?>> { error("这一格
  * 所以位置 = 图标在窗口里的位置 - 这一格在窗口里的位置，两个数都是 `boundsInWindow()` 自己拿的。
  *
  * 气泡右边缘贴图标格的右边缘（图标都在行尾，往左长才不会出屏），三角指着那一格的水平正中 →
- * 离右边缘 = 格子宽的一半。药丸 26dp + 三角 6dp + 与图标的间隙 4dp = 整块高 36dp，定死的数。
+ * 离右边缘 = 格子宽的一半。上方放不下就整块翻到图标下面、三角跟着翻向，见 [tipSlot]。
  * 底色 `Chrome.ink`、字 `Chrome.page`，夜间不用另写一套。
  */
 @Composable
 private fun TipBubble(t: Tip, root: Rect) {
     val density = LocalDensity.current
+    val rise = with(density) { 36.dp.toPx() }
+    val (above, topPx) = tipSlot(t.at.top, t.at.bottom, root.top, rise, with(density) { 4.dp.toPx() })
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
                 .align(Alignment.TopEnd)
                 .padding(
                     end = with(density) { (root.right - t.at.right).toDp() },
-                    top = with(density) { (t.at.top - root.top).toDp() } - 36.dp,
+                    top = with(density) { topPx.toDp() },
                 ),
         ) {
-            // 外层那 6dp 是给三角占的位：三角画在药丸底下（drawBehind 排在 clip 前面，才不被它裁掉），
+            // 靠图标那一侧的 6dp 是给三角占的位：三角画在药丸外（drawBehind 排在 clip 前面，才不被它裁掉），
             // 但高度要算进气泡里，不然它落在这一格的测量范围外
-            Box(Modifier.padding(bottom = 6.dp)) {
+            Box(Modifier.padding(if (above) PaddingValues(bottom = 6.dp) else PaddingValues(top = 6.dp))) {
                 Box(
                     Modifier
                         .drawBehind {
                             val half = 6.dp.toPx()
                             val cx = (size.width - (t.box / 2f).toPx()).coerceIn(half + 4.dp.toPx(), size.width - 4.dp.toPx())
+                            val base = if (above) size.height else 0f
+                            val tip = if (above) size.height + 6.dp.toPx() else -6.dp.toPx()
                             drawPath(
                                 Path().apply {
-                                    moveTo(cx - half, size.height)
-                                    lineTo(cx + half, size.height)
-                                    lineTo(cx, size.height + 6.dp.toPx())
+                                    moveTo(cx - half, base)
+                                    lineTo(cx + half, base)
+                                    lineTo(cx, tip)
                                     close()
                                 },
                                 Chrome.ink,

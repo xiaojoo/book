@@ -3,7 +3,18 @@
   "name": "示例源（照这份改成你要的那条）",
   "homeUrl": "http://www.example.com/",
   "charset": "utf-8",
-  "note": "这是模板，装上它是搜不到东西的（地址是 example.com）。要动的每一格：id = 英文短名，两条源不能重（重了下载的章会串档）；name = 界面上那颗 chip 显示的字；homeUrl = 站点首页；charset = 页面 meta 里那个（gbk 的站写 gbk，不写就是 utf-8）；search.url = 搜索口（%s 会被书名替掉，翻页的站还能用 %n）；search.method + search.data = POST 时发的那张表单，写成 {字段名: 值} 就行；search.item = 结果里每一行的选择器，行里再写 bookName / author / bookUrl（`css` 取那一格的文字，`css@href` 取链接）；toc.item = 目录页上每一章那个 <a> 的选择器；chapter.content = 正文容器的选择器；chapter.filter = 要丢掉的广告正则，一条一个字符串；crawl = 并发、两条请求之间的随机间隔、重试次数。要跑 JavaScript 才出得来正文的源装不上（手机上不内嵌 JS 引擎）。",
+  "note": "这是模板，装上它是搜不到东西的（地址是 example.com）。要动的每一格：id = 英文短名，两条源不能重（重了下载的章会串档）；name = 界面上那颗 chip 显示的字；homeUrl = 站点首页；charset = 页面 meta 里那个（gbk 的站写 gbk，不写就是 utf-8）；cover = 书页上那张封面图的选择器，必须写成「css @src」这种取值写法（例：#fmimg img @src），留空就是不取封面、书架走默认封面；search.url = 搜索口（%s 会被书名替掉，翻页的站还能用 %n）；search.method + search.data = POST 时发的那张表单，写成 {字段名: 值} 就行；search.item = 结果里每一行的选择器，行里再写 bookName / author / bookUrl（`css` 取那一格的文字，`css@href` 取链接）；toc.item = 目录页上每一章那个 <a> 的选择器；chapter.content = 正文容器的选择器；chapter.filter = 要丢掉的广告正则，一条一个字符串；intro = 书页上「内容简介」那一格的选择器（`#intro`）；hot = 首页/榜单那一族：group 是一个分类块（块上用 category 取分类名），item 是块里每一本书，行里再写 bookName / author / bookUrl；author 写 `@text` 表示取这一行自己的文字（榜单常排成 `<li><a>书名</a>/作者</li>`，书名在 a 里、作者在外面）；整段不写就是这条源没有热门可抓；crawl = 并发、两条请求之间的随机间隔、重试次数。要跑 JavaScript 才出得来正文的源装不上（手机上不内嵌 JS 引擎）。",
+  "cover": "#fmimg img @src",
+  "intro": "#intro",
+  "hot": {
+    "url": "http://www.example.com/",
+    "group": "div.content",
+    "item": "ul li",
+    "bookName": "a",
+    "author": "@text",
+    "category": "h2",
+    "bookUrl": "a@href"
+  },
   "search": {
     "url": "http://www.example.com/modules/article/search.php",
     "method": "POST",

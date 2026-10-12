@@ -1,5 +1,6 @@
 package com.bookreader.ui
 
+import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -47,15 +49,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bookreader.R
 import com.bookreader.core.model.BookMeta
 import com.bookreader.data.BookLibrary
+import com.bookreader.data.BookProvenance
 import com.bookreader.data.ReaderPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -77,6 +84,7 @@ fun LibraryScreen(
     library: BookLibrary,
     prefs: ReaderPrefs,
     onOpen: (BookMeta) -> Unit,
+    onInfo: (BookInfo) -> Unit,
     notice: String? = null,
 ) {
     var books by remember { mutableStateOf(library.list().shelfOrder(prefs)) }
@@ -262,6 +270,20 @@ fun LibraryScreen(
                 actionsFor = null
                 renameFor = meta
             },
+            onInfo = if (BookProvenance(library.dir(meta.id)).known) {
+                {
+                    val p = BookProvenance(library.dir(meta.id))
+                    actionsFor = null
+                    onInfo(
+                        BookInfo(
+                            title = meta.title, author = meta.author, bookId = meta.id,
+                            intro = p.intro(), outline = p.outline(),
+                            bookUrl = p.bookUrl(), sourceId = p.ruleId(),
+                            wordCount = formatChars(meta.totalChars),
+                        ),
+                    )
+                }
+            } else null,
             onPin = {
                 prefs.setPinned(meta.id, !prefs.isPinned(meta.id))
                 reload()
@@ -327,6 +349,8 @@ private fun List<BookMeta>.shelfOrder(prefs: ReaderPrefs): List<BookMeta> =
 private fun BookActionSheet(
     meta: BookMeta,
     pinned: Boolean,
+    /**  null = 这本不是从书源下来的（本地导入那一类），连这一行都不摆 —— 摆着点了没东西可看。 */
+    onInfo: (() -> Unit)?,
     onDismiss: () -> Unit,
     onRemove: () -> Unit,
     onRename: () -> Unit,
@@ -338,6 +362,7 @@ private fun BookActionSheet(
         // 这一层里有两个动作是回不去的，所以最上面先说清"这是哪一本"；书名长就换行，不裁
         header = { Text(meta.title, fontSize = 16.sp, color = Chrome.ink, lineHeight = 22.sp) },
     ) {
+        onInfo?.let { BookActionRow("本书信息", onClick = it) }
         BookActionRow("移除书架", onClick = onRemove)
         BookActionRow("重命名", onClick = onRename)
         // 点完这一颗书名那一行右边的标记要跟着变，所以标题跟着状态走，不写死"置顶"
@@ -445,7 +470,6 @@ private fun BookRow(
 ) {
     val whole = BookMeta.WHOLE_PAGE.contains(meta.kind)
     val unread = if (whole) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
-    val cover = coverOf(meta.title)
     Row(
         modifier = Modifier
                 .fillMaxWidth()
@@ -456,24 +480,7 @@ private fun BookRow(
             .padding(top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (cover != null) {
-            Image(
-                painter = painterResource(cover),
-                contentDescription = meta.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(width = 48.dp, height = 64.dp).clip(RoundedCornerShape(4.dp)),
-            )
-        } else {
-            // 行底现在是 Chrome.page，占位封面退一档用 Chrome.chip：还是同一套 token，不再造新颜色
-            Box(
-                modifier = Modifier
-                    .size(width = 48.dp, height = 64.dp)
-                    .background(Chrome.chip, RoundedCornerShape(4.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(meta.title.take(2), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
-            }
-        }
+        BookCover(meta.title, meta.id, Modifier.size(width = 48.dp, height = 64.dp))
         Spacer(Modifier.size(12.dp))
         Column(Modifier.fillMaxWidth()) {
             // 作者这一档：抽不出作者的件（txt / 本地文档全是）不能把分隔点单独晾在行首
@@ -524,10 +531,77 @@ private fun BookRow(
     }
 }
 
-/** 参考截图里有的书有封面；没封面的书用书名前两字占位，不放假图冒充。听书浮窗也读这一颗。 */
+/** 精选那几本带的样例图。源站没抓到封面的书不再走这一颗，走下面的 [BookCover]。 */
 internal fun coverOf(title: String): Int? = when {
     title.contains("剑来") || title.contains("jianlai", ignoreCase = true) -> R.drawable.cover_jianlai
     else -> null
+}
+
+/** 默认封面的底色：按书名的稳定哈希取，同一本每次进来都是同一档。 */
+internal fun coverSwatch(title: String, palette: IntArray): Int = palette[coverHash(title) % palette.size]
+
+/** `hashCode` 会回负数，`%` 出来还是负的下标 —— 先抹成非负。 */
+internal fun coverHash(title: String): Int = (title.hashCode() % 1_000_000 + 1_000_000) % 1_000_000
+
+private val COVER_DAY = intArrayOf(
+    0xFFB7C7D8.toInt(), 0xFFD8C3B0.toInt(), 0xFFBFD6C3.toInt(),
+    0xFFD6BFC9.toInt(), 0xFFC9C3D8.toInt(), 0xFFDCD3B7.toInt(),
+)
+private val COVER_NIGHT = intArrayOf(
+    0xFF3A4550.toInt(), 0xFF50443A.toInt(), 0xFF3C4C40.toInt(),
+    0xFF4C3C44.toInt(), 0xFF433C50.toInt(), 0xFF4F4636.toInt(),
+)
+
+/**
+ * 一本书的封面，三档从上往下退：**源站抓回来的 `cover.jpg`** → 样例图（只有精选那几本）→ **默认封面**。
+ * 传 (书名, 书架 id) 而不是 BookMeta：「本书信息」那一页在书还没进书架时也要画同一颗封面。
+ *
+ * 默认封面按书名哈希从色板取一档底色 + 书名横排（他点的这一档）：一排没封面的书各自颜色不同，
+ * 扫一眼分得清是哪本。原先那是"书名前两字"的灰块，所有书长得一模一样。
+ * 色板分日/夜两列（日间浅底深字、夜间深底浅字），字都读 `Chrome.ink`；左边那条竖的是书脊。
+ */
+@Composable
+internal fun BookCover(title: String, bookId: String, modifier: Modifier = Modifier, radius: Dp = 4.dp, titleOn: Boolean = true) {
+    val ctx = LocalContext.current
+    val file = remember(bookId) { BookLibrary(ctx).coverFile(bookId) }
+    val bmp = remember(bookId, file.lastModified()) {
+        if (file.isFile) BitmapFactory.decodeFile(file.absolutePath) else null
+    }
+    val sample = coverOf(title)
+    when {
+        bmp != null -> Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = title,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.clip(RoundedCornerShape(radius)),
+        )
+        sample != null -> Image(
+            painter = painterResource(sample),
+            contentDescription = title,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.clip(RoundedCornerShape(radius)),
+        )
+        else -> Box(
+            modifier.background(
+                Color(coverSwatch(title, if (Chrome.night) COVER_NIGHT else COVER_DAY)),
+                RoundedCornerShape(radius),
+            ),
+        ) {
+            Box(Modifier.fillMaxHeight().width(4.dp).background(Color(0x33000000)))
+            if (titleOn) {
+                Text(
+                    title,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Chrome.ink,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxSize().padding(start = 10.dp, end = 6.dp, top = 8.dp, bottom = 6.dp),
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -541,33 +615,12 @@ private fun BookCard(
     val whole = BookMeta.WHOLE_PAGE.contains(meta.kind)
     // 参考截图那一行写的是"12章未读"，我们手上有章号，就用同一个口径，不写"读到 0%"这种看不出东西的百分比
     val unread = if (whole) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
-    val cover = coverOf(meta.title)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress),
     ) {
-        if (cover != null) {
-            Image(
-                painter = painterResource(cover),
-                contentDescription = meta.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(116.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(116.dp)
-                    .background(Chrome.card, RoundedCornerShape(4.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(meta.title.take(2), fontSize = 24.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
-            }
-        }
+        BookCover(meta.title, meta.id, Modifier.fillMaxWidth().height(116.dp))
         // 书名不截断：截断等于这个控件没做完
         Text(
             meta.title,

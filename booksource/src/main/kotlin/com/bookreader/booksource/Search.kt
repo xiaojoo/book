@@ -10,6 +10,8 @@ import java.nio.charset.Charset
  * - `"css"` —— 第一个匹配元素的文字。先取 ownText（元素自己的那截），空了才取 text，
  *   因为"书名在 a 里、作者在后一个 span 里"那种行，用 text 会把整行都当成书名。
  * - `"css@href"` —— 第一个匹配元素的属性；href/src 自动补成绝对地址（这些站一半链接是相对的）。
+ * - `"@text"` / `"css@text"` —— 只要这个元素**自己**那截文字（不含子元素；选择器留空就是这一格本身）。
+ *   榜单那一行常见 `<li><a href=…>书名</a>/作者</li>`：书名从 a 取，作者只能用这一档，行首那个 `/` 顺手去掉。
  * - `""` —— 这一项不取。
  */
 fun pick(root: Element, spec: String): String {
@@ -18,8 +20,9 @@ fun pick(root: Element, spec: String): String {
     val at = t.indexOf('@')
     val sel = (if (at < 0) t else t.substring(0, at)).trim()
     val attr = if (at < 0) null else t.substring(at + 1).trim().ifEmpty { null }
-    val e = root.selectFirst(sel) ?: return ""
+    val e = if (sel.isEmpty()) root else root.selectFirst(sel) ?: return ""
     if (attr == null) return (e.ownText().ifBlank { e.text() }).trim()
+    if (attr == "text") return e.ownText().trim().trimStart('/', '·', '-', ':', ' ').trim()
     return (if (attr == "href" || attr == "src") e.attr("abs:" + attr) else e.attr(attr)).trim()
 }
 
@@ -78,6 +81,39 @@ fun searchResults(rule: Rule, html: String, base: String): List<BookHit> {
     }
 }
 
+/** 书页 → 那段内容简介。规则没写这一格、或者页上选不中 → 空串（简介没有就不显示，不编）。 */
+fun introOf(rule: Rule, html: String, base: String): String {
+    if (rule.intro.isBlank()) return ""
+    return runCatching { pick(html(base, html), rule.intro) }.getOrDefault("")
+}
+
+/**
+ * 首页/榜单页 → 热门书单。两级选：先按 [HotRule.group] 切出每个分类块，块上取分类名，
+ * 块内再按 [HotRule.item] 挑每一本书。
+ *
+ * 书名或链接缺一样就不算一条（和搜索结果同一口径）：宁可少一条，也不给精选那一页摆一张点不动的卡。
+ */
+fun hotBooks(rule: Rule, html: String, base: String): List<BookHit> {
+    val h = rule.hot ?: return emptyList()
+    val doc = html(base, html)
+    return doc.select(h.group).flatMap { g ->
+        val category = pick(g, h.category)
+        g.select(h.item).mapNotNull { e ->
+            val name = pick(e, h.bookName)
+            val url = pick(e, h.bookUrl)
+            if (name.isEmpty() || url.isEmpty()) return@mapNotNull null
+            BookHit(
+                sourceId = rule.id,
+                sourceName = rule.name,
+                bookName = name,
+                author = pick(e, h.author),
+                bookUrl = url,
+                category = category,
+            )
+        }
+    }
+}
+
 /** 目录页 → 每一章的 (标题, 链接)。只取 item 选中的那些 <a>，顺序就是页面上的顺序。 */
 fun tocChapters(rule: Rule, html: String, base: String): List<Pair<String, String>> =
     html(base, html).select(rule.toc.item).mapNotNull { a ->
@@ -98,6 +134,18 @@ fun tocPageUrls(rule: Rule, html: String, base: String): List<String> {
         val v = o.attr("value").trim().ifEmpty { o.text().trim() }
         if (v.isEmpty()) null else t.url.replace("%s", v)
     }
+}
+
+/**
+ * 书页 → 封面图的地址。规则没写这条、页上选不中、选出来不是 http(s) → 一律空串。
+ *
+ * 空串**不算失败**：一大半书本来就没封面（站点会自己换成 nocov.jpg 那种图），
+ * 这时候书架走默认封面就行，不该在任务那一行报一句红字吓人的。
+ */
+fun coverUrl(rule: Rule, html: String, base: String): String {
+    if (rule.cover.isBlank()) return ""
+    val url = runCatching { pick(html(base, html), rule.cover) }.getOrDefault("")
+    return if (url.startsWith("http://") || url.startsWith("https://")) url else ""
 }
 
 /** 正文页 → 去完广告的文字。返回空串 = 这一页什么都没抽到（限流站就是这样，不报错，就是空）。 */
@@ -133,17 +181,35 @@ class SearchEngine(private val rule: Rule, private val fetch: Fetcher) {
         return searchResults(rule, p.text(rule.charset), p.finalUrl)
     }
 
-    /** 一本书的完整目录（含下拉框分页）。抓正文的循环在下一阶段，这里先把"有哪些章"取全。 */
-    fun catalog(bookUrl: String): List<Pair<String, String>> {
-        val first = fetch.fetch(PageRequest(bookUrl))
-        val text = first.text(rule.charset)
+    /** 一本书的"头"：简介 + 完整目录。**一次书页请求拿全**，大纲就是目录的前若干条章名。 */
+    fun head(bookUrl: String): BookHead {
+        val p = fetch.fetch(PageRequest(bookUrl))
+        val text = p.text(rule.charset)
+        return BookHead(introOf(rule, text, p.finalUrl), chaptersFrom(text, p.finalUrl))
+    }
+
+    /** 首页那一堆分类块上的热门书单。这条源没写 hot 就返回空，精选那一页不列它。 */
+    fun hot(): List<BookHit> {
+        val h = rule.hot ?: return emptyList()
+        val p = fetch.fetch(PageRequest(h.url))
+        return hotBooks(rule, p.text(rule.charset), p.finalUrl)
+    }
+
+    /** 目录 = 这一页上选到的章 + 下拉框里其它页的章。`base` 就是这一页自己的 URL，等于它就不重取。 */
+    private fun chaptersFrom(text: String, base: String): List<Pair<String, String>> {
         val out = LinkedHashMap<String, String>()
-        for ((name, url) in tocChapters(rule, text, first.finalUrl)) out[url] = name
-        for (u in tocPageUrls(rule, text, first.finalUrl)) {
-            if (u == first.finalUrl) continue
+        for ((name, url) in tocChapters(rule, text, base)) out[url] = name
+        for (u in tocPageUrls(rule, text, base)) {
+            if (u == base) continue
             val p = fetch.fetch(PageRequest(u))
             for ((name, url) in tocChapters(rule, p.text(rule.charset), p.finalUrl)) out[url] = name
         }
         return out.map { (url, name) -> name to url }
+    }
+
+    /** 一本书的完整目录（含下拉框分页）。抓正文的循环在下一阶段，这里先把"有哪些章"取全。 */
+    fun catalog(bookUrl: String): List<Pair<String, String>> {
+        val first = fetch.fetch(PageRequest(bookUrl))
+        return chaptersFrom(first.text(rule.charset), first.finalUrl)
     }
 }

@@ -10,6 +10,9 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import com.bookreader.R
 import com.bookreader.booksource.BookDownloader
+import com.bookreader.booksource.PageRequest
+import com.bookreader.booksource.coverUrl
+import android.graphics.BitmapFactory
 import com.bookreader.booksource.BookHit
 import com.bookreader.booksource.FileChapterStore
 import com.bookreader.booksource.HttpFetcher
@@ -63,10 +66,11 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         setForegroundAsync(info(rec))
 
         val update = inputData.getBoolean(KEY_UPDATE, false)
+        val head = inputData.getInt(KEY_HEAD, 0)
         val store = FileChapterStore(BookSourceStore(ctx).cacheDir(ruleId, bookUrl))
         val outcome = try {
             BookDownloader(rule, HttpFetcher(), store)
-                .download(hit, shouldStop = { isStopped }) { done, total ->
+                .download(hit, shouldStop = { isStopped }, limit = head) { done, total ->
                     rec.done = done
                     rec.total = total
                     if (shouldWrite(rec, total)) {
@@ -107,6 +111,11 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
             BookLibrary(ctx).importFile(writeBookText(staged, outcome), title, into = if (update) rec.bookId.ifEmpty { null } else null)
         }
         meta.onSuccess {
+            // 来源 + 简介 + 大纲：「本书信息」那一页读这三个文件，「全本」那一颗也靠它找回书页
+            BookProvenance(BookLibrary(ctx).dir(it.id)).save(rule.id, bookUrl, outcome.intro, outcome.outline)
+            // 封面单独一趟：抓不到不算这次下载失败（一大半书本来就没封面），什么都不写，
+            // 书架上那本走默认封面。放在正文抓完之后再发，是为了不为一幅图挡住目录那一枪
+            runCatching { saveCover(it.id, rule, bookUrl) }
             rec.state = DownloadRecord.STATE_DONE
             rec.bookId = it.id
             rec.done = outcome.chapters
@@ -120,6 +129,23 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         }
         history.put(rec)
         return if (rec.state == DownloadRecord.STATE_DONE) Result.success() else Result.failure()
+    }
+
+    /** 书页 → 封面地址 → 图。任何一环取不到就静默返回（没封面是正常态，不是故障）。 */
+    private suspend fun saveCover(bookId: String, rule: Rule, bookUrl: String) {
+        if (rule.cover.isBlank()) return
+        val fetch = HttpFetcher()
+        val page = runCatching { fetch.fetch(PageRequest(bookUrl)) }.getOrNull() ?: return
+        val url = coverUrl(rule, page.text(rule.charset), page.finalUrl)
+        if (url.isEmpty()) return
+        val img = runCatching { fetch.fetch(PageRequest(url)) }.getOrNull() ?: return
+        // 站点没封面时往往回一张 1x1 或几十 KB 的通用图：太小/太大都不当封面存下来，
+        // 存了会比"没有"更难看（书架上一排同一张缩糊图）
+        if (img.bytes.size < MIN_COVER_BYTES || img.bytes.size > MAX_COVER_BYTES) return
+        if (runCatching { BitmapFactory.decodeByteArray(img.bytes, 0, img.bytes.size) }.getOrNull() == null) return
+        val f = BookLibrary(applicationContext).coverFile(bookId)
+        f.parentFile?.mkdirs()
+        f.writeBytes(img.bytes)
     }
 
     private suspend fun cancelled(rec: DownloadRecord) {
@@ -173,16 +199,20 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         const val KEY_NAME = "name"
         const val KEY_AUTHOR = "author"
         const val KEY_UPDATE = "update"
+        const val KEY_HEAD = "head"
         const val HISTORY = "downloads/history.tsv"
         private const val NOTI_ID = 0x4D1
         private const val MAX_ATTEMPTS = 4
+        private const val MIN_COVER_BYTES = 4 * 1024
+        private const val MAX_COVER_BYTES = 2 * 1024 * 1024
 
-        fun input(rule: Rule, hit: BookHit, update: Boolean): Data = Data.Builder()
+        fun input(rule: Rule, hit: BookHit, update: Boolean, head: Int = 0): Data = Data.Builder()
             .putString(KEY_RULE, rule.id)
             .putString(KEY_URL, hit.bookUrl)
             .putString(KEY_NAME, hit.bookName)
             .putString(KEY_AUTHOR, hit.author)
             .putBoolean(KEY_UPDATE, update)
+            .putInt(KEY_HEAD, head)
             .build()
     }
 }

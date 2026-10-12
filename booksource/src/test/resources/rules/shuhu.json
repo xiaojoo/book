@@ -4,6 +4,8 @@
   "homeUrl": "http://www.example-hu.com/",
   "note": "测的是三件事：相对链接要补成绝对、正文用 <p> 分段、水印要能被 filter 掉",
   "charset": "utf-8",
+  "intro": "#intro",
+  "cover": "#fmimg img @src",
   "search": {
     "url": "http://www.example-hu.com/?q=%s",
     "method": "GET",
