@@ -164,7 +164,11 @@ fun chapterText(rule: Rule, html: String, base: String): String {
     // 站点用 &nbsp;（U+00A0，Unicode 类别 Zs）当段首缩进，而 String.trim() 只认
     // Character.isWhitespace，U+00A0 不在里面：不换的话删掉广告那句会留下"看不见但非空"的一行，
     // 并且每段前面都挂着四个清不掉的空格（阅读器自己已经缩进 2em）。用 \p{Zs} 写免得源码里放实体空格。
-    return text.replace(Regex("\\p{Zs}"), " ").split('\n').map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+    // 段与段之间交出一个**空行**（两个换行），不是一个换行：阅读器那一格空行是照"原文这里空了行"排的
+    // （`PageComposer` 段末那一处），站里抓回来的正文原先 join 成 "\n"，整本就段段挤在一起。
+    // 上面已经把空行滤干净了（`filter { it.isNotEmpty() }`），所以这里 join 成 "\n\n" 不会出现两道空隙
+    // —— 也就是"原文有空行的就不用再加"。
+    return text.replace(Regex("\\p{Zs}"), " ").split('\n').map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n\n")
 }
 
 private fun html(base: String, body: String): Element = Jsoup.parse(body, base)

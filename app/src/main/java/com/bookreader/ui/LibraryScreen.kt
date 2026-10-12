@@ -482,7 +482,7 @@ private fun BookRow(
     ) {
         BookCover(meta.title, meta.id, Modifier.size(width = 48.dp, height = 64.dp))
         Spacer(Modifier.size(12.dp))
-        Column(Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f).height(64.dp)) {
             // 作者这一档：抽不出作者的件（txt / 本地文档全是）不能把分隔点单独晾在行首
             val who = meta.author.trim()
             val stat = when {
@@ -490,37 +490,22 @@ private fun BookRow(
                 unread != null -> "${unread}章未读"
                 else -> "${meta.chapterCount} 章"
             }
-            // 书名和那颗 ⋯ 同一行：⋯ 和长按开的是同一个抽屉（两个入口、一份动作），
-            // 44dp 命中框 + 18dp 图标 = 顶栏那三颗点同一份，所以两颗的墨右在同一条线上。
-            // 18dp 是他这轮"小一点"落下来的数：×0.82（22→18），这台机 2.75 倍下三个点的墨宽
-            // 45.4px → 37.1px、单个点 ⌀10.1px → 8.25px。命中框不动（44dp）—— 要小的是看得见的点，
-            // 不是按得中的地方
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    meta.title,
-                    fontSize = 16.sp,
-                    color = Chrome.ink,
-                    lineHeight = 22.sp,
-                    modifier = Modifier.weight(1f),
-                )
-                Box(modifier = Modifier.size(44.dp).tap(onMore), contentAlignment = Alignment.CenterEnd) {
-                    Icon(
-                        painterResource(R.drawable.ic_more),
-                        contentDescription = "《${meta.title}》的选项",
-                        // 灰的：和顶栏那三颗点同一档，行里这颗不比书名抢眼
-                        tint = Chrome.faint,
-                        modifier = Modifier.size(MORE_ICON),
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.padding(top = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(if (who.isEmpty()) stat else "$who · $stat", fontSize = 13.sp, color = Chrome.faint)
-                // 原来这里是一颗 7dp 红点（他点的去掉了）：同一行文字已经写着"N章未读"，
-                // 红点是同一件事说两遍。连它前面那 5dp 的占位一起删 —— 留着一个空 Spacer 就是死控件
-            }
+            // 文字这一栏钉成和封面同一个高度（64dp）：书名顶到封面上沿那一行，两行数据落到底。
+            // 原先书名那一行里坐着 ⋯ 的 44dp 命中框 —— 那一行被命中框顶到 44dp（字本身只有 22sp 行高），
+            // 整栏量到 ~83dp，比封面 64dp 高出一截，也就是他点的"要和封面一个高度"。
+            // 代价：书名改成一行截断（原先会折行）。这一栏只有 64dp，两行书名 + 两行数据装不下。
+            Text(
+                meta.title,
+                fontSize = 16.sp,
+                color = Chrome.ink,
+                lineHeight = 22.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(if (who.isEmpty()) stat else "$who · $stat", fontSize = 13.sp, color = Chrome.faint)
+            // 原来这里是一颗 7dp 红点（他点的去掉了）：同一行文字已经写着"N章未读"，
+            // 红点是同一件事说两遍。连它前面那 5dp 的占位一起删 —— 留着一个空 Spacer 就是死控件
             Text(
                 if (whole) "${meta.kind.uppercase()} 原件整页" else "${meta.chapterCount} 章 · ${formatChars(meta.totalChars)}",
                 fontSize = 13.sp,
@@ -528,13 +513,18 @@ private fun BookRow(
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
+        // ⋯ 从书名那一行挪出来当整行的末位：命中框还是 44dp、墨还是贴右（和顶栏那颗同一条线），
+        // 只是不再从书名那一行借高度
+        Box(modifier = Modifier.size(44.dp).tap(onMore), contentAlignment = Alignment.CenterEnd) {
+            Icon(
+                painterResource(R.drawable.ic_more),
+                contentDescription = "《${meta.title}》的选项",
+                // 灰的：和顶栏那三颗点同一档，行里这颗不比书名抢眼
+                tint = Chrome.faint,
+                modifier = Modifier.size(MORE_ICON),
+            )
+        }
     }
-}
-
-/** 精选那几本带的样例图。源站没抓到封面的书不再走这一颗，走下面的 [BookCover]。 */
-internal fun coverOf(title: String): Int? = when {
-    title.contains("剑来") || title.contains("jianlai", ignoreCase = true) -> R.drawable.cover_jianlai
-    else -> null
 }
 
 /** 默认封面的底色：按书名的稳定哈希取，同一本每次进来都是同一档。 */
@@ -553,8 +543,11 @@ private val COVER_NIGHT = intArrayOf(
 )
 
 /**
- * 一本书的封面，三档从上往下退：**源站抓回来的 `cover.jpg`** → 样例图（只有精选那几本）→ **默认封面**。
+ * 一本书的封面，两档：**源站抓回来的 `cover.jpg`** → **按书名哈希的默认封面**。
  * 传 (书名, 书架 id) 而不是 BookMeta：「本书信息」那一页在书还没进书架时也要画同一颗封面。
+ *
+ * 原先中间还夹一档"样例图"（书名含「剑来」就换一张仓库里的美术图）—— 精选改成真抓的书单之后
+ * 它就是假的：抓到的是站点那本《剑来》，配的却是随手摆的样例封面，所以整档删掉，那张图也跟着删。
  *
  * 默认封面按书名哈希从色板取一档底色 + 书名横排（他点的这一档）：一排没封面的书各自颜色不同，
  * 扫一眼分得清是哪本。原先那是"书名前两字"的灰块，所有书长得一模一样。
@@ -567,16 +560,9 @@ internal fun BookCover(title: String, bookId: String, modifier: Modifier = Modif
     val bmp = remember(bookId, file.lastModified()) {
         if (file.isFile) BitmapFactory.decodeFile(file.absolutePath) else null
     }
-    val sample = coverOf(title)
     when {
         bmp != null -> Image(
             bitmap = bmp.asImageBitmap(),
-            contentDescription = title,
-            contentScale = ContentScale.Crop,
-            modifier = modifier.clip(RoundedCornerShape(radius)),
-        )
-        sample != null -> Image(
-            painter = painterResource(sample),
             contentDescription = title,
             contentScale = ContentScale.Crop,
             modifier = modifier.clip(RoundedCornerShape(radius)),

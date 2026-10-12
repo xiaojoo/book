@@ -189,17 +189,9 @@ fun BookSearchScreen(
         }
     }
 
-    val tip = remember { mutableStateOf<Tip?>(null) }
-    var root by remember { mutableStateOf(Rect.Zero) }
-    // 气泡画在这一格最外层，不画进 Popup：这台机上 Popup 那扇窗口的坐标原点不是应用窗口，
-    // 量到整块偏 (-46, +267) px；外层这格的位置是自己 onGloballyPositioned 拿回来的，错不了。
-    CompositionLocalProvider(LocalTip provides tip) {
+    TipHost {
         Box(Modifier.fillMaxSize().background(Chrome.page)) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .onGloballyPositioned { root = it.boundsInWindow() },
-            ) {
+            Column(Modifier.fillMaxSize()) {
                 // 全屏那两页（任务/管理）不开这一行：底栏已经让位了，顶上再留一条「搜书」+源 chips
                 // 就还是"在搜书里面"，正是他说"怎么能看到搜书的 tab"要消掉的东西。
                 if (page == SearchPage.Search) {
@@ -337,6 +329,30 @@ fun BookSearchScreen(
                 }
                 }
             }
+        }
+    }
+}
+
+/**
+ * 一层气泡：底下这一格自己量在窗口里的位置，上面盖一层不接事件的满屏 Box 画气泡。
+ *
+ * 从搜书那一格里抽出来当公共的一层，是因为「本书信息」那一屏也要给「目录」行右边那两颗图标用气泡，
+ * 而它不在搜书这一格里面 —— 上一轮它没铺这层、页头那颗 ✕ 又去读 [LocalTip]，点一行进去就崩过一次
+ * （`这一格没铺气泡层`）。现在谁要气泡就在外面套这一层，套不上就不给气泡，不会再把进程打死。
+ */
+@Composable
+internal fun TipHost(content: @Composable () -> Unit) {
+    val tip = remember { mutableStateOf<Tip?>(null) }
+    var root by remember { mutableStateOf(Rect.Zero) }
+    // 气泡画在这一格最外层，不画进 Popup：这台机上 Popup 那扇窗口的坐标原点不是应用窗口，
+    // 量到整块偏 (-46, +267) px；外层这格的位置是自己 onGloballyPositioned 拿回来的，错不了。
+    CompositionLocalProvider(LocalTip provides tip) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { root = it.boundsInWindow() },
+        ) {
+            content()
             Box(Modifier.fillMaxSize()) { tip.value?.let { TipBubble(it, root) } }
         }
     }
@@ -610,42 +626,50 @@ private fun SourceManagerPage(modifier: Modifier, sources: BookSourceStore, onCh
  * 墨**贴格子的右边缘**而不是居中：居中时墨的右边缘落在格子右边往里 (格子-墨)/2 处，
  * 页头那颗 44dp、行里这几颗 40dp，两颗 ✕ 就差了 16px 对不齐，而且整列比左边的 16dp 缩进去一截。
  * 贴右之后墨的右边缘 = 格子右边缘 = 行内衬 16dp 那条线，和标题的左 16dp 同一条。
+ *
+ * `align` 是这件事的开关：按格子右边缘排的地方（默认）留 CenterEnd；「目录」那一行按**墨**排
+ * （每颗的占位就是它自己的墨宽，格子居中溢出），那里要的是墨在占位正中，得换 Center。
  */
 @Composable
-private fun IconAction(
+internal fun IconAction(
     icon: Int,
     desc: String,
     tint: Color,
+    modifier: Modifier = Modifier,
     enabled: Boolean = true,
     box: Dp = 40.dp,
     tipOn: Boolean = true,
+    align: Alignment = Alignment.CenterEnd,
     onClick: () -> Unit,
 ) {
     val src = remember { MutableInteractionSource() }
-    val tip = LocalTip.current
+    // 只有真要挂气泡的那颗才去读这一格的气泡层。页头那颗 ✕ 是 `tipOn = false`（名字就写在同一行左边），
+    // 让它也去读就等于要求"每个用 PageHeader 的整屏页都得先铺一层气泡"—— 「本书信息」没铺，
+    // 于是从精选点一行进去就踩到下面那颗 error()，进程直接被打死（真机：退到桌面）
+    val tip = if (tipOn) LocalTip.current else null
     var at by remember { mutableStateOf(Rect.Zero) }
     val pressed = src.collectIsPressedAsState().value
     // 这一颗的身份证：气泡归"把它挂上去的那一颗"收，凭身份、不凭位置
     val owner = remember { Any() }
     Box(
-        Modifier
+        modifier
             .size(box)
             .onGloballyPositioned { at = it.boundsInWindow() }
             // 和别处同一颗规则：按下不画涟漪、不叠高亮（tap 那颗不给 interactionSource，气泡拿不到"按住了"）
             .clickable(interactionSource = src, indication = null, enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.CenterEnd,
+        contentAlignment = align,
     ) {
         Icon(painterResource(icon), desc, tint = tint, modifier = Modifier.size(17.dp))
     }
     // 按住 = 把自己挂到那一格的气泡层上；抬手 = 只收回自己那条
     LaunchedEffect(pressed, at, tipOn) {
-        if (pressed && tipOn && at != Rect.Zero) tip.value = Tip(at, desc, box, owner)
-        else if (tip.value?.owner === owner) tip.value = null
+        if (pressed && tipOn && at != Rect.Zero) tip?.value = Tip(at, desc, box, owner)
+        else if (tip?.value?.owner === owner) tip.value = null
     }
     // 真正治"手移开也不消失"的是这一条：按 ✕ 那一颗会把这一页整个换掉，这颗直接离开组合，
     // 上面那个 else 分支根本没机会跑；离开组合时不清，气泡就永久留在屏幕上了（他报的就是这个）
     DisposableEffect(owner) {
-        onDispose { if (tip.value?.owner === owner) tip.value = null }
+        onDispose { if (tip?.value?.owner === owner) tip.value = null }
     }
 }
 

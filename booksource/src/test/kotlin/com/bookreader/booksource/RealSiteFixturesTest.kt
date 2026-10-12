@@ -111,7 +111,8 @@ class RealSiteFixturesTest {
         val (html, base) = live("mengshu-chapter.html", "http://www.mcxs.la/1_1639/65853108.html")
         val text = chapterText(rule("mengshu"), html, base)
         val lines = text.split('\n')
-        println("[梦书正文] 段数=${lines.size} 字数=${text.count { it != '\n' }}")
+        // 段间现在是一个空行，按 '\n' 数会数出两倍，所以只数非空的那几行
+        println("[梦书正文] 段数=${lines.count { it.isNotEmpty() }} 字数=${text.count { it != '\n' }}")
         assertEquals(
             "第一段是正文那句",
             "一到落魄山霁色峰，陈平安就醒了，身在祖师堂白玉广场，宁姚将他扶好，一起凭栏而立。",
@@ -138,7 +139,7 @@ class RealSiteFixturesTest {
         val (html, base) = live("ranwen-chapter.html", "https://www.ranwen8.cc/book/102322/50171982.html")
         val text = chapterText(rule("ranwen"), html, base)
         val scripts = Regex("<script").findAll(html).count()
-        println("[燃文正文] 段数=${text.split('\n').size} 字数=${text.count { it != '\n' }} 脚本块=$scripts")
+        println("[燃文正文] 段数=${text.split('\n').count { it.isNotEmpty() }} 字数=${text.count { it != '\n' }} 脚本块=$scripts")
         assertTrue("抽到的只有广告，不该过一千字", text.count { it != '\n' } < 1000)
         assertTrue("第一章讲泥瓶巷，一个字都没抽到", !text.contains("泥瓶巷"))
         assertTrue("这页确实是靠脚本拼正文的", html.contains("document.writeln(qsbs.bb("))
@@ -198,14 +199,16 @@ class RealSiteFixturesTest {
     fun aixiashuChapterPageYieldsTheRealOpeningParagraphs() {
         val (html, base) = live("aixiashu-chapter.html", "http://www.aixiashu.la/2/2196/1660742.html")
         val text = chapterText(rule("aixiashu"), html, base)
-        val lines = text.split('\n')
-        println("[爱下书正文] 段数=${lines.size} 字数=${text.count { it != '\n' }}")
-        assertEquals("二月二，龙抬头。", lines.first())
-        assertTrue("开头那段点名泥瓶巷", lines[1].startsWith("暮色里，小镇名叫泥瓶巷的僻静地方"))
-        assertEquals("ps3:好久不见，剑来！", lines.last())
+        // 段与段之间现在交出一个空行（阅读器那一格空隙照原文判），所以按 "\n\n" 数段落
+        val paras = text.split("\n\n")
+        println("[爱下书正文] 段数=${paras.size} 字数=${text.count { it != '\n' }}")
+        assertEquals("二月二，龙抬头。", paras.first())
+        assertTrue("开头那段点名泥瓶巷", paras[1].startsWith("暮色里，小镇名叫泥瓶巷的僻静地方"))
+        assertEquals("ps3:好久不见，剑来！", paras.last())
         assertTrue("整章近 3000 字这个量级不能掉", text.count { it != '\n' } > 2900)
         assertTrue("&nbsp; 要换成能 trim 掉的空格", text.none { it.code == 160 })
-        assertTrue("每段都不该带段首空白", lines.all { it == it.trim() })
+        assertTrue("每段都不该带段首空白", paras.all { it == it.trim() })
+        assertTrue("段间只有一条空行（原文的空行不能被加成两道）", !text.contains("\n\n\n"))
     }
 
     /**
