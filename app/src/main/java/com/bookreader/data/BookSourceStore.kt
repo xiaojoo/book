@@ -41,6 +41,14 @@ class BookSourceStore(private val context: Context) {
      * 那样那颗删除就是假的。要恢复得走「导入」重新拿一次。
      */
     fun seed() {
+        // 先从包里摘掉的名单清一遍。`seeded.` 只管"不再种"，**不管把已经种下的那份删掉** ——
+        // 所以燃文那一条在装过它的手机上一直留着还开着：点它会一路 100% 抓回一本"本站推荐"的书名列表
+        // （它的正文是 `document.writeln(qsbs.bb(BASE64))` 拼的，规则抽不到，而进度不看内容）。
+        // 清一次就记 `retired.<名字>`：以后他自己导入一份同名的，不会被下次启动再误删。
+        RETIRED.filterNot { p.getBoolean("retired.$it", false) }.forEach { name ->
+            p.edit { putBoolean("retired.$name", true) }
+            remove(name)
+        }
         BUILTIN.forEach { name ->
             if (p.getBoolean("seeded.$name", false)) return@forEach
             p.edit { putBoolean("seeded.$name", true) }
@@ -154,6 +162,16 @@ class BookSourceStore(private val context: Context) {
          * 这条判据留在 `RealSiteFixturesTest` 里，谁想再把它加回来会先撞上。
          */
         val BUILTIN = listOf("mengshu", "aixiashu")
+
+        /**
+         * 从 `BUILTIN` 摘掉的，按文件名点名。摘掉只管新装，不管已经种过一次的手机（`seeded.` 故意不自愈），
+         * 所以要在这里挂一笔账，等 `seed()` 去清。
+         *
+         * `ranwen` = 燃文小说网：正文是 `document.writeln(qsbs.bb(BASE64))`，规则抽出来只剩"本站推荐"那串书名，
+         * 而下载进度照样走到 100%（它数的是章数，不看内容）。判据留在 `:booksource` 的
+         * `RealSiteFixturesTest.ranwenBodyIsBase64InsideScriptsSoTheRuleCannotReachIt`。
+         */
+        val RETIRED = listOf("ranwen")
 
         /** Windows 那套保留字符一并挡掉：这台机上文件名会跟着书目录被 adb/压缩来回倒腾。 */
         val ILLEGAL = charArrayOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
