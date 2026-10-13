@@ -72,6 +72,8 @@ import com.bookreader.booksource.BookHit
 import com.bookreader.booksource.HttpFetcher
 import com.bookreader.booksource.PageRequest
 import com.bookreader.booksource.Rule
+import com.bookreader.data.BookLibrary
+import com.bookreader.data.BookProvenance
 import com.bookreader.data.BookSourceStore
 import com.bookreader.data.DownloadRecord
 import com.bookreader.data.Downloads
@@ -91,6 +93,16 @@ enum class SearchPage { Search, Tasks, Manage }
 
 /** 「先拉开头」那一颗拉几章。10 章够看出这本书要不要，又不至于把整本抓完。 */
 private const val HEAD_CHAPTERS = 10
+
+/**
+ * 源那一排每颗 chip 上的名字：小说不标（它是默认，每一颗都带「·小说」等于都没带），
+ * 漫画和文献在后面点明类别 —— 「这是搜漫画的那条链接」要在点它的那一排就说清，
+ * 而不是另起一行 tab 去筛（他点名撤了那一行）。
+ */
+internal fun sourceChip(s: StoredSource): String {
+    val r = s.rule ?: return s.title
+    return if (r.kind == Rule.NOVEL) s.title else s.title + "·" + Rule.KINDS.getValue(r.kind)
+}
 
 /** 搜索结果那一行 → 「本书信息」那一页。简介/大纲这一行没有，进去再补抓一次。 */
 private fun infoOf(hit: BookHit) = BookInfo(
@@ -115,6 +127,7 @@ private fun infoOf(hit: BookHit) = BookInfo(
 @Composable
 fun BookSearchScreen(
     sources: BookSourceStore,
+    library: BookLibrary,
     page: SearchPage,
     onPage: (SearchPage) -> Unit,
     onOpen: (String) -> Unit,
@@ -151,6 +164,10 @@ fun BookSearchScreen(
         withContext(Dispatchers.IO) { sources.seed() }
         tick++
     }
+    // 架上哪几本是"这条源 + 这个书页"下来的：决定那一行的按钮写「下载」还是「增量更新」。
+    // 读的是书架那几份 source.tsv，不读下载历史那张可以删掉的表
+    var onShelf by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(hits, reload) { onShelf = withContext(Dispatchers.IO) { library.downloaded() } }
     val all = remember(tick) { sources.list() }
     val usable = all.filter { it.usable }
     val current: Rule? = usable.firstOrNull { it.id == picked && sources.enabled(it.id) }?.rule
@@ -209,7 +226,7 @@ fun BookSearchScreen(
                         ) {
                             all.forEach { s ->
                                 WholeChip(
-                                    s.title,
+                                    sourceChip(s),
                                     modifier = Modifier.height(32.dp),
                                     selected = s.usable && s.id == current?.id,
                                     enabled = s.usable,
@@ -306,6 +323,7 @@ fun BookSearchScreen(
                             h,
                             current,
                             records.firstOrNull { it.bookUrl == h.bookUrl },
+                            onShelf[BookProvenance.key(h.sourceId, h.bookUrl)],
                             onOpen = onOpen,
                             onNote = { note = it },
                             onStart = { update ->
@@ -378,6 +396,9 @@ internal fun PageHeader(title: String, onClose: () -> Unit) {
  * 一条搜索结果：左边书名/作者/最新章，右边那一排按这一本在表上的状态换图标
  * （下载 → ⏸ → 📖 + ↻ / ▶）。图标和任务行那排是同一颗 `IconAction`。
  *
+ * 下载历史那一行没了、但书架上有这本（换过源规则、或删过任务记录）时给的是
+ * 「打开来读 + 增量更新」，不再给「下载」：同一本书在架上摆两本是这一族原来最大的毛病。
+ *
  * 这一行不再持有协程作用域：以前 `start()` 收的是 `rememberCoroutineScope()`，
  * 于是"这本书能不能下完"取决于"这一行还在不在屏幕上"。
  */
@@ -386,6 +407,7 @@ private fun SearchResultRow(
     hit: BookHit,
     rule: Rule?,
     task: DownloadRecord?,
+    shelfId: String?,
     onOpen: (String) -> Unit,
     onNote: (String) -> Unit,
     onStart: (Boolean) -> Unit,
@@ -422,6 +444,15 @@ private fun SearchResultRow(
             }
             Spacer(Modifier.width(10.dp))
             when {
+                task == null && shelfId != null -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SheetAction("打开来读", Chrome.accent, true) { onOpen(shelfId) }
+                    // 这颗不是"再来一本"：Downloads.start 认得架上那本，写回同一个 id，只补目录里新增的章
+                    SheetAction("增量更新", Chrome.accent, rule != null) { onStart(true) }
+                }
+                task == null && rule?.isPaper == true -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // 一篇文献就是一支 PDF，没有"开头几章"可拉：那颗摆在这儿点了也是抓回同一支，是颗假按钮
+                    SheetAction("下载 PDF", Chrome.accent, true) { onStart(false) }
+                }
                 task == null -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     // 两颗分开：先拉十章 = 快点能读，下载 = 一次到底。他要的是"全本那颗不动"
                     SheetAction("先拉开头", Chrome.accent, rule != null) { onHead() }
@@ -599,6 +630,7 @@ private fun SourceManagerPage(modifier: Modifier, sources: BookSourceStore, onCh
                     Column(Modifier.weight(1f)) {
                         Text(s.title, fontSize = 15.sp, color = if (s.usable) Chrome.ink else Chrome.faint)
                         Text(
+                            // 类别不在这页说第二遍：它写在搜书那一排的 chip 名字上（同一件事不留两个主人）
                             s.error ?: s.rule?.homeUrl.orEmpty(),
                             fontSize = 11.sp,
                             color = if (s.usable) Chrome.faint else Chrome.danger,

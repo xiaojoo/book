@@ -14,6 +14,7 @@ import com.bookreader.booksource.PageRequest
 import com.bookreader.booksource.coverUrl
 import android.graphics.BitmapFactory
 import com.bookreader.booksource.BookHit
+import com.bookreader.booksource.DownloadOutcome
 import com.bookreader.booksource.FileChapterStore
 import com.bookreader.booksource.HttpFetcher
 import com.bookreader.booksource.Rule
@@ -67,42 +68,48 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
 
         val update = inputData.getBoolean(KEY_UPDATE, false)
         val head = inputData.getInt(KEY_HEAD, 0)
-        val store = FileChapterStore(BookSourceStore(ctx).cacheDir(ruleId, bookUrl))
-        val outcome = try {
-            BookDownloader(rule, HttpFetcher(), store)
-                .download(hit, shouldStop = { isStopped }, limit = head) { done, total ->
-                    rec.done = done
-                    rec.total = total
-                    if (shouldWrite(rec, total)) {
-                        history.put(rec)
-                        setForegroundAsync(info(rec))
-                    }
+        // 三类源交回来的东西不一样：小说是一整串文字、漫画是几万个图文件、文献是一支 PDF。
+        // 抓和入库各走各的头，共用的是这一行的进度、取消、退避重试和那张下载表
+        if (!rule.isPaper && !rule.isComic) {
+            val store = FileChapterStore(BookSourceStore(ctx).cacheDir(ruleId, bookUrl))
+            val novel = try {
+                BookDownloader(rule, HttpFetcher(), store)
+                    .download(hit, shouldStop = { isStopped }, limit = head) { done, total -> progress(rec, done, total) }
+            } catch (e: Exception) {
+                if (isStopped) {
+                    withContext(NonCancellable) { cancelled(rec) }
+                    return Result.success()
                 }
-        } catch (e: Exception) {
-            if (isStopped) {
-                withContext(NonCancellable) { cancelled(rec) }
-                return Result.success()
+                return failed(rec, e)
             }
-            // 网络那一类的错交给 WorkManager 退避重试（指数，首次 10 秒）；章级缓存在磁盘上，
-            // 重试时已抓到的章一个请求都不发 —— 这就是"断点"在这里的真正落点
-            if (e is IOException && runAttemptCount < MAX_ATTEMPTS) return Result.retry()
-            rec.error = e.message ?: e.javaClass.simpleName
-            rec.state = DownloadRecord.STATE_FAILED
-            rec.endedAt = System.currentTimeMillis()
-            history.put(rec)
-            return Result.failure()
+            finishNovel(ctx, rule, hit, rec, novel, update)
+            return if (rec.state == DownloadRecord.STATE_DONE) Result.success() else Result.failure()
         }
+        if (rule.isComic) return runComic(ctx, rule, hit, rec, head)
+        return runPaper(ctx, rule, hit, rec)
+    }
 
+    /** 小说：整串文字抓完 → 进 [BookLibrary.importFile] 那一条路，抽出正文、建 chunk/章索引。 */
+    private suspend fun finishNovel(
+        ctx: Context,
+        rule: Rule,
+        hit: BookHit,
+        rec: DownloadRecord,
+        outcome: DownloadOutcome,
+        update: Boolean,
+    ) {
+        val title = hit.bookName
+        val bookUrl = hit.bookUrl
         if (isStopped) {
             withContext(NonCancellable) { cancelled(rec) }
-            return Result.success()
+            return
         }
         if (outcome.body.isBlank()) {
             rec.state = DownloadRecord.STATE_FAILED
             rec.error = "一本都没抓到（这一族源可能改了版式，或者它要跑 JS / 过代理）"
             rec.endedAt = System.currentTimeMillis()
             history.put(rec)
-            return Result.failure()
+            return
         }
         rec.missing = outcome.failed.size
         rec.chars = outcome.chars
@@ -128,7 +135,103 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
             rec.endedAt = System.currentTimeMillis()
         }
         history.put(rec)
-        return if (rec.state == DownloadRecord.STATE_DONE) Result.success() else Result.failure()
+    }
+
+    /**
+     * 一本漫画：图直接写进书目录，写完把清单和数字落到下载表那一行。
+     *
+     * id 在这里就定下来并写进表：一本漫画要抓几千张、中间进程随时会被系统收回，
+     * 那一行要是还不认得自己写的是哪一本，下一次点「下载全书」就只能另起一本 —— 架上又多一本。
+     */
+    private suspend fun runComic(ctx: Context, rule: Rule, hit: BookHit, rec: DownloadRecord, head: Int): Result {
+        val id = shelfId(ctx, hit, rec)
+        val done = try {
+            ComicImport.run(ctx, rule, hit, id, head, { isStopped }) { d, t -> progress(rec, d, t) }
+        } catch (e: Exception) {
+            if (isStopped) {
+                withContext(NonCancellable) { cancelled(rec) }
+                return Result.success()
+            }
+            return failed(rec, e)
+        }
+        if (isStopped) {
+            withContext(NonCancellable) { cancelled(rec) }
+            return Result.success()
+        }
+        rec.missing = done.failed.size
+        // 漫画数的是"张"，不是"字"：把张数塞进 chars 那一列，界面上那行就写成"1,830 字"的假话
+        rec.chars = 0
+        rec.state = DownloadRecord.STATE_DONE
+        rec.bookId = done.bookId
+        rec.done = done.chapters
+        rec.total = done.chapters
+        rec.endedAt = System.currentTimeMillis()
+        runCatching { saveCover(done.bookId, rule, hit.bookUrl) }
+        history.put(rec)
+        android.util.Log.d("ComicDl", "入库 ${done.bookId} 章=${done.onDisk}/${done.chapters} 图=${done.images} 缺=${done.failed.size}")
+        return Result.success()
+    }
+
+    /** 一篇文献：那一支 PDF 直接进书目录，开的是现成的整页阅读器。 */
+    private suspend fun runPaper(ctx: Context, rule: Rule, hit: BookHit, rec: DownloadRecord): Result {
+        val id = shelfId(ctx, hit, rec)
+        val done = try {
+            PaperImport.run(ctx, rule, hit, id) { d, t -> progress(rec, d, t) }
+        } catch (e: Exception) {
+            if (isStopped) {
+                withContext(NonCancellable) { cancelled(rec) }
+                return Result.success()
+            }
+            return failed(rec, e)
+        }
+        if (isStopped) {
+            withContext(NonCancellable) { cancelled(rec) }
+            return Result.success()
+        }
+        rec.missing = 0
+        rec.chars = 0
+        rec.state = DownloadRecord.STATE_DONE
+        rec.bookId = done.bookId
+        rec.done = 1
+        rec.total = 1
+        rec.endedAt = System.currentTimeMillis()
+        history.put(rec)
+        return Result.success()
+    }
+
+    /** 这一行该写进哪一本书：表上那本还在就用它，没有就现起一个 id 并马上落表（理由见 [runComic]）。 */
+    private fun shelfId(ctx: Context, hit: BookHit, rec: DownloadRecord): String {
+        if (rec.bookId.isNotEmpty() && BookLibrary(ctx).dir(rec.bookId).isDirectory) return rec.bookId
+        val id = BookLibrary(ctx).newId(hit.bookName)
+        rec.bookId = id
+        history.put(rec)
+        return id
+    }
+
+    /**
+     * 进度：写表 + 通知，节流那一格在 [shouldWrite]（千万字一本时逐章重写整张表会把磁盘当成瓶颈）。
+     *
+     * 这一格**不是** suspend：它是当回调传给下载器的，而下载器那一头的签名是普通的 `(Int, Int) -> Unit`
+     * —— 挂起函数当不进那个签名，编译期就拦住了（挂上去的第一反应应该是把这两个调用摊平，不是把签名改成 suspend）。
+     */
+    private fun progress(rec: DownloadRecord, done: Int, total: Int) {
+        rec.done = done
+        rec.total = total
+        if (shouldWrite(rec, total)) {
+            history.put(rec)
+            setForegroundAsync(info(rec))
+        }
+    }
+
+    /** 一次抓取抛出来的错。网络那一类交给 WorkManager 退避重试，其余写进那一行让人看得见。 */
+    private fun failed(rec: DownloadRecord, e: Exception): Result {
+        // 章级/图级缓存在磁盘上，重试时已经抓到的那些一个请求都不发 —— 这就是"断点"在这里的落点
+        if (e is IOException && runAttemptCount < MAX_ATTEMPTS) return Result.retry()
+        rec.error = e.message ?: e.javaClass.simpleName
+        rec.state = DownloadRecord.STATE_FAILED
+        rec.endedAt = System.currentTimeMillis()
+        history.put(rec)
+        return Result.failure()
     }
 
     /** 书页 → 封面地址 → 图。任何一环取不到就静默返回（没封面是正常态，不是故障）。 */

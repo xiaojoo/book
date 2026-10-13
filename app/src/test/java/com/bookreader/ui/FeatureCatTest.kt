@@ -1,6 +1,7 @@
 package com.bookreader.ui
 
 import com.bookreader.booksource.BookHit
+import com.bookreader.booksource.RuleLoader
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -26,10 +27,22 @@ class FeatureCatTest {
 
     @Test
     fun everyTabInTheTableActuallyHitsARealSiteCategory() {
-        // 表里放一档但两家站都没有那一类，那一排就会多一颗点了空白的 tab
+        // 表里放一档但两家站都没有那一类，那一排就会多一颗点了空白的 tab。
+        // 「漫画」不在这条判据里：它不靠站点的分类词命中，是 `kind=comic` 那条源交回来的每一本
+        // 在 [comicAs] 里被改成这一类的 —— 拿"真实类目"去要求它，量的是不存在的东西
         val real = listOf("玄幻奇幻", "修真仙侠", "都市青春", "历史穿越", "网游竞技", "科幻灵异")
-        val hit = FEATURE_CATS.filter { c -> real.any { it.contains(c) } }
-        assertEquals("类目表里有档命中不了真实类目：${FEATURE_CATS - hit.toSet()}", FEATURE_CATS.toSet(), hit.toSet())
+        val siteCats = FEATURE_CATS - CAT_COMIC
+        val hit = siteCats.filter { c -> real.any { it.contains(c) } }
+        assertEquals("类目表里有档命中不了真实类目：${siteCats - hit.toSet()}", siteCats.toSet(), hit.toSet())
+    }
+
+    @Test
+    fun theComicTabIsFilledByTheKindNotByTheSiteLabel() {
+        val comic = RuleLoader.load(COMIC_RULE, "测试漫画源")
+        val novel = RuleLoader.load(NOVEL_RULE, "测试小说源")
+        val rows = listOf(hit("海贼王", "热血 · 冒险"), hit("第一话", ""))
+        assertEquals("漫画源的榜单每一本都落到「漫画」那一档", listOf(CAT_COMIC, CAT_COMIC), rows.comicAs(comic).map { featureCat(it.category) })
+        assertEquals("小说源不改：那条源的分类词还是照站点归并", listOf(CAT_OTHER, CAT_OTHER), rows.comicAs(novel).map { featureCat(it.category) })
     }
 
     @Test
@@ -55,4 +68,18 @@ class FeatureCatTest {
         sourceId = "s", sourceName = "测试源", bookName = name, author = "作者",
         bookUrl = "http://x/$name", category = category,
     )
+
+    private companion object {
+        val COMIC_RULE = """
+            {"id":"t","name":"测试漫画源","homeUrl":"https://t.example/","kind":"comic",
+             "search":{"url":"https://t.example/s?k=%s","item":".row","bookName":".a","author":"","bookUrl":".a @href"},
+             "toc":{"item":"a.chap"},"chapter":{"image":"img @data-original"}}
+        """.trimIndent()
+
+        val NOVEL_RULE = """
+            {"id":"n","name":"测试小说源","homeUrl":"https://n.example/",
+             "search":{"url":"https://n.example/s?k=%s","item":".row","bookName":".a","author":".a","bookUrl":".a @href"},
+             "toc":{"item":"a.chap"},"chapter":{"content":"#txt"}}
+        """.trimIndent()
+    }
 }

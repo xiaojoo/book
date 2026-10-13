@@ -55,6 +55,7 @@ import com.bookreader.R
 import com.bookreader.booksource.BookHit
 import com.bookreader.booksource.HttpFetcher
 import com.bookreader.booksource.SearchEngine
+import com.bookreader.booksource.Rule
 import com.bookreader.data.BookSourceStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -105,7 +106,7 @@ fun FeaturedHomeScreen(
             val r = s.rule ?: continue
             runCatching {
                 withContext(Dispatchers.IO) { SearchEngine(r, HttpFetcher()).hot() }
-            }.onSuccess { found += it.perCategory(HOT_PER_CAT) }.onFailure { failed += r.name }
+            }.onSuccess { found += it.comicAs(r).perCategory(HOT_PER_CAT) }.onFailure { failed += r.name }
         }
         FeaturedCache.books = found
         FeaturedCache.failed = failed
@@ -197,8 +198,17 @@ private fun infoOf(b: BookHit) = BookInfo(
 internal fun featureCat(category: String): String =
     FEATURE_CATS.firstOrNull { category.contains(it) } ?: CAT_OTHER
 
-/** 固定的一张中文类目表。顺序就是那一排 tab 的顺序。 */
-internal val FEATURE_CATS = listOf("玄幻", "修真", "都市", "穿越", "网游", "科幻")
+/**
+ * 固定的一张中文类目表。顺序就是那一排 tab 的顺序。
+ *
+ * 「漫画」在最后：小说那六类是他逐条点过的顺序，不动它，新增的一颗只往后加。
+ * 这一类和别的可能撞字（"科幻"里含"幻"、站点自己写的"热血魔幻"之类），
+ * 而它靠的不是站点给的类名 —— 漫画源抓回来的书在 [FeaturedHomeScreen] 里就被改成这一类了。
+ */
+internal val FEATURE_CATS = listOf("玄幻", "修真", "都市", "穿越", "网游", "科幻", CAT_COMIC)
+
+/** 漫画那一类不归站点说：一条 `kind=comic` 的源交回来的每一本都是漫画，类名由种类定。 */
+internal const val CAT_COMIC = "漫画"
 
 internal const val CAT_OTHER = "其他"
 
@@ -218,6 +228,15 @@ private const val PAGE_BROWSE = "#分类"
  * DOM 顺序排在真书后面，由这一格的上限挡掉。
  */
 private const val HOT_PER_CAT = 6
+
+/**
+ * 漫画源的榜单：类名一律改成「漫画」。
+ *
+ * 不按站点给的标签归类的理由：它那一格写的是"热血 / 冒险 / 恋爱"，和小说那六类撞不进一张表；
+ * 而"这是漫画"是这条源的**种类**给的实话（`kind=comic`），不是站点的分类词能改判的东西。
+ */
+internal fun List<BookHit>.comicAs(rule: Rule): List<BookHit> =
+    if (!rule.isComic) this else map { it.copy(category = CAT_COMIC) }
 
 internal fun List<BookHit>.perCategory(max: Int): List<BookHit> =
     groupBy { featureCat(it.category) }.values.flatMap { c -> c.take(max) }

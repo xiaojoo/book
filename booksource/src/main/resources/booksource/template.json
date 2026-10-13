@@ -3,7 +3,7 @@
   "name": "示例源（照这份改成你要的那条）",
   "homeUrl": "http://www.example.com/",
   "charset": "utf-8",
-  "note": "这是模板，装上它是搜不到东西的（地址是 example.com）。要动的每一格：id = 英文短名，两条源不能重（重了下载的章会串档）；name = 界面上那颗 chip 显示的字；homeUrl = 站点首页；charset = 页面 meta 里那个（gbk 的站写 gbk，不写就是 utf-8）；cover = 书页上那张封面图的选择器，必须写成「css @src」这种取值写法（例：#fmimg img @src），留空就是不取封面、书架走默认封面；search.url = 搜索口（%s 会被书名替掉，翻页的站还能用 %n）；search.method + search.data = POST 时发的那张表单，写成 {字段名: 值} 就行；search.item = 结果里每一行的选择器，行里再写 bookName / author / bookUrl（`css` 取那一格的文字，`css@href` 取链接）；toc.item = 目录页上每一章那个 <a> 的选择器；chapter.content = 正文容器的选择器；chapter.filter = 要丢掉的广告正则，一条一个字符串；intro = 书页上「内容简介」那一格的选择器（`#intro`）；hot = 首页/榜单那一族：group 是一个分类块（块上用 category 取分类名），item 是块里每一本书，行里再写 bookName / author / bookUrl；author 写 `@text` 表示取这一行自己的文字（榜单常排成 `<li><a>书名</a>/作者</li>`，书名在 a 里、作者在外面）；整段不写就是这条源没有热门可抓；crawl = 并发、两条请求之间的随机间隔、重试次数。要跑 JavaScript 才出得来正文的源装不上（手机上不内嵌 JS 引擎）。",
+  "note": "这是模板，装上它是搜不到东西的（地址是 example.com）。要动的每一格：id = 英文短名，两条源不能重（重了下载的章会串档）；name = 界面上那颗 chip 显示的字；homeUrl = 站点首页；charset = 页面 meta 里那个（gbk 的站写 gbk，不写就是 utf-8）；cover = 书页上那张封面图的选择器，必须写成「css @src」这种取值写法（例：#fmimg img @src），留空就是不取封面、书架走默认封面；search.url = 搜索口（%s 会被书名替掉，翻页的站还能用 %n）；search.method + search.data = POST 时发的那张表单，写成 {字段名: 值} 就行；search.item = 结果里每一行的选择器，行里再写 bookName / author / bookUrl（`css` 取那一格的文字，`css@href` 取链接）；toc.item = 目录页上每一章那个 <a> 的选择器；chapter.content = 正文容器的选择器；chapter.filter = 要丢掉的广告正则，一条一个字符串；chapter.nextPage = 一章被切成几页的站（`123.html` → `123_2.html`）里「下一页」那颗链接的选择器（例：#pager_next、.pagenext；正文框里的先试，框里找不到会整页找——书海阁那颗就在框外），一章一页的站留空——填了也只跟同一章的下一页（地址末尾多出 `_数字` 的那种），`124.html` 那种是下一章，不跟；intro = 书页上「内容简介」那一格的选择器（`#intro`）；hot = 首页/榜单那一族：group 是一个分类块（块上用 category 取分类名），item 是块里每一本书，行里再写 bookName / author / bookUrl；author 写 `@text` 表示取这一行自己的文字（榜单常排成 `<li><a>书名</a>/作者</li>`，书名在 a 里、作者在外面）；整段不写就是这条源没有热门可抓；crawl = 并发、两条请求之间的随机间隔、重试次数。要跑 JavaScript 才出得来正文的源装不上（手机上不内嵌 JS 引擎）。这一族还有两种源不给文字：kind=comic 的漫画源（chapter.content 不用写，改写 chapter.image 指出每一页那张图在哪一格，必须写成「选择器 @属性」，例：img.lazy @data-original —— 懒加载的站真地址挂在 data-original 而不是 src）；kind=paper 的文献源（一篇就是一支 PDF，toc 和 chapter 两段整个可以不写，bookUrl 那一格直接指向可下的 PDF）。search.format=xml 的 Atom 源还是用 CSS 选择器（arXiv 那种），=json 的才换成点号路径（item 写 results[]，字段写 authorships[].author.display_name，OpenAlex 那份倒排摘要写 abstract_inverted_index @invert）。toc.name = 章名不在 a 自己的文字里、挂在里面那个 span 上时指过去（不然按钮那两个字会粘进章名）；toc.reverse = 站点把目录排成最新在最前时写 true（不翻的话「第 1 章」会是最长那一话，进度和下一章全反）。",
   "cover": "#fmimg img @src",
   "intro": "#intro",
   "hot": {
@@ -36,7 +36,8 @@
   },
   "chapter": {
     "content": "#content",
-    "filter": ["\\(本章完\\)"]
+    "filter": ["\\(本章完\\)"],
+    "nextPage": ""
   },
   "crawl": {
     "concurrency": 3,

@@ -1,0 +1,26 @@
+{
+  "id": "arxiv",
+  "name": "arXiv",
+  "homeUrl": "https://arxiv.org/",
+  "kind": "paper",
+  "charset": "utf-8",
+  "note": "官方开放接口（Atom XML），免注册、免密钥。2026-10-13 从这台机实测：搜「transformer attention」回 2 条 entry；arxiv.org/pdf/2010.11929 直下 3,743,814 字节、开头 %PDF-1.5。下下来就是一支标准 PDF，开的是现成的整页阅读器（翻页/双指缩放/缩略图/页码书签都同一套）。没有 toc/chapter 两段：一篇就是一篇，没有章",
+  "search": {
+    "url": "https://export.arxiv.org/api/query?search_query=all:%s&start=0&max_results=30&sortBy=relevance",
+    "format": "xml",
+    "item": "entry",
+    "bookName": "title",
+    "author": "author name",
+    "category": "",
+    "latestChapter": "",
+    "lastUpdateTime": "updated",
+    "intro": "summary",
+    "bookUrl": "link[title=pdf] @href"
+  },
+  "crawl": {
+    "concurrency": 1,
+    "minIntervalMs": 1000,
+    "maxIntervalMs": 3000,
+    "maxAttempts": 3
+  }
+}

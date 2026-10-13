@@ -1,0 +1,41 @@
+{
+  "id": "guazi",
+  "name": "瓜子漫画",
+  "homeUrl": "https://www.guazimanhua.com/",
+  "kind": "comic",
+  "charset": "utf-8",
+  "note": "2026-10-13 从这台机实测：搜「斗罗大陆」7 行、海贼王书页整页 2148 条章链接（首屏那颗「开始阅读」+ 手机格 + 桌面格各排一遍），所以 toc.item 只认 `div.all-chapter-grid` 那一格 —— 它正好 1068 条不重复。图在 src 里（不是懒加载），图床 img.guazicdn.com 不查 Referer、地址不带签名。目录是 newest-first，`toc.reverse` 翻了再交给引擎，不然「第 1 章」会是最长那一话。聚合站、不是版权方",
+  "cover": "img.cover @src",
+  "intro": ".mobile-comic-desc",
+  "hot": {
+    "url": "https://www.guazimanhua.com/category.php",
+    "group": "article.card",
+    "item": "h3 a",
+    "bookName": "h3 a",
+    "bookUrl": "h3 a @href"
+  },
+  "search": {
+    "url": "https://www.guazimanhua.com/category.php?keyword=%s",
+    "item": "article.card",
+    "bookName": "h3 a",
+    "author": "",
+    "category": ".meta",
+    "bookUrl": "h3 a @href"
+  },
+  "toc": {
+    "item": "div.all-chapter-grid a[href^=\"/chapter.php\"]",
+    "name": "span",
+    "reverse": true
+  },
+  "chapter": {
+    "content": "",
+    "filter": [],
+    "image": "img.reading-image @src"
+  },
+  "crawl": {
+    "concurrency": 4,
+    "minIntervalMs": 300,
+    "maxIntervalMs": 900,
+    "maxAttempts": 3
+  }
+}

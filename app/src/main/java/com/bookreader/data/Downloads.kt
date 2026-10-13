@@ -86,21 +86,42 @@ object Downloads {
             bookUrl = hit.bookUrl, ruleId = rule.id, bookName = hit.bookName,
             author = hit.author, sourceName = rule.name,
         )
+        // 这本书是不是已经在架上：书架上那本的 source.tsv 才算数，下载历史那张表是可以删的
+        val route = routeOf(BookLibrary(ctx).downloaded()[BookProvenance.key(rule.id, hit.bookUrl)], update, head)
+        if (route.bookId.isNotEmpty()) rec.bookId = route.bookId
         rec.state = DownloadRecord.STATE_RUNNING
         rec.error = ""
-        if (rec.startedAt == 0L || update) rec.startedAt = System.currentTimeMillis()
+        if (rec.startedAt == 0L || route.update) rec.startedAt = System.currentTimeMillis()
         h.put(rec)
         WorkManager.getInstance(ctx).enqueueUniqueWork(
             nameOf(hit.bookUrl),
             ExistingWorkPolicy.KEEP,
             OneTimeWorkRequestBuilder<DownloadWorker>()
-                .setInputData(DownloadWorker.input(rule, hit, update, head))
+                .setInputData(DownloadWorker.input(rule, hit, route.update, route.head))
                 // 退避是 WorkRequest 那一层的参数（Configuration.Builder 上没有这个方法）。
                 // 指数而不是线性：源站限流时越急着重试越容易被继续挡。
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, java.time.Duration.ofSeconds(10))
                 .build(),
         )
     }
+
+    /**
+     * 这一次点下载到底是"再来一本"还是"给架上那本补新章"。
+     *
+     * 判据是同一条源 + 同一个书页地址在架上有没有那本：有就写回它的 id（进度、书签、置顶全按 id 记），
+     * 界面上那颗按钮跟着改成「增量更新」。原先第二次点会另起一个 id，架上就多出第二本一样的书
+     * —— 抓章那一层本来就是按章缓存在磁盘上的，所以"增量"省的正是这部分网络请求。
+     *
+     * `head`（先拉开头）在架上那一本上必须归零：入库是把这份前 N 章**整本重灌**，
+     * 带着 head 写回原 id 等于把一本全本裁成开头十章。
+     */
+    internal fun routeOf(onShelf: String?, update: Boolean, head: Int): Route {
+        val id = onShelf.orEmpty()
+        return if (id.isEmpty()) Route(id, update, head) else Route(id, true, 0)
+    }
+
+    /** [routeOf] 的结论：写回哪本、是不是增量、拉几章。 */
+    internal data class Route(val bookId: String, val update: Boolean, val head: Int)
 
     /** 取消只改队列；那一行由 worker 自己写成"已取消"（它知道已经抓到哪一章）。 */
     fun cancel(ctx: Context, bookUrl: String) {

@@ -267,6 +267,51 @@ class ReaderPrefs(context: Context) {
 
     fun loadWholePage(bookId: String): Int = p.getInt("page.$bookId", 0)
 
+    /**
+     * 一本漫画读到哪了：`章号|页号`，两个都是 0 基。
+     *
+     * 不复用 [saveWholePage] 那个单页号：漫画的位置是**二维**的（第 37 话第 4 页），
+     * 把章和页压成一个数就得在每一处读它的地方按"这一章有几页"再除一次，而章的页数只有磁盘上知道。
+     */
+    fun saveComicPos(bookId: String, chapter: Int, page: Int) {
+        p.edit { putString("comic.$bookId", chapter.coerceAtLeast(0).toString() + "|" + page.coerceAtLeast(0)) }
+    }
+
+    /** 没存过 = 从第一话第一页开始。串写歪了也当没存过，别把一个人扔进一个不存在的页号。 */
+    fun loadComicPos(bookId: String): Pair<Int, Int> {
+        val c = (p.getString("comic.$bookId", "") ?: "").split('|')
+        return (c.getOrNull(0)?.toIntOrNull() ?: 0) to (c.getOrNull(1)?.toIntOrNull() ?: 0)
+    }
+
+    /** 漫画的进度口径：读的是「第几话」，不是字数 —— 它没有字符偏移，硬算字数就是一句假话。 */
+    fun comicProgress(bookId: String): String {
+        val (c, _) = loadComicPos(bookId)
+        return "第 ${c + 1} 话"
+    }
+
+    /**
+     * 一本漫画的书签：一串「章号|页号」，两个都是 0 基（和 [saveComicPos] 同一口径，
+     * 存 1 基的话每一处读它的地方要各自再加一次 1 —— 页码书签那一族已经栽过一次）。
+     */
+    fun comicBookmarks(bookId: String): List<Pair<Int, Int>> =
+        (p.getString("comicMarks.$bookId", "") ?: "").split(';')
+            .mapNotNull { raw ->
+                val c = raw.split('|')
+                val i = c.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+                i to (c.getOrNull(1)?.toIntOrNull() ?: 0)
+            }.distinct()
+
+    /** 记当前这一页。同一页按两次不出两行（`distinct`）—— 「插入书签」按快了是常事。 */
+    fun addComicBookmark(bookId: String, chapter: Int, page: Int) {
+        val list = (comicBookmarks(bookId) + (chapter to page)).distinct().sortedWith(compareBy({ it.first }, { it.second }))
+        p.edit { putString("comicMarks.$bookId", list.joinToString(";") { "${it.first}|${it.second}" }) }
+    }
+
+    fun removeComicBookmark(bookId: String, chapter: Int, page: Int) {
+        val list = comicBookmarks(bookId) - (chapter to page)
+        p.edit { if (list.isEmpty()) remove("comicMarks.$bookId") else putString("comicMarks.$bookId", list.joinToString(";") { "${it.first}|${it.second}" }) }
+    }
+
     /** 书签：一本书一串 "chapterIndex|absoluteOffset"。 */
     fun bookmarks(bookId: String): List<BookPosition> =
         (p.getString("marks.$bookId", "") ?: "").split(';')

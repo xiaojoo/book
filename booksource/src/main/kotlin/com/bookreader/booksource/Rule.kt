@@ -5,8 +5,9 @@ import java.net.URI
 /**
  * 一条书源 = 一个 JSON 文件（导入即"安装"，删掉即"卸载"）。
  *
- * 字段少是有意的：这一族只做"搜到 → 抓完 → 合成一本 txt"，
- * 所以只有四段取值（search / book / toc / chapter）加一段抓取节奏（crawl）。
+ * 字段少是有意的：这一族只做"搜到 → 抓完 → 合成一本"，
+ * 所以只有四段取值（search / book / toc / chapter）加一段抓取节奏（crawl），
+ * 外加一格 `kind` 说明这条源交出来的是**文字、图片还是 PDF**（小说 / 漫画 / 文献）。
  * 明确不支持的：需要跑 JS 才能算参数或解密的源（手机端不内嵌 V8）、CF 盾的站。
  * 这两类在加载时就拒绝并说清原因，不让它变成"按了没反应"。
  */
@@ -17,6 +18,9 @@ data class Rule(
     val note: String,
     /** 站点响应体的字符集；空 = 先看 HTTP 头，再看 meta 标签，最后按 UTF-8。老站一大半是 GBK。 */
     val charset: String,
+    /** 这条源给的是哪一类东西：[Rule.NOVEL]（默认）/ [Rule.COMIC] / [Rule.PAPER]。 */
+    val kind: String,
+    /** 搜索那一段。文献站也要这一格，所以它不在 kind 里重复一遍。 */
     val search: SearchRule?,
     /** 书页上那张封面图的 pick 写法（`#fmimg img @src`）。空 = 这条源不取封面，书架上走默认封面。 */
     val cover: String,
@@ -24,11 +28,27 @@ data class Rule(
     val intro: String,
     /** 首页/榜单页上那些分类块。空 = 这条源没有热门可抓，精选那一页就不列它。 */
     val hot: HotRule?,
+    /** 目录页。文献源没有"章"这一说，那一条源这一段整个可以缺。 */
     val toc: TocRule,
     val chapter: ChapterRule,
     val crawl: CrawlRule,
 ) {
     val canSearch: Boolean get() = search != null
+
+    /** 一本漫画 = 一章若干张图，抓回来的是图片地址不是文字。 */
+    val isComic: Boolean get() = kind == COMIC
+
+    /** 一篇文献 = 一支可以直接下下来的 PDF，没有目录、没有正文容器。 */
+    val isPaper: Boolean get() = kind == PAPER
+
+    companion object {
+        const val NOVEL = "novel"
+        const val COMIC = "comic"
+        const val PAPER = "paper"
+
+        /** 导入时按这张表验 kind：写错的那一条源要在装上的那一刻就说，不该等到"下载下来一本空的"。 */
+        val KINDS = mapOf(NOVEL to "小说", COMIC to "漫画", PAPER to "文献")
+    }
 }
 
 /**
@@ -46,13 +66,20 @@ data class HotRule(
     val bookUrl: String,
 )
 
-/** 搜索：url 里的 %s 换成关键词（自动按 URL 编码）；各取值字段见 [pick]。 */
+/**
+ * 搜索：url 里的 %s 换成关键词（自动按 URL 编码）；各取值字段见 [pick]。
+ *
+ * `format` 决定后面那些字段是按什么写法取的：html/xml 是 CSS 选择器（Atom 也是 XML，jsoup 同一套），
+ * json 是点号路径（见 [jsonPick]）。文献接口回的是 JSON，那一条源的字段就得写成 `results[]` 那种。
+ */
 data class SearchRule(
     val url: String,
     val method: String,
     val data: String,
     /** 发搜索之前先种的 cookie（`k=v; k2=v2`）。书海阁少了 waf_sc 就直接回"找不到您要搜索的内容"。 */
     val cookies: String,
+    /** 这一页回来的是 html / xml / json。 */
+    val format: String,
     val item: String,
     val bookName: String,
     val author: String,
@@ -64,11 +91,41 @@ data class SearchRule(
     val bookUrl: String,
 )
 
-/** 目录页：item 选出每一章那条 <a>。有下拉框分页的站 nextPage 指向 option 们，url 是带 %s 的模板。 */
-data class TocRule(val url: String, val item: String, val nextPage: String)
+/**
+ * 目录页：item 选出每一章那条 <a>。有下拉框分页的站 nextPage 指向 option 们，url 是带 %s 的模板。
+ *
+ * `name` 是章名**不在 a 自己的文字里**的那种站给的写法（瓜子漫画：`<a href=…><span>第 68 卷</span><em>阅读</em></a>`，
+ * 整条 a 的文字会读成"第 68 卷阅读"）。留空 = 还用 a 自己的文字。
+ *
+ * `reverse` 给"目录 newest-first"的那一类（瓜子漫画两格都是倒着排的）：不翻的话第 1 章是最长的那一话，
+ * 进度、书签、"下一章"全都反。翻不翻是站点的事实，不是"看着顺不顺眼"，所以写在源里而不是在界面上给一颗开关。
+ */
+data class TocRule(
+    val url: String,
+    val item: String,
+    val nextPage: String,
+    val name: String,
+    val reverse: Boolean,
+)
 
-/** 正文页：content 选正文容器，filter 里每条正则命中的部分丢掉（站点水印、"本章完"、求收藏）。 */
-data class ChapterRule(val content: String, val filter: List<String>)
+/**
+ * 正文页：content 选正文容器，filter 里每条正则命中的部分丢掉（站点水印、"本章完"、求收藏）。
+ *
+ * `nextPage` = "这一章的下一页"那颗链接的选择器（`123.html` → `123_2.html` 那种一章切几页的站）：
+ * 正文框里的先试，框里找不到会整页找 —— 书海阁那两颗（`#pager_next`、`#A3`）一个在页顶一个在页尾，
+ * 都在 `#content` 外面。留空 = 这一家一章一页（梦书、爱下书都是）。
+ * 填了也只跟"同一章的下一页"，见 [nextPageUrl]。
+ *
+ * `image` 是漫画那一族用的：一章 = 一排图，这一格选出每一张（按页面上的先后顺序，就是页序）。
+ * 写法还是 [pick] 那一套，只是取的是**每一个**匹配（见 [pickAll]）—— 懒加载的站把真地址放在
+ * `data-original` 而不是 `src`，所以这一格通常得写成 `img.lazy @data-original`。
+ */
+data class ChapterRule(
+    val content: String,
+    val filter: List<String>,
+    val nextPage: String,
+    val image: String,
+)
 
 /**
  * 抓取节奏。区间和重试次数不是"调快点省时间"的参数：
@@ -100,20 +157,24 @@ data class BookHit(
 
 object RuleLoader {
 
-    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "cover", "intro", "hot", "search", "toc", "chapter", "crawl")
+    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "kind", "cover", "intro", "hot", "search", "toc", "chapter", "crawl")
     private val SEARCH = setOf(
-        "url", "method", "data", "cookies", "item", "bookName", "author", "category",
+        "url", "method", "data", "cookies", "format", "item", "bookName", "author", "category",
         "latestChapter", "lastUpdateTime", "wordCount", "intro", "bookUrl",
     )
-    private val TOC = setOf("url", "item", "nextPage")
+    private val TOC = setOf("url", "item", "nextPage", "name", "reverse")
     private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl")
-    private val CHAPTER = setOf("content", "filter")
+    private val CHAPTER = setOf("content", "filter", "nextPage", "image")
     private val CRAWL = setOf("concurrency", "minIntervalMs", "maxIntervalMs", "maxAttempts")
+
+    /** 一頁回來的东西长什么样：决定了用哪一套取值写法。文献接口回 JSON，arXiv 回 Atom。 */
+    private val FORMATS = mapOf("html" to "网页", "xml" to "XML/Atom", "json" to "JSON")
 
     fun load(text: String, where: String = "书源"): Rule {
         val o = Json.obj(Json.parse(text))
         unknown(o, TOP, where)
         for ((k, v) in o) noJs(where, k, v)
+        val kind = oneOf(o, "kind", where, Rule.NOVEL, Rule.KINDS)
         val search = o["search"]?.let { s ->
             val m = Json.obj(s)
             unknown(m, SEARCH, "$where.search")
@@ -122,9 +183,10 @@ object RuleLoader {
                 method = word(m, "method", "$where.search", "GET"),
                 data = str(m, "data", "$where.search"),
                 cookies = str(m, "cookies", "$where.search"),
+                format = oneOf(m, "format", "$where.search", "html", FORMATS),
                 item = str(m, "item", "$where.search", required = true),
                 bookName = str(m, "bookName", "$where.search", required = true),
-                author = str(m, "author", "$where.search", required = true),
+                author = str(m, "author", "$where.search", required = kind != Rule.PAPER),
                 category = str(m, "category", "$where.search"),
                 latestChapter = str(m, "latestChapter", "$where.search"),
                 lastUpdateTime = str(m, "lastUpdateTime", "$where.search"),
@@ -133,9 +195,11 @@ object RuleLoader {
                 bookUrl = str(m, "bookUrl", "$where.search", required = true),
             )
         }
-        val toc = Json.obj(o["toc"] ?: throw RuleException("$where：缺 \"toc\" 那一段"))
+        // 文献源没有"章"这一说（一篇就是一支 PDF），那两段整个可以不写；
+        // 小说/漫画缺了就是在装一条抓不出东西的源，当场说，别等"下载下来一本空的"
+        val toc = o["toc"]?.let { Json.obj(it) } ?: emptyMap()
         unknown(toc, TOC, "$where.toc")
-        val chapter = Json.obj(o["chapter"] ?: throw RuleException("$where：缺 \"chapter\" 那一段"))
+        val chapter = o["chapter"]?.let { Json.obj(it) } ?: emptyMap()
         unknown(chapter, CHAPTER, "$where.chapter")
         val crawl = (o["crawl"]?.let { Json.obj(it) } ?: emptyMap())
         unknown(crawl, CRAWL, "$where.crawl")
@@ -145,6 +209,7 @@ object RuleLoader {
             homeUrl = str(o, "homeUrl", where, required = true),
             note = str(o, "note", where),
             charset = str(o, "charset", where),
+            kind = kind,
             cover = str(o, "cover", where),
             intro = str(o, "intro", where),
             hot = o["hot"]?.let { h ->
@@ -163,14 +228,18 @@ object RuleLoader {
             search = search,
             toc = TocRule(
                 url = str(toc, "url", "$where.toc").also { legalUrl(it, "$where.toc.url") },
-                item = str(toc, "item", "$where.toc", required = true),
+                item = str(toc, "item", "$where.toc", required = kind != Rule.PAPER),
                 nextPage = str(toc, "nextPage", "$where.toc"),
+                name = str(toc, "name", "$where.toc"),
+                reverse = bool(toc, "reverse", "$where.toc"),
             ),
             chapter = ChapterRule(
-                content = str(chapter, "content", "$where.chapter", required = true),
+                content = str(chapter, "content", "$where.chapter", required = kind == Rule.NOVEL),
                 filter = Json.arr(chapter["filter"] ?: emptyList<Any?>()).map {
                     it as? String ?: throw RuleException("$where.chapter.filter 里每一项都得是字符串")
                 },
+                nextPage = str(chapter, "nextPage", "$where.chapter"),
+                image = str(chapter, "image", "$where.chapter"),
             ),
             crawl = CrawlRule(
                 concurrency = intAt(crawl, "concurrency", "$where.crawl", 4, 1, 16),
@@ -187,7 +256,36 @@ object RuleLoader {
             if (it.cover.isNotEmpty() && !it.cover.contains('@')) {
                 throw RuleException("$where.cover：得写成「选择器 @src」这种取值写法（例：#fmimg img @src），现在只会取到元素的文字")
             }
+            // 同一族错法在漫画那一格上：图的地址一定挂在属性上（src / data-original / data-src），
+            // 不带 @ 取回来的就是那张图的 alt 文字，表现是"每一章都抓到了，一张图也没有"
+            if (it.isComic) {
+                if (it.chapter.image.isBlank()) {
+                    throw RuleException("$where.chapter.image：这是一条漫画源（\"kind\": \"comic\"），得指出每一页那张图在哪一格")
+                }
+                if (!it.chapter.image.contains('@')) {
+                    throw RuleException("$where.chapter.image：得写成「选择器 @属性」，例：#images img @data-original")
+                }
+            }
+            if (it.isPaper && it.search == null) {
+                throw RuleException("$where：文献源全靠 search 那一段（arXiv/OpenAlex 那种接口），没写就等于一条搜不动的源")
+            }
         }
+    }
+
+    /**
+     * 从表里取一个词，并且只认 [allowed] 里那几个（键就是要写的值，值是用来拼报错的中文名）。
+     * 留空 = 用 [dflt]。大小写不认：写成 `Comic` 的源文件是手抄的，不该因为一个大写字母就装不上。
+     */
+    private fun oneOf(o: Map<String, Any?>, k: String, where: String, dflt: String, allowed: Map<String, String>): String {
+        val v = str(o, k, where).lowercase()
+        if (v.isEmpty()) return dflt
+        if (!allowed.containsKey(v)) {
+            throw RuleException(
+                "$where.$k 只认这些：" + allowed.entries.joinToString("、") { "\"" + it.key + "\"（" + it.value + "）" } +
+                    "，写的是 \"" + v + "\"",
+            )
+        }
+        return v
     }
 
         /**
@@ -245,6 +343,12 @@ object RuleLoader {
      * 整数取值 + 上下限。两个 helper 故意不叫同一个名字：`int(o,k,w,4,1,16)` 这种实参是字面量，
      * Kotlin 允许整数字面量当 Long 用，重载就会撞成"实际是 Int、要 Long"那种看不懂的报错。
      */
+    /** 一个布尔格。写不成布尔的就当场说，而不是让它静默成 false —— "目录明明倒着排、界面却说第 1 章是最长那一话"没人会怀疑到这一格。 */
+    private fun bool(o: Map<String, Any?>, k: String, where: String): Boolean {
+        val v = o[k] ?: return false
+        return v as? Boolean ?: throw RuleException("$where.$k 要的是 true/false，写的是 \"" + v + "\"")
+    }
+
     private fun longAt(o: Map<String, Any?>, k: String, where: String, dflt: Long, lo: Long, hi: Long): Long {
         val v = o[k] ?: return dflt
         val n = v as? Long ?: (v as? Double)?.toLong() ?: throw RuleException("$where." + k + " 要的是整数")
@@ -252,6 +356,5 @@ object RuleLoader {
         return n
     }
 
-    private fun intAt(o: Map<String, Any?>, k: String, where: String, dflt: Int, lo: Int, hi: Int): Int =
-        longAt(o, k, where, dflt.toLong(), lo.toLong(), hi.toLong()).toInt()
+    private fun intAt(o: Map<String, Any?>, k: String, where: String, dflt: Int, lo: Int, hi: Int): Int =        longAt(o, k, where, dflt.toLong(), lo.toLong(), hi.toLong()).toInt()
 }

@@ -40,6 +40,12 @@ class BookLibrary(private val context: Context) {
     fun delete(id: String): Boolean = dir(id).deleteRecursively()
 
     /**
+     * 书架上从书源下来的那些本：`BookProvenance.key(源 id, 书页地址)` → 书 id。
+     * 点下载之前问一次，用来把"第二次下同一本"接回原来那一本（见 [Downloads.start]）。
+     */
+    fun downloaded(): Map<String, String> = BookProvenance.downloadedBooks(root)
+
+    /**
      * 改名只动清单里那一行。书名在书架、书签页、阅读页顶栏、听书页、封面占位那十几处都是从
      * manifest 读的，所以这里改一处就处处跟着变 —— 不用每个表面各存一份覆盖值（那样迟早有一处忘了读）。
      */
@@ -59,6 +65,62 @@ class BookLibrary(private val context: Context) {
 
     /** 从源站抓回来的那张封面。没抓到的书没这个文件，书架上走默认封面。 */
     fun coverFile(id: String): File = File(dir(id), COVER_FILE)
+
+    /** 漫画那一族的图就在这一层下面：一章一个目录，目录里是那些图 + 一份 `pages.tsv`。 */
+    fun comicDir(id: String): File = File(dir(id), COMIC_FILE)
+
+    /**
+     * 一本新书的目录名 = id。进度、书签、置顶全按它记，所以这个算法只能有一份：
+     * 下载那一头先按它把目录建出来（图要往里写），入库那一头再按它把清单写进同一个目录。
+     */
+    fun newId(title: String) = "${System.currentTimeMillis()}-${title.replace(UNSAFE, "").take(40)}"
+
+    /**
+     * 一本漫画的清单。它没有"抽正文 → 建 chunk/章索引"那一步，图本身就在目录里躺着，
+     * 所以这里只写三样：这是什么种类、全书几章（按源站目录，不是按已下的章）、一共多少张图。
+     *
+     * `chapterCount` 用**整本目录**的章数而不是已下载的章数：「先拉开头」那本只有前十章有图，
+     * 书架上那行该写"全书 1068 章"，而阅读页的目录要把没下的那几百章灰着摆出来 ——
+     * 少了这个数字，那一本在界面上就只剩十章，像被抓坏了。
+     */
+    fun writeComicMeta(id: String, title: String, author: String, tocChapters: Int, images: Int): BookMeta {
+        val d = dir(id)
+        d.mkdirs()
+        // 章表（`comic/chapters.tsv`）不在这里写：那一头是 ComicBook.record 每抓完一章 append 一行，
+        // 抓一半被杀或按暂停时那一半已经落地了。这里只写清单那一样：种类、全书几章、一共几张图
+        val meta = BookMeta(
+            id = id,
+            title = title,
+            author = author,
+            totalChars = 0L,
+            chunkChars = 0,
+            chunkCount = 0,
+            chapterCount = tocChapters,
+            contentBytes = images.toLong(),
+            sourceBytes = 0L,
+            sourceCharset = "WEBP/JPEG",
+            kind = BookMeta.COMIC,
+            pages = images,
+        )
+        IndexCodec.writeManifest(File(d, IndexCodec.MANIFEST), comicManifest(meta))
+        return meta
+    }
+
+    private fun comicManifest(m: BookMeta) = linkedMapOf(
+        "id" to m.id,
+        "title" to m.title,
+        "author" to m.author,
+        // 漫画没有"字"这个口径，别把张数塞进 totalChars 冒充字数（书架上那行会写成"12 万字"的那种假话）
+        "totalChars" to "0",
+        "chunkChars" to "0",
+        "chunkCount" to "0",
+        "chapterCount" to m.chapterCount.toString(),
+        "contentBytes" to m.contentBytes.toString(),
+        "sourceBytes" to "0",
+        "sourceCharset" to m.sourceCharset,
+        "kind" to BookMeta.COMIC,
+        "pages" to m.pages.toString(),
+    )
 
     fun displayName(uri: Uri): String {
         // file:// 没有 DISPLAY_NAME 可查，只能拿路径末段，否则书架上会全叫"未命名小说"
@@ -100,11 +162,13 @@ class BookLibrary(private val context: Context) {
      */
     fun importFile(staged: File, title: String, into: String? = null, onProgress: (Double) -> Unit = {}): BookMeta {
         val ext = staged.extension
-        val id = into ?: "${System.currentTimeMillis()}-${title.replace(UNSAFE, "").take(40)}"
+        val id = into ?: newId(title)
         val dir = File(root, id)
         if (into != null) {
-            // 清掉上一版的中间件再重灌：留着旧的 chunk 会让新书的偏移指到旧字节上
-            dir.listFiles()?.forEach { if (it.name != COVER_FILE) it.delete() }
+            // 清掉上一版的中间件再重灌：留着旧的 chunk 会让新书的偏移指到旧字节上。
+            // 封面和那三份来源记录不动 —— 更新失败那一次不该顺手把「这本是从哪条源下来的」抹掉，
+            // 抹了「补齐全本」那颗就再也找不回书页地址（BookProvenance 的注释早就写了要留，代码之前没做到）
+            dir.listFiles()?.forEach { if (it.name !in KEEP_ON_UPDATE) it.delete() }
         }
         val t0 = System.nanoTime()
         return try {
@@ -241,7 +305,7 @@ class BookLibrary(private val context: Context) {
         return importWholePage(staged, dir, id, title, BookMeta.PPTX, PPTX_FILE, deck?.slides?.size ?: 0)
     }
 
-    private companion object {
+    companion object {
         val UNSAFE = Regex("""[\\/:*?"<>|\s]""")
 
         /** 这些扩展名一律该走抽正文那条路；认不出壳就报错，不当纯文本吞。 */
@@ -250,5 +314,12 @@ class BookLibrary(private val context: Context) {
         const val PDF_FILE = "document.pdf"
         const val PPTX_FILE = "deck.pptx"
         const val COVER_FILE = "cover.jpg"
+        const val COMIC_FILE = "comic"
+
+        /** 一本漫画的章表：`章号  目录名  张数  章名`，一行一章，只有磁盘上真有图的那几章在里面。 */
+        const val CHAPTERS_TSV = "chapters.tsv"
+
+        /** 更新整本（`into` 不是空）时不清的那几份：都不是"上一版正文的中间件"。 */
+        val KEEP_ON_UPDATE = setOf(COVER_FILE, BookProvenance.SOURCE, BookProvenance.INTRO, BookProvenance.OUTLINE)
     }
 }

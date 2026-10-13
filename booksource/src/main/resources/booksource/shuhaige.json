@@ -1,0 +1,43 @@
+{
+  "id": "shuhaige",
+  "name": "书海阁小说网",
+  "homeUrl": "https://www.shuhaige.net/",
+  "charset": "utf-8",
+  "note": "2026-10-13 从这台机实测：这一家**一章切好几页**（剑来 第52章 = 144629857.html → _2 … _10，十页），所以 chapter.nextPage 填了 #pager_next —— 那两颗链接（页顶 #pager_next、页尾 #A3）都在 #content 外面，最后一跳的 #pager_next 指向 /shu_102752.html（书主页），被「只跟同一章的下一页」挡下。每一页正文最后一行是站点的话（这章没有结束…/小主…/喜欢X请大家收藏…），写在 filter 里。#list 那个 dl 两个 dt：第一个 dt 下是倒序最新章，第二个 dt「《X》正文」之后 1278 条才是正序。搜索口 POST searchkey+searchtype，note 里那句「爬太快会丢包」是真的，所以并发压到 2。",
+  "cover": "#fmimg img @src",
+  "intro": "#intro > p:nth-child(1)",
+  "search": {
+    "url": "https://www.shuhaige.net/search.html",
+    "method": "POST",
+    "data": "{searchkey: %s, searchtype: all}",
+    "cookies": "waf_sc=''; HMACCOUNT=''",
+    "item": "#sitembox > dl",
+    "bookName": "dd > h3 > a",
+    "bookUrl": "dd > h3 > a@href",
+    "author": "dd:nth-child(3) > span:nth-child(1)",
+    "category": "dd:nth-child(3) > span:nth-child(3)",
+    "wordCount": "dd:nth-child(3) > span:nth-child(4)",
+    "latestChapter": "dd:nth-child(5) > a",
+    "lastUpdateTime": "dd:nth-child(5) > span"
+  },
+  "toc": {
+    "item": "#list > dl > dt:nth-of-type(2) ~ dd > a"
+  },
+  "chapter": {
+    "content": "#content",
+    "nextPage": "#pager_next",
+    "filter": [
+      "这章没有结束，请点击下一页继续阅读！",
+      "小主，这个章节后面还有哦，请点击下一页继续阅读，后面更精彩！",
+      "本小章还未完，请点击下一页继续阅读后面精彩内容！",
+      "喜欢(.+?)请大家收藏：\\(([^)]+)\\)\\1书海阁小说网更新速度全网最快。",
+      "\\(本章完\\)"
+    ]
+  },
+  "crawl": {
+    "concurrency": 2,
+    "minIntervalMs": 500,
+    "maxIntervalMs": 1500,
+    "maxAttempts": 3
+  }
+}

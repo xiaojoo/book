@@ -2,6 +2,7 @@ package com.bookreader.booksource
 
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.Charset
 
@@ -61,7 +62,8 @@ fun formBody(data: String, keyword: String, charset: String = "UTF-8"): String {
 /** 一整个搜索结果页 → 命中列表。`base` 是这一页自己的 URL，相对链接靠它补全。 */
 fun searchResults(rule: Rule, html: String, base: String): List<BookHit> {
     val s = rule.search ?: return emptyList()
-    return html(base, html).select(s.item).mapNotNull { e ->
+    // Atom 那一档（arXiv）用 XML 解析器解，选择器写法不变：`<entry>` 就是 `entry`
+    return parseDoc(rule, base, html).select(s.item).mapNotNull { e ->
         val name = pick(e, s.bookName)
         val url = pick(e, s.bookUrl)
         // 书名或链接缺一样就不算一条：宁可少一条，也不给界面一条点不动的假结果
@@ -114,14 +116,22 @@ fun hotBooks(rule: Rule, html: String, base: String): List<BookHit> {
     }
 }
 
-/** 目录页 → 每一章的 (标题, 链接)。只取 item 选中的那些 <a>，顺序就是页面上的顺序。 */
-fun tocChapters(rule: Rule, html: String, base: String): List<Pair<String, String>> =
-    html(base, html).select(rule.toc.item).mapNotNull { a ->
+/** 目录页 → 每一章的 (标题, 链接)。只取 item 选中的那些 <a>，顺序就是页面上的顺序（`toc.reverse` 翻它）。 */
+fun tocChapters(rule: Rule, html: String, base: String): List<Pair<String, String>> {
+    val t = rule.toc
+    val out = html(base, html).select(t.item).mapNotNull { a ->
         val url = a.attr("abs:href").trim()
         if (url.isEmpty()) return@mapNotNull null
-        val name = a.ownText().ifBlank { a.text() }.trim()
+        // 章名默认取这条 a 自己的文字；挂在里面那个 span 上的（后面还跟着"阅读"那种按钮字，
+        // 或者站点在名字后面又缀了一格"(45p)"页数）用 toc.name 指过去。
+        // 指过去**取空**要退回 a 自己的文字，不能一路退到 URL 尾巴：那目录上就写出"166498.html"，
+        // 站点少给一个 class 的表现不该是几百行网址
+        val own = a.ownText().ifBlank { a.text() }.trim()
+        val name = if (t.name.isBlank()) own else pick(a, t.name).trim().ifBlank { own }
         (if (name.isEmpty()) url.substringAfterLast('/') else name) to url
     }
+    return if (t.reverse) out.asReversed() else out
+}
 
 /**
  * 目录分页：`toc.nextPage` 指向的是那种"第 1/2/3 页"的下拉框，取每个 option 的 value
@@ -151,6 +161,8 @@ fun coverUrl(rule: Rule, html: String, base: String): String {
 /** 正文页 → 去完广告的文字。返回空串 = 这一页什么都没抽到（限流站就是这样，不报错，就是空）。 */
 fun chapterText(rule: Rule, html: String, base: String): String {
     val box = html(base, html).selectFirst(rule.chapter.content) ?: return ""
+    // 分页导航摆在正文框**里面**（多数站就是这样），先摘掉再抽文字，否则"下一页"会变成章里的一行
+    dropPager(box, rule.chapter.nextPage)
     // 分段靠 <br>（这类站一大半如此）或 </p>；先换成换行，再剥标签。
     // 必须用 wholeText 不能用 text：text() 会把换行压成空格，一整本就成一坨了。
     val raw = box.html()
@@ -173,6 +185,78 @@ fun chapterText(rule: Rule, html: String, base: String): String {
 
 private fun html(base: String, body: String): Element = Jsoup.parse(body, base)
 
+/**
+ * "下一页"那颗链接（连同挂它的那一小条导航）不是正文，抽文字之前要摘掉。
+ *
+ * 只摘链接不够：站点在这一颗旁边一定还摆着"上一章 / 返回目录"，跟着链接一起留在正文里
+ * 就是每章中间多出来的几行废话。所以链接的父节点若整条都很短（导航那一行的长度），连父节点一起摘；
+ * 长就不摘父节点 —— 那是正文里夹了个链接（有的站把分页写在这一章最后一句话里），砍掉整段会丢字。
+ */
+private fun dropPager(box: Element, sel: String) {
+    if (sel.isBlank()) return
+    box.select(sel).forEach { a ->
+        val bar = a.parent()
+        if (bar != null && bar != box && bar.text().length <= NAV_BAR_MAX_CHARS) bar.remove() else a.remove()
+    }
+}
+
+/** 导航条那一行的长度上限（"上一章 返回目录 下一页" 也就十几个字）；正文段落几乎不可能这么短。 */
+private const val NAV_BAR_MAX_CHARS = 24
+
+/**
+ * 一章切几页的站（`123.html` → `123_2.html` → `123_3.html`）：这一页之后还剩半章没有。
+ *
+ * 找链接的顺序：**正文框里的先试**，找不到再整页找。整页这一步不是可有可无的宽松 ——
+ * 书海阁的 `#pager_next` 摆在页顶、`#A3` 摆在页尾 `.bottem2`，两个都在 `#content` 外面；
+ * 只认框内的话，它那一章十页只会下回第一页，后面九页无声丢掉。
+ *
+ * 真正的闸是 [samePageFamily]：只跟"同一章的下一页"。这一条挡住的正是梦书中文摆在正文框里的
+ * `class="next"`（那是**下一章**）和书海阁最后一跳指向的 `/shu_102752.html`（那是书主页）——
+ * 这两处都在页面上写着"下一页/下一章"，光看文字或只看选择器都会把整本书吞进第一章。
+ */
+fun nextPageUrl(rule: Rule, html: String, at: String): String? {
+    val sel = rule.chapter.nextPage
+    if (sel.isBlank()) return null
+    val doc = html(at, html)
+    val box = doc.selectFirst(rule.chapter.content)
+    val hrefs = ArrayList<String>()
+    if (box != null) box.select(sel).forEach { hrefs += it.attr("href").trim() }
+    doc.select(sel).forEach { hrefs += it.attr("href").trim() }
+    return hrefs.filter { it.isNotEmpty() }.distinct().mapNotNull { abs(at, it) }.firstOrNull { samePageFamily(at, it) }
+}
+
+private fun abs(at: String, href: String): String? =
+    runCatching { URI(at).resolve(href).normalize().toString() }.getOrNull()
+
+/**
+ * `123.html` 与 `123_2.html` 是同一章的两半；`124.html` 是下一章，不算。
+ *
+ * 判据是「拆掉分页后缀之后剩的名字一样」，不是「目标名以来源名打头」—— 后者会把 `1.html → 10.html`
+ * 也算成同族（10 正好以 1 打头），而那是下一章：一章一页的站里 id 接一位就是下一本/下一章，
+ * 跟过去等于把整本书并进第一章。分隔符（`_` 或 `-`）必须真的存在，光靠数字接尾不算分页。
+ */
+internal fun samePageFamily(from: String, to: String): Boolean {
+    if (from == to) return false
+    val a = runCatching { URI(from) }.getOrNull() ?: return false
+    val b = runCatching { URI(to) }.getOrNull() ?: return false
+    if (a.host != b.host || a.path == null || b.path == null) return false
+    if (a.path.substringBeforeLast('/', "") != b.path.substringBeforeLast('/', "")) return false
+    val (aS, aE) = fileParts(a.path.substringAfterLast('/'))
+    val (bS, bE) = fileParts(b.path.substringAfterLast('/'))
+    if (aE != bE) return false
+    return pageStem(aS) == pageStem(bS)
+}
+
+/** `123_2` 和 `123` 属于同一章 `123`；`1232` 属于另一章。 */
+private fun pageStem(name: String): String {
+    val cut = name.indexOfLast { it == '_' || it == '-' }
+    return if (cut > 0 && name.substring(cut + 1).isNotEmpty() && name.substring(cut + 1).all { it.isDigit() })
+        name.substring(0, cut) else name
+}
+
+private fun fileParts(name: String): Pair<String, String> =
+    if (name.contains('.')) name.substringBeforeLast('.') to name.substringAfterLast('.') else name to ""
+
 /** 一个源 = 一个引擎实例。抓页这件事交给 [Fetcher]，这里只做"取值"。 */
 class SearchEngine(private val rule: Rule, private val fetch: Fetcher) {
 
@@ -182,11 +266,18 @@ class SearchEngine(private val rule: Rule, private val fetch: Fetcher) {
         val url = expand(s.url, keyword, page, rule.charset)
         val body = if (s.method == "POST") formBody(s.data, keyword, rule.charset) else ""
         val p = fetch.fetch(PageRequest(url, s.method, body, s.cookies.ifBlank { null }, rule.charset.ifBlank { "UTF-8" }))
-        return searchResults(rule, p.text(rule.charset), p.finalUrl)
+        val text = p.text(rule.charset)
+        // JSON 那一档连"解成一棵树"都不是，取值写法是点号路径，所以在这里就分岔
+        return if (s.format == FORMAT_JSON) jsonResults(rule, text) else searchResults(rule, text, p.finalUrl)
     }
 
     /** 一本书的"头"：简介 + 完整目录。**一次书页请求拿全**，大纲就是目录的前若干条章名。 */
     fun head(bookUrl: String): BookHead {
+        // 文献源（kind=paper）压根没有目录那一段：它一片 PDF 就是"一整本"。
+        // 不在这里说的话，选不中任何元素的后果是"这本书 0 章"，而 0 章在界面上是一本空书，不是一句报错
+        if (rule.toc.item.isBlank()) {
+            throw RuleException("「" + rule.name + "」没有 toc 那一段：这一条源是一片一片的 PDF，没有目录可读")
+        }
         val p = fetch.fetch(PageRequest(bookUrl))
         val text = p.text(rule.charset)
         return BookHead(introOf(rule, text, p.finalUrl), chaptersFrom(text, p.finalUrl))

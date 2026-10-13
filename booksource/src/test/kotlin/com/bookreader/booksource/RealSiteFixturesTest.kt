@@ -1,6 +1,7 @@
 package com.bookreader.booksource
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assume.assumeTrue
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -275,6 +276,97 @@ class RealSiteFixturesTest {
         val m = live("mengshu-book.html", "http://www.mcxs.la/1_1639/")
         assertEquals("规则没写就不去页上乱找", "", coverUrl(bare, m.first, m.second))
     }
+
+    /**
+     * 书海阁是**第一家用上 `chapter.nextPage` 的真站**：2026-10-13 实测《剑来》第52章
+     * （`102752/144629857.html`）被切成十页，`_2 … _10`。
+     *
+     * 这一族判据钉的是四件在真页上会发生的事：
+     * ① 分页链接（`#pager_next`、页尾那颗 `#A3`）都在 `#content` **外面** —— 只认框内的那道旧闸会把
+     *    后面九页无声丢掉；
+     * ② 第十页的 `#pager_next` 指向 `/shu_102752.html`（书主页），必须被"只跟同一章的下一页"挡下，
+     *    否则一本书的目录会被并进最后一章；
+     * ③ 每一页正文的**最后一行**是站点的话（第一页"这章没有结束…"、中间"小主…"、末页"喜欢X请大家收藏…"），
+     *    靠 `chapter.filter` 那五条去掉；
+     * ④ 抽取字数不为空且十页里的人名都在（防"跟回来的是别的书"）。
+     */
+    @Test
+    fun shuhaigeSearchPageYieldsRowsAndTheBookUrlPointsAtTheCataloguePage() {
+        val (html, base) = live("shuhaige-search.html", "https://www.shuhaige.net/search.html")
+        val hits = searchResults(rule("shuhaige"), html, base)
+        val h = hits[0]
+        println("[书海阁搜索] 行数=${hits.size} 第一条=书名${h.bookName} 作者${h.author} 分类${h.category} " +
+            "字数${h.wordCount} 末章${h.latestChapter} 更新${h.lastUpdateTime} 地址${h.bookUrl}")
+        assertEquals("剑来", h.bookName)
+        assertEquals("烽火戏诸侯", h.author)
+        assertEquals("武侠", h.category)
+        assertEquals("2607万字", h.wordCount)
+        assertEquals("https://www.shuhaige.net/102752/", h.bookUrl)
+        assertEquals("末章那一格", "第52章 也曾少年思无邪", h.latestChapter)
+        assertEquals("更新时间那一格", "2025-12-04 11:20", h.lastUpdateTime)
+        assertEquals("这一页上就是 20 行结果", 20, hits.size)
+        assertEquals("每一行都得有自己的地址", hits.size, hits.count { it.bookUrl.isNotEmpty() })
+    }
+
+    @Test
+    fun shuhaigeCatalogTakesTheOrderedBlockAndSkipsTheLatestOne() {
+        val (html, base) = live("shuhaige-book.html", "https://www.shuhaige.net/102752/")
+        val chapters = tocChapters(rule("shuhaige"), html, base)
+        println("[书海阁目录] 章数=${chapters.size} 头两条=${chapters.take(2).map { it.first }} 末条=${chapters.last().first}")
+        assertEquals("第二个 dt 之后 1278 条，不含页顶倒序那 9 条最新章", 1278, chapters.size)
+        assertEquals("正序那一块从头排", "新书感言", chapters[0].first)
+        assertEquals("第一章 惊蛰", chapters[1].first)
+        assertEquals("https://www.shuhaige.net/102752/12317344.html", chapters[1].second)
+        assertEquals("第52章 也曾少年思无邪", chapters.last().first)
+        assertEquals("https://www.shuhaige.net/102752/144629857.html", chapters.last().second)
+        val urls = chapters.map { it.second }
+        assertEquals("目录里不能有重复章：" + urls.size + "/" + urls.distinct().size, urls.size, urls.distinct().size)
+        assertEquals("封面", "https://img.shuhaige.net/102752/20659.jpg", coverUrl(rule("shuhaige"), html, base))
+        assertTrue("简介要拿到第一段：" + introOf(rule("shuhaige"), html, base), introOf(rule("shuhaige"), html, base).startsWith("大千世界"))
+    }
+
+    @Test
+    fun shuhaigePaginationChainWalksToTheTenthPageAndStopsAtTheBookPage() {
+        val r = rule("shuhaige")
+        assertEquals("这一格用的就是页顶那颗链接", "#pager_next", r.chapter.nextPage)
+        val stem = "https://www.shuhaige.net/102752/144629857"
+        fun next(name: String, at: String) = nextPageUrl(r, fixtureHtml(name), at)
+        assertEquals("第一页的下一页", stem + "_2.html", next("shuhaige-chapter-1.html", stem + ".html"))
+        assertEquals("第二页接第三页", stem + "_3.html", next("shuhaige-chapter-2.html", stem + "_2.html"))
+        assertEquals("第九页接第十页", stem + "_10.html", next("shuhaige-chapter-9.html", stem + "_9.html"))
+        assertNull("末页的 #pager_next 指向书主页，不能被跟成这一章的第十一页", next("shuhaige-chapter-10.html", stem + "_10.html"))
+    }
+
+    /** 每一页正文最后一行都是站点的话；`filter` 那五条没一条命中就别自称抽干净了。 */
+    @Test
+    fun shuhaigeChapterPagesComeOutWithoutTheSiteSentences() {
+        val r = rule("shuhaige")
+        val stem = "https://www.shuhaige.net/102752/144629857"
+        val got = listOf(1, 2, 9, 10).map { i ->
+            val at = stem + if (i == 1) ".html" else "_$i.html"
+            val text = chapterText(r, fixtureHtml("shuhaige-chapter-$i.html"), at)
+            println("[书海阁正文] 第$i 页 段数=${text.split("\n\n").size} 字数=${text.count { it != '\n' }} 末段=「${text.substringAfterLast("\n\n")}」")
+            i to text
+        }
+        got.forEach { (i, text) ->
+            assertTrue("第$i 页不该有「下一页」：" + text, !text.contains("下一页"))
+            assertTrue("第$i 页不该有「请大家收藏」：" + text, !text.contains("请大家收藏"))
+            assertTrue("第$i 页不该有「小主」：" + text, !text.contains("小主"))
+            assertTrue("第$i 页正文不能空", text.count { it != '\n' } in 1700..1900)
+            assertTrue("第$i 页不该留 &nbsp; 那种看不见却非空的空白", text.none { it.code == 160 })
+            assertTrue("段间只交出一条空行（第$i 页）", !text.contains("\n\n\n"))
+        }
+        // 这两句是量出来的（同一页用另一把尺子数到 35 行 1745 字，差的正是被 filter 掉的那一行 18 字）
+        assertEquals("第一页收尾该落回正文，不是站点那句话",
+            "陈平安笑道：“知道‘二尺之物’是什么，也是一种真本事。”", got[0].second.substringAfterLast("\n\n"))
+        assertEquals("末页收尾是这一章的结句", "我们都曾少年思无邪。", got[3].second.substringAfterLast("\n\n"))
+        val all = got.joinToString("\n\n") { it.second }
+        listOf("陈平安", "荆蒿", "王宪").forEach {
+            assertTrue("这几页里都该有「$it」，不然跟回来的就不是这本书", all.contains(it))
+        }
+    }
+
+    private fun fixtureHtml(name: String): String = String(res("/live/$name"), Charsets.UTF_8)
 
     @Test
     fun aixiashuLastVolumeChaptersPointAtAnotherBooksTextAndNothingInDomSaysSo() {
