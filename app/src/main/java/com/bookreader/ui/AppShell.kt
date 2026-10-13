@@ -142,6 +142,8 @@ object Chrome {
      */
     var barHideMs by mutableIntStateOf(1500)
     var barShowMs by mutableIntStateOf(275)
+    /** "藏系统栏"这一枪的动画有没有接到应用手里（`BarSync`）。接到了就不必再去拟合厂商那条时长 */
+    var barsSynced by mutableStateOf(false)
 
     private val day = Palette(
         page = Color(0xFFF6F7F9), card = Color(0xFFFFFFFF), ink = Color(0xFF22262E),

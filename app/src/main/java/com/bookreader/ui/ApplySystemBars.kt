@@ -2,6 +2,11 @@ package com.bookreader.ui
 
 import android.app.Activity
 import android.os.Build
+import android.os.CancellationSignal
+import android.os.SystemClock
+import android.view.Choreographer
+import android.view.View
+import android.view.animation.LinearInterpolator
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -18,6 +23,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.core.graphics.Insets
 import androidx.compose.ui.unit.IntSize
+import androidx.core.view.WindowInsetsAnimationControllerCompat
+import androidx.core.view.WindowInsetsAnimationControlListenerCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
@@ -50,6 +57,7 @@ fun ApplySystemBars(darkIcons: Boolean, immersive: Boolean = false) {
     // 我们刚发的是藏还是还 —— 只有这一对才认领动画时长：键盘那种 IME 动画也走这个回调，
     // 不区分的话菜单会被键盘的时长带跑
     var pending by remember { mutableStateOf<Boolean?>(null) }
+    val sync = remember { BarSync() }
     DisposableEffect(view) {
         androidx.core.view.ViewCompat.setWindowInsetsAnimationCallback(
             view,
@@ -77,7 +85,10 @@ fun ApplySystemBars(darkIcons: Boolean, immersive: Boolean = false) {
                 ) = insets
             },
         )
-        onDispose { androidx.core.view.ViewCompat.setWindowInsetsAnimationCallback(view, null) }
+        onDispose {
+            androidx.core.view.ViewCompat.setWindowInsetsAnimationCallback(view, null)
+            sync.dispose(view)
+        }
     }
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
@@ -93,13 +104,119 @@ fun ApplySystemBars(darkIcons: Boolean, immersive: Boolean = false) {
                 } else {
                     WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
                 }
-                if (immersive) hide(WindowInsetsCompat.Type.systemBars())
-                else show(WindowInsetsCompat.Type.systemBars())
+                if (immersive) {
+                    // **只接"藏"这一向**：厂商那条 1500ms 我们改不动，但这一枪的动画可以整个拿过来，
+                    // 按我们自己的时长（= 菜单那一档 275ms）逐帧报给系统 → 两边同一条曲线
+                    Chrome.barsSynced = true
+                    sync.takeOver(this, Chrome.barShowMs, view) { ok ->
+                        if (!ok) {
+                            Chrome.barsSynced = false
+                            hide(WindowInsetsCompat.Type.systemBars())
+                        }
+                    }
+                } else {
+                    // "还回来"这一向**不接管**：上一版两向都接，这台 MIUI 不认我们报回去的 alpha，
+                    // 结果栏停在藏那一态（他那张截图：菜单开着、图标墨 0 / 时钟墨 0 / 导航墨 0）。
+                    // 这一向系统自己 311ms 就走完，和我们的 275ms 本来就同刻结束，不需要接
+                    Chrome.barsSynced = false
+                    show(WindowInsetsCompat.Type.systemBars())
+                }
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
         }
+    }
+}
+
+/**
+ * 把"藏系统栏"这一条动画**接到应用手里**：`controlWindowInsetsAnimation` 的时长参数是我们给的，
+ * 于是系统栏和我们那两条栏能用同一个时长、同一刻起走 —— 手机上没有"只调系统栏隐藏速度"的开关
+ * （开发者选项那三个缩放是全屏幕的，动它等于动他整个手机），这条口是唯一正当的来源。
+ *
+ * 只用在藏这一向，理由见调用处那段注释。拿不到接管（API < 30 / 厂商不给 / `onReady` 120ms 内没到）
+ * 就报 false，调用方自己退回 `hide()`。`onReady` 正常是下一帧就到（这台机量过 request→prepare 1ms、
+ * prepare→首帧 14ms），所以 120ms 已经宽到两帧以上，再等就是拿他的手感换一个不确定的数。
+ */
+private class BarSync {
+    private var signal: CancellationSignal? = null
+    private var pending: Runnable? = null
+    private var loop: Choreographer.FrameCallback? = null
+    private var gen = 0
+
+    fun takeOver(c: WindowInsetsControllerCompat, ms: Int, view: View, onSettled: (Boolean) -> Unit) {
+        val g = ++gen
+        stop()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            onSettled(false)
+            return
+        }
+        val sig = CancellationSignal()
+        signal = sig
+        var ready = false
+        val fb = Runnable { if (g == gen && !ready) onSettled(false) }
+        pending = fb
+        view.postDelayed(fb, 120L)
+        c.controlWindowInsetsAnimation(
+            WindowInsetsCompat.Type.systemBars(), ms.toLong(), LinearInterpolator(), sig,
+            object : WindowInsetsAnimationControlListenerCompat {
+                override fun onReady(ctrl: WindowInsetsAnimationControllerCompat, types: Int) {
+                    if (g != gen) return
+                    ready = true
+                    view.removeCallbacks(fb)
+                    onSettled(true)
+                    drive(ctrl, ms)
+                }
+
+                override fun onFinished(ctrl: WindowInsetsAnimationControllerCompat) {
+                    ready = true
+                }
+
+                override fun onCancelled(ctrl: WindowInsetsAnimationControllerCompat?) {
+                    view.removeCallbacks(fb)
+                    if (g == gen && !ready) onSettled(false)
+                }
+            },
+        )
+    }
+
+    /** 逐帧把进度报回系统：insets 从"露着"插到"藏掉"，alpha 就是那两条栏自己的透明度 */
+    private fun drive(ctrl: WindowInsetsAnimationControllerCompat, ms: Int) {
+        val shown = ctrl.shownStateInsets
+        val hidden = ctrl.hiddenStateInsets
+        val t0 = SystemClock.uptimeMillis()
+        val cb = object : Choreographer.FrameCallback {
+            override fun doFrame(now: Long) {
+                if (ctrl.isFinished || ctrl.isCancelled) return
+                val f = ((now - t0).toFloat() / ms).coerceIn(0f, 1f)
+                ctrl.setInsetsAndAlpha(between(shown, hidden, f), 1f - f, f)
+                if (f < 1f) Choreographer.getInstance().postFrameCallback(this) else ctrl.finish(false)
+            }
+        }
+        loop = cb
+        Choreographer.getInstance().postFrameCallback(cb)
+    }
+
+    /** `Insets` 在这版 androidx.core 里没有 lerp/interpolate，四个边自己插 */
+    private fun between(from: Insets, to: Insets, f: Float) = Insets.of(
+        (from.left + (to.left - from.left) * f).toInt(),
+        (from.top + (to.top - from.top) * f).toInt(),
+        (from.right + (to.right - from.right) * f).toInt(),
+        (from.bottom + (to.bottom - from.bottom) * f).toInt(),
+    )
+
+    private fun stop() {
+        signal?.cancel()
+        signal = null
+        loop?.let { Choreographer.getInstance().removeFrameCallback(it) }
+        loop = null
+    }
+
+    fun dispose(view: View) {
+        gen++
+        stop()
+        pending?.let { view.removeCallbacks(it) }
+        pending = null
     }
 }
 
