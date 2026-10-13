@@ -551,7 +551,8 @@ fun ReaderScreen(
                 panel = if (panel == Panel.More || panel == Panel.Fonts) Panel.Quick else Panel.None
             }
 
-            bars -> bars = false
+            // 菜单开着**不再"先收菜单"**（他点的口径：按返回就该回书架，不该按一下只把菜单收了）。
+            // 收菜单还剩那一条老路：点屏幕中间那一格（`surfaceTap` 里 `if (bars) bars = false`）
             else -> onBack()
         }
     }
