@@ -29,10 +29,12 @@ fun PageView(
     marks: List<LongRange> = emptyList(),
     markColor: Int = 0,
     styles: com.bookreader.core.model.StyleIndex = com.bookreader.core.model.StyleIndex.EMPTY,
+    // 「皮肤管理」上传了背景图时正文这一层要透（图压在下面），所以纸色不能写死在这一层
+    paper: androidx.compose.ui.graphics.Color = theme.pageColor,
 ) {
     val textSizePx = style.fontSizePx
     val paint = readerPaint(theme, textSizePx, typeface)
-    Canvas(modifier.background(theme.pageColor)) {
+    Canvas(modifier.background(paper)) {
         if (page == null || pageText.isEmpty()) return@Canvas
         drawLines(
             canvas = drawContext.canvas.nativeCanvas,

@@ -476,7 +476,7 @@ fun ListenScreen(
                     if (voices.isEmpty()) {
                         // 没配这一列时说清去哪配，而不是把当前值晾在屏幕上让人以为能点
                         Text(
-                            "还没有可选音色：AI 服务 → 语音 → 可选音色 里抄进来",
+                            "还没有可选音色：AI 听书 → 可选音色 里抄进来",
                             fontSize = 12.sp,
                             color = theme.faintColor,
                             modifier = Modifier.weight(1f),

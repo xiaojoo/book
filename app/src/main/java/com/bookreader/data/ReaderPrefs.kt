@@ -25,6 +25,42 @@ class ReaderPrefs(context: Context) {
         get() = p.getInt(KEY_THEME, 0)
         set(v) = p.edit { putInt(KEY_THEME, v) }
 
+    /**
+     * 全局字号：只管**外壳那一层**（他点的「各算一档」）。阅读正文仍走上面那档 [fontSizeSp]，
+     * 所以这一格改完，书架/搜书/精选/书签/我的跟着变大，翻开书那一页不动。
+     */
+    var uiFontScale: Float
+        get() = p.getFloat("uiFontScale", 1f)
+        set(v) = p.edit { putFloat("uiFontScale", v.coerceIn(0.85f, 1.35f)) }
+
+    /** 全局字体：`filesDir/theme/` 下那个字体文件的文件名；空 = 用系统字体。只存文件名不存绝对路径。 */
+    var uiFontFile: String
+        get() = p.getString("uiFontFile", "") ?: ""
+        set(v) = p.edit { putString("uiFontFile", v) }
+
+    /** 阅读背景图：`filesDir/theme/` 下那张图的文件名；空 = 不用图，走纯色纸。 */
+    var bgImageFile: String
+        get() = p.getString("bgImageFile", "") ?: ""
+        set(v) = p.edit { putString("bgImageFile", v) }
+
+    /** 背景图上压的那层纸色有多浓：0 = 原图直接铺，1 = 完全压成纸色。默认压到文字读得清。 */
+    var bgDim: Float
+        get() = p.getFloat("bgDim", 0.82f)
+        set(v) = p.edit { putFloat("bgDim", v.coerceIn(0f, 1f)) }
+
+    /**
+     * 全屏模式：阅读那一屏在**自己的菜单全收起来**的时候，把系统状态栏和底部导航条也盖过去。
+     * 上下栏一亮起来就还回去 —— 顶着状态栏画我们那条栏就是两层叠在一起。
+     */
+    var fullScreen: Boolean
+        get() = p.getBoolean("fullScreen", false)
+        set(v) = p.edit { putBoolean("fullScreen", v) }
+
+    /** 底栏藏掉哪几格：存 `MainTab` 的名字，`;` 分隔。只藏得掉 搜书 / 精选 两颗（书架/书签/我的藏了就没出口了）。 */
+    var hiddenTabs: String
+        get() = p.getString("hiddenTabs", "") ?: ""
+        set(v) = p.edit { putString("hiddenTabs", v) }
+
     var keepScreenOn: Boolean
         get() = p.getBoolean(KEY_KEEP, true)
         set(v) = p.edit { putBoolean(KEY_KEEP, v) }

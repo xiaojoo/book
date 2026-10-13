@@ -2,8 +2,17 @@ package com.bookreader.ui
 
 import android.app.Activity
 import android.os.Build
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -33,18 +42,105 @@ import androidx.core.view.WindowInsetsControllerCompat
  * `darkIcons` 沿用调用方的叫法，含义是平台那个 flag 的名字："栏背景是浅的"（= 图标要画成深色）。
  */
 @Composable
-fun ApplySystemBars(darkIcons: Boolean) {
+fun ApplySystemBars(darkIcons: Boolean, immersive: Boolean = false) {
     val view = LocalView.current
+    // 只在**真的换了档**那一刻动系统栏：SideEffect 每次重组都会跑，无条件 hide()/show()
+    // 本身就是叠在一起的动画请求（他看到的"闪烁"有一半是这个）
+    var applied by remember { mutableStateOf<Boolean?>(null) }
+    // 我们刚发的是藏还是还 —— 只有这一对才认领动画时长：键盘那种 IME 动画也走这个回调，
+    // 不区分的话菜单会被键盘的时长带跑
+    var pending by remember { mutableStateOf<Boolean?>(null) }
+    DisposableEffect(view) {
+        androidx.core.view.ViewCompat.setWindowInsetsAnimationCallback(
+            view,
+            object : androidx.core.view.WindowInsetsAnimationCompat.Callback(
+                androidx.core.view.WindowInsetsAnimationCompat.Callback.DISPATCH_MODE_STOP
+            ) {
+                override fun onPrepare(animation: androidx.core.view.WindowInsetsAnimationCompat) {
+                    val hiding = pending
+                    if (hiding != null) {
+                        val ms = animation.durationMillis.coerceIn(0L, 3000L).toInt()
+                        if (hiding) Chrome.barHideMs = ms else Chrome.barShowMs = ms
+                    }
+                }
+
+                override fun onEnd(animation: androidx.core.view.WindowInsetsAnimationCompat) {
+                    pending = null
+                }
+
+                // 这一条只是必须实现（compat 里它是抽象的）：**不**拿它给的数去跟 ——
+                // 这台机上藏那一向 `interpolatedFraction` 整段是 0.0、insets 一路停在 84/130，
+                // 到最后一条回调才跳到 0，跟着它走等于憋满整段再啪一下（数字见 ReaderScreen 那段）
+                override fun onProgress(
+                    insets: androidx.core.view.WindowInsetsCompat,
+                    runningAnimations: MutableList<androidx.core.view.WindowInsetsAnimationCompat>,
+                ) = insets
+            },
+        )
+        onDispose { androidx.core.view.ViewCompat.setWindowInsetsAnimationCallback(view, null) }
+    }
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
         WindowInsetsControllerCompat(window, view).apply {
             isAppearanceLightStatusBars = darkIcons
             isAppearanceLightNavigationBars = darkIcons
+            // 藏/还系统栏和上面两行必须走同一个主人：另起一处 hide() 会被这里的重组顶回去
+            if (applied != immersive) {
+                applied = immersive
+                pending = immersive
+                systemBarsBehavior = if (immersive) {
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                }
+                if (immersive) hide(WindowInsetsCompat.Type.systemBars())
+                else show(WindowInsetsCompat.Type.systemBars())
+            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
         }
     }
+}
+
+/**
+ * 让开系统栏那一条，但用的是**"藏了栏也不变"**的那一份 insets（`insetsIgnoringVisibility`）。
+ *
+ * `safeDrawingPadding()` 读的是当前 insets —— 栏一藏就变 0，正文会整块往上/下挪、分页跟着重排
+ * （同一章从 6 页变 5 页），那就是他报的"闪烁"。全屏那一态要的是"背景铺满、正文一个字都不动"，
+ * 所以正文那一层用这里，藏与不藏给出**同一个数**。
+ */
+@Composable
+internal fun Modifier.fixedBarsPadding(): Modifier {
+    val view = LocalView.current
+    val d = LocalDensity.current
+    val w = view.rootWindowInsets ?: return this.safeDrawingPadding()
+    val i = WindowInsetsCompat.toWindowInsetsCompat(w).getInsetsIgnoringVisibility(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+    )
+    return this.padding(
+        start = with(d) { i.left.toDp() },
+        top = with(d) { i.top.toDp() },
+        end = with(d) { i.right.toDp() },
+        bottom = with(d) { i.bottom.toDp() },
+    )
+}
+
+/** 系统栏那两条的高度（同一份"藏了也不变"的值）：盖条要按它画，切来切去才不抖。 */
+@Composable
+internal fun systemBarHeights(): PaddingValues {
+    val view = LocalView.current
+    val d = LocalDensity.current
+    val w = view.rootWindowInsets ?: return PaddingValues()
+    val i = WindowInsetsCompat.toWindowInsetsCompat(w).getInsetsIgnoringVisibility(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+    )
+    return PaddingValues(
+        start = with(d) { i.left.toDp() },
+        top = with(d) { i.top.toDp() },
+        end = with(d) { i.right.toDp() },
+        bottom = with(d) { i.bottom.toDp() },
+    )
 }
 
 /**

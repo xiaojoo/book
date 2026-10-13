@@ -85,7 +85,6 @@ fun PdfReaderScreen(
 ) {
     val density = LocalDensity.current
     val view = LocalView.current
-    ApplySystemBars(darkIcons = !Chrome.night)
     BackHandler(onBack = onBack)
     SideEffect { view.keepScreenOn = prefs.keepScreenOn }
 
@@ -225,6 +224,8 @@ private fun PdfBody(
         chrome = false
         note = null
     }
+
+    ApplySystemBars(darkIcons = !Chrome.night)
 
     Box(
         Modifier

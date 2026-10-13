@@ -31,7 +31,13 @@ import com.bookreader.ui.AppScaffold
 import com.bookreader.ui.BookInfo
 import com.bookreader.ui.BookInfoPage
 import com.bookreader.ui.NicknameScreen
+import com.bookreader.ui.AiSection
 import com.bookreader.ui.AiSettingsScreen
+import com.bookreader.ui.Customize
+import com.bookreader.ui.FontScreen
+import com.bookreader.ui.MenuScreen
+import com.bookreader.ui.SkinScreen
+import com.bookreader.ui.hiddenTabsOf
 import com.bookreader.ui.BookSearchScreen
 import com.bookreader.ui.FeaturedHomeScreen
 import com.bookreader.ui.LibraryScreen
@@ -108,10 +114,15 @@ private fun Root(
     // 精选搜索框右边那颗「分类」、每张卡右上那颗「更多」开的都是一整屏（和搜书的任务/管理同一族），
     // 底栏要让位。存的是"哪一页"：空 = 精选首页，「#分类」= 分类页，其余就是类目名
     var featuredPage by rememberSaveable { mutableStateOf("") }
-    // AI 设置是另开的一屏，不是弹窗（他点名要的形态）；和阅读页一样盖在壳上面
-    var aiSettings by rememberSaveable { mutableStateOf(false) }
+    // AI 设置是另开的一屏，不是弹窗（他点名要的形态）；和阅读页一样盖在壳上面。
+    // 存的是"哪一档"：翻译 / 听书两屏各填各的（他 2026-10-13 点名从一格拆成两格）
+    var aiSection by rememberSaveable { mutableStateOf<AiSection?>(null) }
     // 昵称也改成单独一屏（原先是「我的」页上弹一个 AlertDialog，他点名要换掉）；和 AI 设置同一族
     var editName by rememberSaveable { mutableStateOf(false) }
+    // 「我的」页那张新卡的三屏：皮肤 / 字体 / 菜单，各是一整屏（和 AI 设置、昵称同一族）
+    var customize by rememberSaveable { mutableStateOf<Customize?>(null) }
+    // 底栏藏掉哪几格（「菜单管理」写的）：启动读一次 prefs，之后那一屏每改一下当场送进来
+    var hiddenTabs by remember { mutableStateOf(hiddenTabsOf(prefs)) }
     // 「本书信息」也是盖在壳上的一整屏（和 AI 设置同一族）。不存盘：它是从某一本书点进去的，
     // 转个屏就退回列表比停在半页信息上更符合直觉，而 rememberSaveable 装这个类还得写 Parcelable
     var info by remember { mutableStateOf<BookInfo?>(null) }
@@ -137,8 +148,13 @@ private fun Root(
         Log.d("ReaderPerf", "view-import ok=${outcome.isSuccess} title=$title")
     }
 
-    // 外壳的夜间跟着阅读页那六档：启动时、换 tab 时、从阅读页回来时各同步一次
-    LaunchedEffect(tab, openBook) { Chrome.night = ReaderTheme.of(prefs.themeIndex).night }
+    // 外壳的夜间跟着阅读页那六档：启动时、换 tab 时、从阅读页回来时各同步一次。
+    // 全局字号/字体也在这里补启动的那一次 —— 改它们的那一屏是当场写进 Chrome 的
+    LaunchedEffect(tab, openBook) {
+        Chrome.night = ReaderTheme.of(prefs.themeIndex).night
+        Chrome.uiScale = prefs.uiFontScale
+        Chrome.fontFile = prefs.uiFontFile
+    }
 
     val id = openBook
     val bookInfo = info
@@ -153,10 +169,22 @@ private fun Root(
         )
     } else if (editName) {
         NicknameScreen(prefs, onBack = { editName = false })
-    } else if (aiSettings) {
-        AiSettingsScreen(prefs = prefs, onBack = { aiSettings = false })
+    } else if (aiSection != null) {
+        val sec = aiSection
+        if (sec != null) AiSettingsScreen(prefs = prefs, section = sec, onBack = { aiSection = null })
+    } else if (customize != null) {
+        when (customize) {
+            Customize.Skin -> SkinScreen(prefs, onBack = { customize = null })
+            Customize.Font -> FontScreen(prefs, onChanged = { }, onBack = { customize = null })
+            Customize.Menu -> MenuScreen(
+                prefs,
+                onHiddenChanged = { h -> hiddenTabs = h; if (tab in h) tab = MainTab.Shelf },
+                onBack = { customize = null },
+            )
+            null -> { }
+        }
     } else if (id == null) {
-        AppScaffold(tab = tab, onTab = { tab = it; featuredPage = "" }, barVisible = searchPage == SearchPage.Search && !(tab == MainTab.Featured && featuredPage.isNotEmpty())) {
+        AppScaffold(tab = tab, onTab = { tab = it; featuredPage = "" }, barVisible = searchPage == SearchPage.Search && !(tab == MainTab.Featured && featuredPage.isNotEmpty()), hidden = hiddenTabs) {
             when (tab) {
                 MainTab.Shelf -> LibraryScreen(
                     library = library,
@@ -182,7 +210,14 @@ private fun Root(
                     onSearch = { tab = MainTab.Search; searchPage = SearchPage.Search },
                 )
                 MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openAt(it, -1) })
-                MainTab.Me -> MeScreen(library, prefs, onOpenAi = { aiSettings = true }, onEditName = { editName = true })
+                MainTab.Me -> MeScreen(
+                    library, prefs,
+                    onOpenAi = { aiSection = it },
+                    onEditName = { editName = true },
+                    onSkin = { customize = Customize.Skin },
+                    onFont = { customize = Customize.Font },
+                    onMenu = { customize = Customize.Menu },
+                )
             }
         }
     } else {

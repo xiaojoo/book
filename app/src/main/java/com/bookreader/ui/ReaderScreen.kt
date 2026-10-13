@@ -90,6 +90,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -146,6 +147,9 @@ fun ReaderScreen(
     onBack: () -> Unit,
 ) {
     val density = LocalDensity.current
+    // 正文只认**系统**的 fontScale：「我的 → 字体管理」那档全局字号乘在 TipHost 的 density 上，
+    // 读 LocalDensity 就会把外壳那一档也吃进来 —— 他要的是两档各算各的
+    val sysFontScale = LocalConfiguration.current.fontScale
     val view = LocalView.current
     val activity = view.context as? Activity
 
@@ -242,7 +246,7 @@ fun ReaderScreen(
             widthPx = seed.width.toFloat(),
             heightPx = seed.height.toFloat(),
             pxPerDp = density.density,
-            fontScale = density.fontScale,
+            fontScale = sysFontScale,
         )
         ReaderEngine(library.open(bookId), { PaintBreaker(it, DeviceFonts.typefaceOf(fontState.value) ?: android.graphics.Typeface.DEFAULT) }, start)
             .also { e ->
@@ -277,7 +281,6 @@ fun ReaderScreen(
     }
 
     // 系统栏、常亮、亮度都归这管；亮度 -1 是"跟随系统"，要把窗口属性还原成默认
-    ApplySystemBars(darkIcons = !theme.night)
     SideEffect {
         view.keepScreenOn = keepOn
         val window = activity?.window ?: return@SideEffect
@@ -294,12 +297,12 @@ fun ReaderScreen(
         widthPx = if (viewport.width > 0) viewport.width.toFloat() else seedSize.width.toFloat(),
         heightPx = if (viewport.height > 0) viewport.height.toFloat() else seedSize.height.toFloat(),
         pxPerDp = density.density,
-        fontScale = density.fontScale,
+        fontScale = sysFontScale,
         linePreset = linePreset,
         marginPreset = marginPreset,
         paragraphIndent = indent,
     ).copy(
-        fontSizePx = fontSizeSp * density.density * density.fontScale,
+        fontSizePx = fontSizeSp * density.density * sysFontScale,
         fontTag = fontState.value ?: "sys",
     )
 
@@ -789,13 +792,77 @@ fun ReaderScreen(
     val chapter = engine.chapter
     val percent = (engine.progress() * 1000).roundToInt() / 10f
 
+    // 「我的 → 皮肤管理」上传的那张图：铺在正文底下，上面压一层当前那档纸色（浓淡由那一屏的滑块定）。
+    // 只有小说这一屏铺 —— pdf/pptx 要保留原件版面、漫画整屏是图（他点的口径）
+    val bgFile = themeFile(context, prefs.bgImageFile)
+    val bgBmp = scaledImage(bgFile, viewport.width)
+    // 有图的时候正文那一层要透，否则 PageView / ScrollReader 自己那张纸就把图盖住了
+    val bgPaper = if (bgBmp == null) theme.pageColor else Color.Transparent
+
+    // 「全屏模式」（我的 → 偏好设置那颗）：这一屏自己的菜单全收干净了，才把系统状态栏和导航条也盖过去。
+    // 判据和音量键那一串同一份层表 —— 上下栏还亮着就藏状态栏，等于两条栏叠在一起
+    // 「全屏模式」只在**这一本挂了背景图**的阅读屏生效（他点的口径）：没有图，藏了状态栏只是把
+    // 一块实心纸顶到屏幕上沿，什么都换不来；漫画 / pdf / pptx 三屏因此根本不藏。
+    val immersive = prefs.fullScreen && bgFile != null && !bars && !restPrompt &&
+        panel == Panel.None && selection == null && !listenPage && !tocPage && !historyPage && !fixesPage &&
+        listening == null
+    ApplySystemBars(darkIcons = !theme.night, immersive = immersive)
+    // 我们这一层菜单（两条栏 + 背后那两段纸）和系统栏那两条**在同一条淡出里走**，
+    // 判据是"什么时候**结束**"，不是"什么时候开始"：
+    //  · 还回来：我们 tween(275)，平台报 311ms —— 两个几乎同刻结束 → 他认这一向"一样了"
+    //  · 收下去：我们原来也 tween(275)，可状态栏那点墨比这晚得多才没 —— 我们比它早结束，
+    //    那就是他现在点的"隐藏的时候不一致"
+    //
+    // 时长挂到平台报的那一段上（这台机 prepare 报 1500ms），系数 **0.82** 是录屏逐帧数出来的：
+    // 录屏的 pts 钟**不能信**（`r_frame_rate` 是 90000/1、dts 非单调、开头空 750ms），
+    // 所以只用"同一张帧网格上两件事各占几帧"这种和尺度无关的数。三档各三趟：
+    //  · 0.62（930ms）：我们 40 帧、图标 55 帧 → 早收 15 帧
+    //  · 0.85（1275ms）：我们 55/60/51、图标 52/55/47 → 晚收 3~5 帧（×0.92）
+    //  · 0.78（1170ms）：我们 48/54/48、图标 53/59/52 → 早收 4~5 帧（×1.09）
+    // 两头的因子对系数插值到 1.0 = 0.82。趟间本身有 ±3 帧的散布，再往下抠就是抠仪表的噪声了。
+    // 为什么不照图标那个"憋大半秒再走"的形状：那等于点完 0.6 秒屏幕上没有任何反应，比现在更差。
+    // 用 0f 收尾而不是把它移出组合：淡出这一路还要画着，淡完了才不占、也不接点击
+    val chrome = remember { Animatable(1f) }
+    LaunchedEffect(immersive) {
+        val ms = if (immersive) (Chrome.barHideMs * 0.82f).roundToInt() else Chrome.barShowMs
+        chrome.animateTo(if (immersive) 0f else 1f, tween(ms))
+    }
+
     MaterialTheme(colorScheme = colorSchemeOf(theme)) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(theme.pageColor)
-                .safeDrawingPadding(),
-        ) {
+        // 外层这一格铺**整块窗口**：底色、背景图、那层压淡的纸色都要伸到状态栏和导航条底下
+        // （"背景撑满状态栏和导航栏"要的就是这个）。让安全区不在这层 —— 挪到里面那一格，
+        // 而且两态用**同一个** fixedBarsPadding()：以前栏亮时走 safeDrawingPadding（读当前 insets）、
+        // 栏收时走冻住的那一份，两个数不等，一收一放正文就整块跳一下（他报的"屏幕晃动"）。
+        Box(Modifier.fillMaxSize().background(theme.pageColor)) {
+        if (bgBmp != null) {
+            // 图**永远铺满整块窗口**：它的高度不跟着藏栏变，所以收放菜单那几下它一个像素都不挪
+            // （原来这一层自己让开系统栏，栏一收它整块跳上去 84px —— 那就是他看到的闪烁）
+            Image(
+                bitmap = bgBmp,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 压的就是当前那档纸色：换纸色这一层跟着换，正文底下不会露出两张不同的底
+            Box(Modifier.fillMaxSize().background(theme.pageColor.copy(alpha = prefs.bgDim)))
+            // 菜单亮着的时候，状态栏 / 导航条那两条用实心纸色**盖住**图 —— 盖，不改任何一层的高度。
+            // 高度取"藏了栏也不变"那一份（systemBarHeights），所以这一对在切换时不抖、也不会把图挤回去
+            if (chrome.value > 0f) {
+                val barInset = systemBarHeights()
+                Box(
+                    Modifier.align(Alignment.TopCenter).fillMaxWidth()
+                        .height(barInset.calculateTopPadding())
+                        .background(theme.pageColor.copy(alpha = chrome.value))
+                )
+                Box(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        .height(barInset.calculateBottomPadding())
+                        .background(theme.pageColor.copy(alpha = chrome.value))
+                )
+            }
+        }
+        // 让开系统栏的那一层：正文和我们自己那两条栏都在这格里面（背景图在外面，才铺得满）
+        Box(Modifier.fillMaxSize().fixedBarsPadding()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -845,6 +912,7 @@ fun ReaderScreen(
                         style = engine.style,
                         theme = theme,
                         typeface = typeface,
+                        paper = bgPaper,
                         marginPx = marginDp * density.density,
                         traditional = traditional,
                         bandTopPx = bandTopPx,
@@ -885,25 +953,25 @@ fun ReaderScreen(
                             turning && turnMode == TurnMode.Slide -> {
                                 val (outX, inX) = PageTurn.slideOffsets(p, turnForward)
                                 TurnLayer(out.first, out.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles,
-                                    Modifier.graphicsLayer { translationX = outX * viewport.width })
+                                    Modifier.graphicsLayer { translationX = outX * viewport.width }, paper = bgPaper)
                                 TurnLayer(page, pageText, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles,
-                                    Modifier.graphicsLayer { translationX = inX * viewport.width })
+                                    Modifier.graphicsLayer { translationX = inX * viewport.width }, paper = bgPaper)
                             }
                             // 仿真：都绕左边的书脊转。往前翻是把旧页掀起来（0→-90°），往后翻是把新页铺回去（-90°→0）
                             turning && turnMode == TurnMode.Cover -> {
                                 val lift = PageTurn.coverLift(p, turnForward)
                                 val under = if (turnForward) page to pageText else out
                                 val onTop = if (turnForward) out else page to pageText
-                                TurnLayer(under.first, under.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles, Modifier)
+                                TurnLayer(under.first, under.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles, Modifier, paper = bgPaper)
                                 TurnLayer(onTop.first, onTop.second, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles,
                                     Modifier.graphicsLayer {
                                         rotationY = PageTurn.coverAngle(lift)
                                         transformOrigin = TransformOrigin(0f, 0.5f)
                                         cameraDistance = 16f * density.density
                                         alpha = 1f - 0.3f * lift
-                                    })
+                                    }, paper = bgPaper)
                             }
-                            else -> TurnLayer(page, pageText, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles, Modifier)
+                            else -> TurnLayer(page, pageText, engine.style, theme, typeface, marginDp, slack, selection, selectionColor, markRanges, markColor, engine.book.styles, Modifier, paper = bgPaper)
                         }
                     }
                 }
@@ -986,7 +1054,7 @@ fun ReaderScreen(
                                     } else when {
                                         voice.speak(text) -> selectionNote = "系统语音朗读这一段"
                                         voice.state == 0 -> selectionNote = "语音引擎正在启动，再点一次听书"
-                                        else -> selectionNote = "这台机没有可用的中文语音引擎；在「我的 → AI 服务」里填一档语音地址、模型、音色和秘钥就能听"
+                                        else -> selectionNote = "这台机没有可用的中文语音引擎；在「我的 → AI 听书」里填一档语音地址、模型、音色和秘钥就能听"
                                     }
                                 }
                                 SelectionAction.Comment -> selectionNote = "评论要接书源服务端才有地方存"
@@ -1001,7 +1069,7 @@ fun ReaderScreen(
                                     val configured = prefs.aiBaseUrl.isNotBlank() && prefs.aiKeyCipher.isNotBlank()
                                     if (!configured) {
                                         dictBusy = false
-                                        dictAnswer = "还没配 AI 服务：我的 → AI 服务 里填 API 地址、模型名和秘钥。"
+                                        dictAnswer = "还没配 AI 翻译：我的 → AI 翻译 里填 API 地址、模型名和秘钥。"
                                     } else {
                                         dictBusy = true
                                         dictAnswer = null
@@ -1223,12 +1291,17 @@ fun ReaderScreen(
 
             // 顶/底栏画在听书页**之后**（同一层 Box 的后面），所以听书页开着时它俩会压在人家上面 ——
             // 收起听书页也不该顺手把菜单叫出来：`bars` 保持原值，只是这一会儿不画
-            if (bars && !listenPage && !historyPage && !fixesPage && !tocPage) {
+            if ((bars || chrome.value > 0f) && !listenPage && !historyPage && !fixesPage && !tocPage) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .fillMaxWidth()
                         .height(TOP_BAND_DP.dp)
+                        .graphicsLayer { alpha = chrome.value }
+                        // 淡出这一路它还画着，但**不能再当菜单点**：命中窗口跟着 `bars`，不跟着 1.2 秒那条曲线
+                        // （原来 275ms 时这点重叠看不出来，拉长之后就成了"收了菜单还点得到栏"）。
+                        // 这一枪转给正文那一套判据（`surfaceTap`）—— 菜单一收，整屏就都是翻页表面
+                        .fadingTap(bars) { w, x -> surfaceTap(w, x) }
                         .background(theme.pageColor)
                         .drawBehind {
                             // 栏和正文同色，只剩这条发丝线说"这里有个栏"；1dp 在这台机渲成 3px
@@ -1250,7 +1323,8 @@ fun ReaderScreen(
 
                 ReaderBottomBar(
                     theme = theme,
-                    modifier = Modifier.align(Alignment.BottomCenter),
+                    modifier = Modifier.align(Alignment.BottomCenter).graphicsLayer { alpha = chrome.value }
+                        .fadingTap(bars) { w, x -> surfaceTap(w, x) },
                     onToc = { panel = flip(panel, Panel.Chapters) },
                     onMarks = {
                         page?.let { prefs.addBookmark(bookId, engine.position()) }
@@ -1379,6 +1453,7 @@ fun ReaderScreen(
                     Panel.None -> Unit
                 }
             }
+        }
         }
     }
 
@@ -2058,6 +2133,7 @@ private fun TurnLayer(
     markColor: Int,
     styles: com.bookreader.core.model.StyleIndex,
     modifier: Modifier,
+    paper: Color,
 ) {
     PageView(
         page = page,
@@ -2073,9 +2149,37 @@ private fun TurnLayer(
         // 这一行不转就等于整条按页那档没有行内样式：PageView 的默认值是空索引，
         // 编译和判据都不会红，只有把同一组词量一遍才发现粗体没画上去（真机量过：两组都是 22.54%）
         styles = styles,
+        paper = paper,
         modifier = Modifier
             .fillMaxSize()
             .then(modifier)
             .padding(start = marginDp.dp, end = marginDp.dp, top = slackDp),
     )
 }
+
+/**
+ * 菜单收下去之后那一条淡出要跟着系统栏走到 ~1.2 秒，这一会儿那两条栏**还画着**，
+ * 但不能再生成"点得到"的样子：命中窗口跟着 `on`（= `bars`），不跟着那条淡出曲线。
+ *
+ * `on` 为真时这里一个事件都不接 —— 栏自己的按钮照旧。为假时在 **Initial pass** 就把这一枪吃掉：
+ * 父层只挂 `detectTapGestures` 拦不住孩子（Main 那一轮孩子是先拿到事件的，真机就是这么退到书架的），
+ * 而 Initial 的消费会带到后面每一轮，孩子那一层就再也起不了 `awaitFirstDown`。
+ * 抬指时位移没过 touchSlop 才按正文那套判据补发一次（左/右三分之一翻页、中间把菜单开回来）：
+ * 菜单一收，整屏就都是翻页表面，正在淡的那两条栏底下不藏任何还能点的控件。
+ */
+private fun Modifier.fadingTap(on: Boolean, onTap: (widthPx: Int, x: Float) -> Unit): Modifier =
+    pointerInput(on) {
+        if (!on) awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            down.consume()
+            var moved = 0f
+            while (true) {
+                val e = awaitPointerEvent(PointerEventPass.Initial)
+                val c = e.changes.firstOrNull { it.id == down.id } ?: break
+                moved = moved.coerceAtLeast((c.position - down.position).getDistance())
+                c.consume()
+                if (!c.pressed) break
+            }
+            if (moved < viewConfiguration.touchSlop) onTap(size.width, down.position.x)
+        }
+    }

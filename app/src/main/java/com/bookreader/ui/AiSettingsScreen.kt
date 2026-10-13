@@ -58,15 +58,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** AI 的两档：翻译 = 只出文字的 chat 口（阅读页长按「词典」），听书 = 语音合成。两屏各填各的。 */
+enum class AiSection { Translate, Speech }
+
 /**
- * AI 服务设置：**另开一屏填，不用弹窗**（他点名的形态就是他那张「昵称」页 ——
+ * AI 设置：**另开一屏填，不用弹窗**（他点名的形态就是他那张「昵称」页 ——
  * 顶栏 `‹ 标题 …… 保存`，正文是输入区，底下几行灰点规则）。
  *
- * 这一屏只管三件事：往哪发（地址）、发哪个模型、凭据（秘钥）。真正用它的只有阅读页长按
- * 动作栏里那颗「词典」；听书走系统语音引擎，不经过这里，也不发任何文字到网上。
+ * 原先翻译和听书挤在同一屏，他 2026-10-13 点名**拆成两格两个入口**：这一屏按 [section] 只出
+ * 一家的那半 —— 两家的地址、模型、秘钥本来就是各存一份（`aiBaseUrl/aiModel/aiKeyCipher` 对
+ * `aiVoiceBaseUrl/aiVoiceModel/aiVoiceKind/aiVoiceId/aiVoiceKeyCipher`），拆屏不用动任何存储。
  */
 @Composable
-fun AiSettingsScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
+fun AiSettingsScreen(prefs: ReaderPrefs, section: AiSection, onBack: () -> Unit) {
+    val translate = section == AiSection.Translate
     var base by remember { mutableStateOf(prefs.aiBaseUrl) }
     var model by remember { mutableStateOf(prefs.aiModel) }
     // 已存过秘钥后这一格是空的：留空 = 不改，我们从不把秘钥回显到屏幕上
@@ -107,47 +112,51 @@ fun AiSettingsScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
     ApplySystemBars(darkIcons = !Chrome.night)
     BackHandler(onBack = onBack)
 
-    /** @return 有没有存下去。地址填错时不写 prefs，也不让"试一下"带着错地址去发 */
+    /** @return 有没有存下去。地址填错时不写 prefs，也不让"试一下"带着错地址去发。
+     *  只验、只写**这一屏那一半**：听书地址没填对不该挡住翻译那格保存。 */
     fun save(): Boolean {
-        if (base.isNotBlank()) {
-            runCatching { AiProtocol.chatEndpoint(base) }.onFailure {
-                note = it.message
-                return false
+        if (translate) {
+            if (base.isNotBlank()) {
+                runCatching { AiProtocol.chatEndpoint(base) }.onFailure {
+                    note = it.message
+                    return false
+                }
             }
-        }
-        if (vBase.isNotBlank()) {
-            runCatching { AiSpeech.endpoint(vBase, vKind) }.onFailure {
-                note = it.message
-                return false
+            if (key.isNotBlank()) {
+                val blob = SecretStore.encrypt(key.trim())
+                if (blob == null) {
+                    note = "这台机的 Keystore 用不了，秘钥存不下"
+                    return false
+                }
+                prefs.aiKeyCipher = blob
+                hasKey = true
+                key = ""
             }
-        }
-        if (key.isNotBlank()) {
-            val blob = SecretStore.encrypt(key.trim())
-            if (blob == null) {
-                note = "这台机的 Keystore 用不了，秘钥存不下"
-                return false
+            prefs.aiBaseUrl = base
+            prefs.aiModel = model
+        } else {
+            if (vBase.isNotBlank()) {
+                runCatching { AiSpeech.endpoint(vBase, vKind) }.onFailure {
+                    note = it.message
+                    return false
+                }
             }
-            prefs.aiKeyCipher = blob
-            hasKey = true
-            key = ""
-        }
-        if (vKey.isNotBlank()) {
-            val blob = SecretStore.encrypt(vKey.trim())
-            if (blob == null) {
-                note = "这台机的 Keystore 用不了，语音秘钥存不下"
-                return false
+            if (vKey.isNotBlank()) {
+                val blob = SecretStore.encrypt(vKey.trim())
+                if (blob == null) {
+                    note = "这台机的 Keystore 用不了，语音秘钥存不下"
+                    return false
+                }
+                prefs.aiVoiceKeyCipher = blob
+                vHasKey = true
+                vKey = ""
             }
-            prefs.aiVoiceKeyCipher = blob
-            vHasKey = true
-            vKey = ""
+            prefs.aiVoiceKind = vKind.name
+            prefs.aiVoiceBaseUrl = vBase
+            prefs.aiVoiceModel = vModel
+            prefs.aiVoiceId = vVoice
+            prefs.setAiVoiceChoices(vKind.name, vChoices)
         }
-        prefs.aiBaseUrl = base
-        prefs.aiModel = model
-        prefs.aiVoiceKind = vKind.name
-        prefs.aiVoiceBaseUrl = vBase
-        prefs.aiVoiceModel = vModel
-        prefs.aiVoiceId = vVoice
-        prefs.setAiVoiceChoices(vKind.name, vChoices)
         note = "已保存"
         return true
     }
@@ -271,7 +280,12 @@ fun AiSettingsScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
                         modifier = Modifier.size(20.dp),
                     )
                 }
-                Text("AI 服务", fontSize = 19.sp, fontWeight = FontWeight.Medium, color = Chrome.ink)
+                Text(
+                    if (translate) "AI 翻译" else "AI 听书",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Chrome.ink,
+                )
                 Spacer(Modifier.weight(1f))
                 Text(
                     "保存",
@@ -288,210 +302,221 @@ fun AiSettingsScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp),
             ) {
-                Spacer(Modifier.height(10.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Chrome.card),
-                ) {
-                    FieldRow("API 地址", "https://api.deepseek.com", base, { base = it }, KeyboardType.Uri, false, null, wrap = true)
-                    Divider()
-                    FieldRow("模型名", "gpt-4o-mini / qwen2.5:7b", model, { model = it }, KeyboardType.Text, false, null)
-                    Divider()
-                    FieldRow(
-                        "秘钥",
-                        if (hasKey) "已保存 · 留空表示不改" else "sk-…",
-                        key,
-                        { key = it },
-                        KeyboardType.Password,
-                        showKey,
-                        { showKey = !showKey },
-                    )
-                }
-
-                // 明文这一条只在真的填了 http 时出现：常驻的警告等于没有警告
-                if (AiProtocol.isCleartext(base)) {
-                    Text(
-                        "这条地址是 http://，秘钥和你选中的文字都会明文走网络",
-                        fontSize = 12.sp,
-                        color = Chrome.danger,
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    )
-                }
-                Resolved("词典将请求", runCatching { AiProtocol.chatEndpoint(base) }.getOrElse { "地址还没填对：${it.message}" })
-
-                Row(modifier = Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ActionPill(
-                        bg = when {
-                            busy -> BUSY_GREY
-                            dictOk -> OK_GREEN
-                            else -> Chrome.accent
-                        },
-                        fg = Chrome.card,
-                        enabled = !busy,
-                        onClick = { test() },
-                        text = if (busy) "连接中" else "试一下",
-                    )
-                    Spacer(Modifier.size(10.dp))
-                    Text("发一条最小对话请求，验词典那档通不通", fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.weight(1f))
-                }
-
-                Spacer(Modifier.height(24.dp))
-                Text("语音（听书）", fontSize = 13.sp, color = Chrome.faint, modifier = Modifier.padding(bottom = 8.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Chrome.card),
-                ) {
-                    // 服务商三选一：三家的字段名和字段层都不同（input 是字符串 vs input 是对象），选错档等于发错形状
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-                        AiSpeech.Kind.entries.forEachIndexed { i, k ->
-                            WholeChip(
-                                AiSpeech.label(k),
-                                selected = vKind == k,
-                                radius = ACTION_RADIUS,
-                                modifier = Modifier.weight(1f).height(32.dp),
-                            ) { vKind = k }
-                            if (i < AiSpeech.Kind.entries.lastIndex) Spacer(Modifier.size(8.dp))
-                        }
+                if (translate) {
+                    Spacer(Modifier.height(10.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Chrome.card),
+                    ) {
+                        FieldRow("API 地址", "https://api.deepseek.com", base, { base = it }, KeyboardType.Uri, false, null, wrap = true)
+                        Divider()
+                        FieldRow("模型名", "gpt-4o-mini / qwen2.5:7b", model, { model = it }, KeyboardType.Text, false, null)
+                        Divider()
+                        FieldRow(
+                            "秘钥",
+                            if (hasKey) "已保存 · 留空表示不改" else "sk-…",
+                            key,
+                            { key = it },
+                            KeyboardType.Password,
+                            showKey,
+                            { showKey = !showKey },
+                        )
                     }
-                    Divider()
-                    FieldRow(
-                        "语音地址",
-                        when (vKind) {
-                            AiSpeech.Kind.OpenAi -> "https://你的地址/v1"
-                            AiSpeech.Kind.MiniMax -> "https://api.minimax.cn"
-                            AiSpeech.Kind.QwenHttp -> "https://业务空间.cn-beijing.maas.aliyuncs.com"
-                        },
-                        vBase, { vBase = it }, KeyboardType.Uri, false, null, wrap = true,
-                    )
-                    Divider()
-                    FieldRow(
-                        "语音模型",
-                        when (vKind) {
-                            AiSpeech.Kind.OpenAi -> "tts-1 / gpt-4o-mini-tts"
-                            AiSpeech.Kind.MiniMax -> "speech-02-hd"
-                            AiSpeech.Kind.QwenHttp -> "qwen-audio-3.1-tts-flash"
-                        },
-                        vModel, { vModel = it }, KeyboardType.Text, false, null,
-                    )
-                    Divider()
-                    // 音色这一格不再让手敲：敲错一个不在模型表里的名字，代价是一次 400。
-                    // 点它开底部抽屉，从下面「可选音色」那一列里挑（当前值一定在列里，哪怕还没抄进去）
-                    PickRow("音色", if (vVoice.isBlank()) "没选" else vVoice) { voiceOpen = true }
-                    Divider()
-                    // 音色名没有能查的列表接口，只能把他这个模型支持的那几个抄进来：
-                    // 抄进来之后，听书页「更多 → 朗读音色」就是选，不是让他再敲一遍名字
-                    FieldRow(
-                        "可选音色",
-                        when (vKind) {
-                            AiSpeech.Kind.OpenAi -> "alloy, nova, onyx"
-                            AiSpeech.Kind.MiniMax -> "male-qn-qingse, female-shaonv"
-                            AiSpeech.Kind.QwenHttp -> "longanhuan_v3.1, longmiao_v3.1"
-                        },
-                        vChoices, { vChoices = it }, KeyboardType.Text, false, null, wrap = true,
-                    )
-                    Divider()
-                    // 「拉一下」只在有两家能用：MiniMax 没有查音色的接口，那颗就置灰并说出为什么
-                    // （置灰不消失 —— 藏起来别人会以为这里本来就没有这个能力）
-                    Divider()
-                    FieldRow(
-                        "语音秘钥",
-                        if (vHasKey) "已保存 · 留空表示不改" else "sk-…",
-                        vKey,
-                        { vKey = it },
-                        KeyboardType.Password,
-                        showVKey,
-                        { showVKey = !showVKey },
-                    )
+
+                    // 明文这一条只在真的填了 http 时出现：常驻的警告等于没有警告
+                    if (AiProtocol.isCleartext(base)) {
+                        Text(
+                            "这条地址是 http://，秘钥和你选中的文字都会明文走网络",
+                            fontSize = 12.sp,
+                            color = Chrome.danger,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                    }
+                    Resolved("词典将请求", runCatching { AiProtocol.chatEndpoint(base) }.getOrElse { "地址还没填对：${it.message}" })
+
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        ActionPill(
+                            bg = when {
+                                busy -> BUSY_GREY
+                                dictOk -> OK_GREEN
+                                else -> Chrome.accent
+                            },
+                            fg = Chrome.card,
+                            enabled = !busy,
+                            onClick = { test() },
+                            text = if (busy) "连接中" else "试一下",
+                        )
+                        Spacer(Modifier.size(10.dp))
+                        Text("发一条最小对话请求，验词典那档通不通", fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.weight(1f))
+                    }
+
                 }
 
-                // 这颗原来在卡片里面，于是它的左沿比另外两颗按钮低 14dp（= 39px）—— 三颗按钮
-                // 一样宽也一样不齐。挪到页面这一层，和「试一下」「试听」同一条左线
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(46.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val canPull = runCatching { AiSpeech.voicesEndpoint(vBase, vKind) }.getOrNull() != null
-                    ActionPill(
-                        bg = when {
-                            pulling -> BUSY_GREY
-                            pullOk -> OK_GREEN
-                            canPull -> Chrome.accent
-                            else -> Chrome.chip
-                        },
-                        fg = if (canPull || pulling || pullOk) Chrome.card else Chrome.faint,
-                        enabled = canPull && !pulling,
-                        onClick = { pullVoices() },
-                        text = if (pulling) "正在拉" else "拉音色列表",
+                if (!translate) {
+                    Spacer(Modifier.height(10.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Chrome.card),
+                    ) {
+                        // 服务商三选一：三家的字段名和字段层都不同（input 是字符串 vs input 是对象），选错档等于发错形状
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            AiSpeech.Kind.entries.forEachIndexed { i, k ->
+                                WholeChip(
+                                    AiSpeech.label(k),
+                                    selected = vKind == k,
+                                    radius = ACTION_RADIUS,
+                                    modifier = Modifier.weight(1f).height(32.dp),
+                                ) { vKind = k }
+                                if (i < AiSpeech.Kind.entries.lastIndex) Spacer(Modifier.size(8.dp))
+                            }
+                        }
+                        Divider()
+                        FieldRow(
+                            "语音地址",
+                            when (vKind) {
+                                AiSpeech.Kind.OpenAi -> "https://你的地址/v1"
+                                AiSpeech.Kind.MiniMax -> "https://api.minimax.cn"
+                                AiSpeech.Kind.QwenHttp -> "https://业务空间.cn-beijing.maas.aliyuncs.com"
+                            },
+                            vBase, { vBase = it }, KeyboardType.Uri, false, null, wrap = true,
+                        )
+                        Divider()
+                        FieldRow(
+                            "语音模型",
+                            when (vKind) {
+                                AiSpeech.Kind.OpenAi -> "tts-1 / gpt-4o-mini-tts"
+                                AiSpeech.Kind.MiniMax -> "speech-02-hd"
+                                AiSpeech.Kind.QwenHttp -> "qwen-audio-3.1-tts-flash"
+                            },
+                            vModel, { vModel = it }, KeyboardType.Text, false, null,
+                        )
+                        Divider()
+                        // 音色这一格不再让手敲：敲错一个不在模型表里的名字，代价是一次 400。
+                        // 点它开底部抽屉，从下面「可选音色」那一列里挑（当前值一定在列里，哪怕还没抄进去）
+                        PickRow("音色", if (vVoice.isBlank()) "没选" else vVoice) { voiceOpen = true }
+                        Divider()
+                        // 音色名没有能查的列表接口，只能把他这个模型支持的那几个抄进来：
+                        // 抄进来之后，听书页「更多 → 朗读音色」就是选，不是让他再敲一遍名字
+                        FieldRow(
+                            "可选音色",
+                            when (vKind) {
+                                AiSpeech.Kind.OpenAi -> "alloy, nova, onyx"
+                                AiSpeech.Kind.MiniMax -> "male-qn-qingse, female-shaonv"
+                                AiSpeech.Kind.QwenHttp -> "longanhuan_v3.1, longmiao_v3.1"
+                            },
+                            vChoices, { vChoices = it }, KeyboardType.Text, false, null, wrap = true,
+                        )
+                        Divider()
+                        // 「拉一下」只在有两家能用：MiniMax 没有查音色的接口，那颗就置灰并说出为什么
+                        // （置灰不消失 —— 藏起来别人会以为这里本来就没有这个能力）
+                        Divider()
+                        FieldRow(
+                            "语音秘钥",
+                            if (vHasKey) "已保存 · 留空表示不改" else "sk-…",
+                            vKey,
+                            { vKey = it },
+                            KeyboardType.Password,
+                            showVKey,
+                            { showVKey = !showVKey },
+                        )
+                    }
+
+                    // 这颗原来在卡片里面，于是它的左沿比另外两颗按钮低 14dp（= 39px）—— 三颗按钮
+                    // 一样宽也一样不齐。挪到页面这一层，和「试一下」「试听」同一条左线
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val canPull = runCatching { AiSpeech.voicesEndpoint(vBase, vKind) }.getOrNull() != null
+                        ActionPill(
+                            bg = when {
+                                pulling -> BUSY_GREY
+                                pullOk -> OK_GREEN
+                                canPull -> Chrome.accent
+                                else -> Chrome.chip
+                            },
+                            fg = if (canPull || pulling || pullOk) Chrome.card else Chrome.faint,
+                            enabled = canPull && !pulling,
+                            onClick = { pullVoices() },
+                            text = if (pulling) "正在拉" else "拉音色列表",
+                        )
+                        Spacer(Modifier.size(10.dp))
+                        Text(
+                            pullNote
+                                ?: if (vKind == AiSpeech.Kind.MiniMax) "MiniMax 没有查音色的接口，只能手抄「可选音色」那一格"
+                                else "拉到的会填进上面那一格；手抄那条一直留着",
+                            fontSize = 12.sp,
+                            color = Chrome.faint,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+
+                    if (AiProtocol.isCleartext(vBase)) {
+                        Text(
+                            "这条语音地址是 http://，正文和秘钥都会明文走网络",
+                            fontSize = 12.sp,
+                            color = Chrome.danger,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        )
+                    }
+                    // 三家补的是三条不同路径，选错服务商的表现是 404 而不是"哪家说错了话" ——
+                    // 所以把补完的完整地址直接摊开给他看
+                    Resolved(
+                        "听书将请求",
+                        runCatching { AiSpeech.endpoint(vBase, vKind) }.getOrElse { "地址还没填对：${it.message}" },
                     )
-                    Spacer(Modifier.size(10.dp))
-                    Text(
-                        pullNote
-                            ?: if (vKind == AiSpeech.Kind.MiniMax) "MiniMax 没有查音色的接口，只能手抄「可选音色」那一格"
-                            else "拉到的会填进上面那一格；手抄那条一直留着",
-                        fontSize = 12.sp,
-                        color = Chrome.faint,
-                        modifier = Modifier.weight(1f),
-                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ActionPill(
+                            bg = when {
+                                vPlaying -> Chrome.chip
+                                vBusy -> BUSY_GREY
+                                voiceOk -> OK_GREEN
+                                else -> Chrome.accent
+                            },
+                            fg = if (vPlaying) Chrome.ink else Chrome.card,
+                            enabled = !vBusy,
+                            onClick = { if (vPlaying) stopVoice() else tryVoice() },
+                            text = when {
+                                vPlaying -> "停止"
+                                vBusy -> "合成中"
+                                else -> "试听"
+                            },
+                        )
+                        Spacer(Modifier.size(10.dp))
+                        Text(
+                            if (vPlaying) "正在放这一句" else "四项齐全听书才走 AI，缺一项就退回系统语音引擎",
+                            fontSize = 12.sp,
+                            color = Chrome.faint,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
 
-                if (AiProtocol.isCleartext(vBase)) {
-                    Text(
-                        "这条语音地址是 http://，正文和秘钥都会明文走网络",
-                        fontSize = 12.sp,
-                        color = Chrome.danger,
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    )
-                }
-                // 三家补的是三条不同路径，选错服务商的表现是 404 而不是"哪家说错了话" ——
-                // 所以把补完的完整地址直接摊开给他看
-                Resolved(
-                    "听书将请求",
-                    runCatching { AiSpeech.endpoint(vBase, vKind) }.getOrElse { "地址还没填对：${it.message}" },
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ActionPill(
-                        bg = when {
-                            vPlaying -> Chrome.chip
-                            vBusy -> BUSY_GREY
-                            voiceOk -> OK_GREEN
-                            else -> Chrome.accent
-                        },
-                        fg = if (vPlaying) Chrome.ink else Chrome.card,
-                        enabled = !vBusy,
-                        onClick = { if (vPlaying) stopVoice() else tryVoice() },
-                        text = when {
-                            vPlaying -> "停止"
-                            vBusy -> "合成中"
-                            else -> "试听"
-                        },
-                    )
-                    Spacer(Modifier.size(10.dp))
-                    Text(
-                        if (vPlaying) "正在放这一句" else "四项齐全听书才走 AI，缺一项就退回系统语音引擎",
-                        fontSize = 12.sp,
-                        color = Chrome.faint,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
                 note?.let {
                     Text(it, fontSize = 13.sp, color = Chrome.accent, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
                 }
 
                 Spacer(Modifier.height(20.dp))
                 Column {
-                    Rule("「词典」和「听书」只在阅读页长按后用得到；两家可以完全不同，秘钥各存一份。")
-                Rule("听书只念你选中的那一段。同一段存本机，再点不重复请求、不重复计费。")
-                Rule("秘钥经本机 Keystore 加密后落盘；换机或从云备份恢复后要重填。")
-                Rule("地址填 https://x 或 https://x/v1 都行，各家路径我们自己补。")
-                Rule("音色名各家不通用：抄进「可选音色」或用「拉音色列表」拉，听书页上直接挑。")
+                    if (translate) {
+                        Rule("阅读页长按一段 →「词典」走这一档：翻译和拼音都是它。")
+                        Rule("秘钥经本机 Keystore 加密后落盘；换机或从云备份恢复后要重填。")
+                        Rule("地址填 https://x 或 https://x/v1 都行，路径我们自己补。")
+                        Rule("发出去的是选中的那一段 + 它前面 60 字（多音字要上下文才取得准）。")
+                    } else {
+                        Rule("听书只念你选中的那一段。同一段存本机，再点不重复请求、不重复计费。")
+                        Rule("四项齐全（地址 / 模型 / 音色 / 秘钥）才走 AI，缺一项就退回系统语音引擎。")
+                        Rule("秘钥经本机 Keystore 加密后落盘；换机或从云备份恢复后要重填。")
+                        Rule("音色名各家不通用：抄进「可选音色」或用「拉音色列表」拉，听书页上直接挑。")
+                    }
                 }
                 Spacer(Modifier.height(28.dp))
             }
