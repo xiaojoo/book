@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 主题图标层：系统会整层重染，所以只留两页的实心轮廓，渐变/高光/文字线一律不带 -->
+    <group android:rotation="-12" android:pivotX="46.83" android:pivotY="53.58">
+        <path android:pathData="M32.06,38.18 a4.64,4.64 0 0,1 4.64,-4.64 h20.25 a4.64,4.64 0 0,1 4.64,4.64 v30.80 a4.64,4.64 0 0,1 -4.64,4.64 h-20.25 a4.64,4.64 0 0,1 -4.64,-4.64 z"
+            android:fillColor="#FFFFFF" />
+    </group>
+    <group android:rotation="7" android:pivotX="59.06" android:pivotY="54.42">
+        <path android:pathData="M43.03,37.97 a5.06,5.06 0 0,1 5.06,-5.06 h21.94 a5.06,5.06 0 0,1 5.06,5.06 v32.91 a5.06,5.06 0 0,1 -5.06,5.06 h-21.94 a5.06,5.06 0 0,1 -5.06,-5.06 z"
+            android:fillColor="#FFFFFF" />
+    </group>
+</vector>

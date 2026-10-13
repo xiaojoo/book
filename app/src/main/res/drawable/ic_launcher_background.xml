@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 桌面会把这一层铺满再按自己的形状裁，所以底色必须画到 0..108 整幅。
+         渐变按整幅画：桌面只显示中央约 66dp（真机量到前景被放大 1.6 倍，等于 108/66），
+         看到的正好是这条对角线的中段——和定稿那张图上的一致。
+         把端点收进 21..87 会让桌面上一枚比稿子更"有渐变"，试过，退回。 -->
+    <path android:pathData="M0,0 H108 V108 H0 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="0"
+                android:endX="108" android:endY="108"
+                android:startColor="#FFFFFF"
+                android:centerColor="#F4F9FE"
+                android:endColor="#E2EDF8" />
+        </aapt:attr>
+    </path>
+</vector>
