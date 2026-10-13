@@ -1,14 +1,94 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 两页之间留一条缝，MIUI 会把 108 画布放大再切圆角，字形只占中央约 42% -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M52.5,36.5 C46,32.5 38,30.5 31,31.5 L31,71.5 C38,70.5 46,72.5 52.5,76.5 Z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M55.5,36.5 C62,32.5 70,30.5 77,31.5 L77,71.5 C70,70.5 62,72.5 55.5,76.5 Z" />
+    <!-- 几何从 512 稿按 108/512=0.2109375 换算。VectorDrawable 没有模糊滤镜，
+         稿子里的柔光/投影用径向渐变画出来近似，形状和色标逐条对齐。 -->
+
+    <!-- 柔光：稿子是 stdDeviation=20 的高斯模糊，这里换成同心的径向渐变。
+         真机量过第一版（起点 55%、半径 30）：图上蓝味面积 47.5%，定稿图 54.9%，
+         光晕偏弱把底洗白了，所以抬到 65%/40% 并把半径放到 33。 -->
+    <path android:pathData="M53.58,21.42 a33,33 0 1,0 0,66 a33,33 0 1,0 0,-66 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="53.58" android:centerY="54.42" android:gradientRadius="33"
+                android:startColor="#A631C4F2"
+                android:centerColor="#6631C4F2"
+                android:endColor="#0031C4F2" />
+        </aapt:attr>
+    </path>
+
+    <!-- 后页：旋转 -12 度 -->
+    <group android:name="back" android:rotation="-12" android:pivotX="46.83" android:pivotY="53.58">
+        <path android:pathData="M32.06,38.18 a4.64,4.64 0 0,1 4.64,-4.64 h20.25 a4.64,4.64 0 0,1 4.64,4.64 v30.80 a4.64,4.64 0 0,1 -4.64,4.64 h-20.25 a4.64,4.64 0 0,1 -4.64,-4.64 z"
+            android:fillAlpha="0.62">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="35.01" android:startY="33.54"
+                    android:endX="58.64" android:endY="73.62"
+                    android:startColor="#48E9F4"
+                    android:endColor="#17AEF1" />
+            </aapt:attr>
+        </path>
+        <path android:pathData="M32.06,38.18 a4.64,4.64 0 0,1 4.64,-4.64 h20.25 a4.64,4.64 0 0,1 4.64,4.64 v20.25 h-29.53 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="46.83" android:startY="33.54"
+                    android:endX="46.83" android:endY="53.79"
+                    android:startColor="#8CFFFFFF"
+                    android:centerColor="#1FFFFFFF"
+                    android:endColor="#00FFFFFF" />
+            </aapt:attr>
+        </path>
+    </group>
+
+    <!-- 前页：旋转 7 度，底下先垫一层近似 feDropShadow 的投影 -->
+    <group android:name="front" android:rotation="7" android:pivotX="59.06" android:pivotY="54.42">
+        <path android:pathData="M40.06,32.95 a19,24 0 1,0 0,48 a19,24 0 1,0 0,-48 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="radial"
+                    android:centerX="59.06" android:centerY="56.95" android:gradientRadius="24"
+                    android:startColor="#3D0B3E6B"
+                    android:centerColor="#1F0B3E6B"
+                    android:endColor="#000B3E6B" />
+            </aapt:attr>
+        </path>
+        <path android:pathData="M43.03,37.97 a5.06,5.06 0 0,1 5.06,-5.06 h21.94 a5.06,5.06 0 0,1 5.06,5.06 v32.91 a5.06,5.06 0 0,1 -5.06,5.06 h-21.94 a5.06,5.06 0 0,1 -5.06,-5.06 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="44.63" android:startY="32.91"
+                    android:endX="71.88" android:endY="75.94"
+                    android:startColor="#48E9F4"
+                    android:centerColor="#17AEF1"
+                    android:endColor="#0A7FE0" />
+            </aapt:attr>
+        </path>
+        <path android:pathData="M43.03,37.97 a5.06,5.06 0 0,1 5.06,-5.06 h21.94 a5.06,5.06 0 0,1 5.06,5.06 v21.94 h-32.06 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="59.06" android:startY="32.91"
+                    android:endX="59.06" android:endY="54.85"
+                    android:startColor="#8CFFFFFF"
+                    android:centerColor="#1FFFFFFF"
+                    android:endColor="#00FFFFFF" />
+            </aapt:attr>
+        </path>
+        <path android:pathData="M48.10,42.19 H70.03" android:strokeWidth="2.32"
+            android:strokeLineCap="round" android:strokeColor="#9EFFFFFF" />
+        <path android:pathData="M48.10,49.36 H70.03" android:strokeWidth="2.32"
+            android:strokeLineCap="round" android:strokeColor="#9EFFFFFF" />
+        <path android:pathData="M48.10,56.52 H70.03" android:strokeWidth="2.32"
+            android:strokeLineCap="round" android:strokeColor="#9EFFFFFF" />
+        <path android:pathData="M48.10,63.70 H63.28" android:strokeWidth="2.32"
+            android:strokeLineCap="round" android:strokeColor="#9EFFFFFF" />
+    </group>
 </vector>
