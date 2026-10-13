@@ -1,0 +1,26 @@
+{
+  "id": "openalex",
+  "name": "OpenAlex",
+  "homeUrl": "https://openalex.org/",
+  "kind": "paper",
+  "charset": "utf-8",
+  "note": "开放文献索引，免密钥（JSON）。2026-10-13 从这台机实测：搜「attention mechanism」限定开放获取，meta.count 5,282,208；25 条里 22 条带 best_oa_location.pdf_url，实下 11 支里 10 支真是 %PDF（那支 Springer 的 2,871,029 字节）。它盖的期刊面比 arXiv 宽，也常有指向 arXiv 的同一篇。这一家没有明文摘要，只给 abstract_inverted_index（词→位置），所以那一段要在本地还原回去 —— 见 jsonPick 的 @invert",
+  "search": {
+    "url": "https://api.openalex.org/works?search=%s&filter=open_access.is_oa:true&per-page=30&select=id,title,authorships,publication_date,best_oa_location,abstract_inverted_index",
+    "format": "json",
+    "item": "results[]",
+    "bookName": "title",
+    "author": "authorships[].author.display_name",
+    "category": "",
+    "latestChapter": "",
+    "lastUpdateTime": "publication_date",
+    "intro": "abstract_inverted_index @invert",
+    "bookUrl": "best_oa_location.pdf_url"
+  },
+  "crawl": {
+    "concurrency": 1,
+    "minIntervalMs": 500,
+    "maxIntervalMs": 1500,
+    "maxAttempts": 3
+  }
+}

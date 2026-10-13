@@ -84,17 +84,38 @@ class BookDownloader(
         return assemble(hit, chapters, head.intro, head.chapters.map { it.first })
     }
 
-    /** 抓一章：空正文和抛异常都算失败，重试到 maxAttempts。成功返回正文，彻底失败返回 null。 */
+    /**
+     * 抓一章 = 这一页 + 它后面所有"同一章的下一页"（`123.html` → `123_2.html` 那种一章切几页的站）。
+     *
+     * 空正文、抛异常、翻页翻不到头，都算**这一章失败**（返回 null，进"没抓到的章"那一列）。
+     * 半截一章比缺一章坏：缺的那一行界面会写出来，半截的只表现为"读到一半下一章就来了"，
+     * 没人会怀疑到下载这一步 —— 所以宁可缺，不接半截。
+     */
     private fun fetchChapter(url: String, gate: () -> Unit): String? {
-        repeat(max(1, rule.crawl.maxAttempts)) { attempt ->
+        val parts = ArrayList<String>(2)
+        val seen = HashSet<String>()
+        var page: String? = url
+        while (page != null && seen.add(page)) {
+            val got = fetchPage(page, gate) ?: return null
+            parts += got.text
+            page = nextPageUrl(rule, got.html, got.at)
+            if (page != null && parts.size >= MAX_PAGES_PER_CHAPTER) return null
+        }
+        return parts.joinToString("\n\n")
+    }
+
+    /** 一页：重试到 `maxAttempts`。拿到的是原页 HTML（还要从里面找下一页）+ 它自己生效的地址 + 抽出来的正文。 */
+    private fun fetchPage(url: String, gate: () -> Unit): ChapterPage? {
+        repeat(max(1, rule.crawl.maxAttempts)) {
             // 每一次请求都排队，包括第一次：只在重试前排队的话，一开书就有 concurrency 条
             // 请求一个间隔都不隔地打过去，限流站正好就是在这一下把后面的章返空的
             gate()
-            val text = runCatching {
+            val got = runCatching {
                 val p = fetch.fetch(PageRequest(url))
-                chapterText(rule, p.text(rule.charset), p.finalUrl)
+                val html = p.text(rule.charset)
+                ChapterPage(html, p.finalUrl, chapterText(rule, html, p.finalUrl))
             }.getOrNull()
-            if (!text.isNullOrEmpty()) return text
+            if (got != null && got.text.isNotEmpty()) return got
         }
         return null
     }
@@ -125,6 +146,18 @@ class BookDownloader(
     }
 
     private fun storeKey(bookUrl: String, chapterUrl: String) = rule.id + "|" + bookUrl + "|" + chapterUrl
+
+    /** 一章的一页：原文（还要从里面找"下一页"）、它自己生效的地址（相对链接按它解，限流站会跳走）、抽出来的正文。 */
+    private class ChapterPage(val html: String, val at: String, val text: String)
+
+    companion object {
+        /**
+         * 一章最多跟几页。到顶还有"下一页"就当这一章失败：站点把"下一章"标成分页链接、
+         * 或者两个页面互相指（自环）的时候，没有这一条就是无限抓下去。
+         * 20 是按真站看的：一章切两三页是常态，十几页已经是异常。
+         */
+        const val MAX_PAGES_PER_CHAPTER = 20
+    }
 }
 
 /** 抓下来的整本。body 不含书名/作者那类页眉：导入时标题是另传的，写进正文会被当成第一章前面的碎屑。 */

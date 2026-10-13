@@ -25,6 +25,15 @@ data class BookMeta(
 
         /** 走"一屏一页、保留原版面"那条路的种类 —— 它们都没有字号/行距那套版式控制。 */
         val WHOLE_PAGE = setOf(PDF, PPTX)
+
+        /**
+         * 漫画：一章 = 一排图。它和 pdf/pptx 一样不进排版引擎，但它**有章** ——
+         * 所以 `chapterCount` 对它是"目录有几章"（真的），`pages` 对它是"一共多少张图"。
+         */
+        const val COMIC = "comic"
+
+        /** 清单里没有 chunk/章索引那一套的几类：读清单时对那几个键给默认值，别把一本好书判成损坏。 */
+        val NO_TEXT_INDEX = setOf(PDF, PPTX, COMIC)
     }
 }
 

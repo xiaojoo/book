@@ -469,7 +469,10 @@ private fun BookRow(
     onMore: () -> Unit,
 ) {
     val whole = BookMeta.WHOLE_PAGE.contains(meta.kind)
-    val unread = if (whole) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
+    // 漫画的进度是「第几话第几页」，未读要按章号减出来才说得准，而它存的不是字符偏移 —— 算不出"未读几章"，
+    // 就不摆那一行（摆一个 0 或未读全是假话）
+    val comic = meta.kind == BookMeta.COMIC
+    val unread = if (whole || comic) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
     Row(
         modifier = Modifier
                 .fillMaxWidth()
@@ -507,7 +510,12 @@ private fun BookRow(
             // 原来这里是一颗 7dp 红点（他点的去掉了）：同一行文字已经写着"N章未读"，
             // 红点是同一件事说两遍。连它前面那 5dp 的占位一起删 —— 留着一个空 Spacer 就是死控件
             Text(
-                if (whole) "${meta.kind.uppercase()} 原件整页" else "${meta.chapterCount} 章 · ${formatChars(meta.totalChars)}",
+                when {
+                    // 漫画数的是话和张，不是字：那一本 1068 话的书写"0 字"是一句假话
+                    comic -> "${meta.chapterCount} 话 · ${meta.pages} 张"
+                    whole -> "${meta.kind.uppercase()} 原件整页"
+                    else -> "${meta.chapterCount} 章 · ${formatChars(meta.totalChars)}"
+                },
                 fontSize = 13.sp,
                 color = Chrome.faint,
                 modifier = Modifier.padding(top = 2.dp),
@@ -597,8 +605,8 @@ private fun BookCard(
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
 ) {
-    // pdf 没有"章"这个口径，也没有排版位置可算未读
-    val whole = BookMeta.WHOLE_PAGE.contains(meta.kind)
+    // pdf 没有"章"这个口径，也没有排版位置可算未读；漫画有章但存的是「第几话第几页」，同一原因不摆未读
+    val whole = BookMeta.WHOLE_PAGE.contains(meta.kind) || meta.kind == BookMeta.COMIC
     // 参考截图那一行写的是"12章未读"，我们手上有章号，就用同一个口径，不写"读到 0%"这种看不出东西的百分比
     val unread = if (whole) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
     Column(

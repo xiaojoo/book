@@ -1,0 +1,40 @@
+{
+  "id": "tuku",
+  "name": "图库漫画",
+  "homeUrl": "https://www.tuku.cc/",
+  "kind": "comic",
+  "charset": "utf-8",
+  "note": "2026-10-13 从这台机实测：搜「魔法」21 行、书页一次给全 435 章、章页 28 张图（懒加载，真地址在 data-original）。图床查防盗链：不带 Referer 回 403，带章页自己回 200 的一张 JPEG —— 抓图那一头按这一格发，见 ComicDownloader.fetchImage。聚合站、不是版权方，和随包那两条小说源同一性质",
+  "cover": "img[src*=\"cover\"] @src",
+  "intro": ".manga-desc",
+  "hot": {
+    "url": "https://www.tuku.cc/rank/",
+    "group": ".top-card",
+    "item": "a[href*=\"/manga-\"]",
+    "bookName": "a[href*=\"/manga-\"] @title",
+    "bookUrl": "a[href*=\"/manga-\"] @href"
+  },
+  "search": {
+    "url": "https://www.tuku.cc/search?title=%s",
+    "item": ".manga-content-item",
+    "bookName": ".title",
+    "author": "",
+    "category": ".tag",
+    "bookUrl": ".title @href"
+  },
+  "toc": {
+    "item": "a.manga-chapter-item",
+    "name": "span.i-b"
+  },
+  "chapter": {
+    "content": "",
+    "filter": [],
+    "image": "img.lazy @data-original"
+  },
+  "crawl": {
+    "concurrency": 4,
+    "minIntervalMs": 300,
+    "maxIntervalMs": 900,
+    "maxAttempts": 3
+  }
+}

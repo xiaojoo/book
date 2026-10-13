@@ -13,8 +13,7 @@ import org.junit.Test
  */
 class RuleLoaderTest {
 
-    private fun text(path: String): String =
-        RuleLoaderTest::class.java.getResourceAsStream(path)!!.use { it.readBytes().toString(Charsets.UTF_8) }
+    private fun text(path: String): String = fixtureText(path)
 
     private fun rule(name: String): Rule = RuleLoader.load(text("/rules/$name.json"), name)
 

@@ -206,6 +206,20 @@ private fun PptBody(
 
     fun go(index: Int) = scope.launch { pager.animateScrollToPage(index.coerceIn(0, pageCount - 1)) }
 
+    // 音量键翻页：和小说、pdf、漫画共用「我的 → 阅读偏好」里那一格开关。
+    // 自动播放开着时不抢这一枪（那是"正在放"，不是"没压着东西"）—— 按音量键会翻一页，播放计时跟着重起
+    VolumePageTurn(
+        enabled = prefs.volumePaging,
+        blockedBy = {
+            when {
+                sheet != WholeSheet.None -> "抽屉$sheet"
+                chrome -> "上下栏"
+                else -> null
+            }
+        },
+        onTurn = { up -> go(if (up) pager.currentPage - 1 else pager.currentPage + 1) },
+    )
+
     // 播放 = 像 PC 那样一页一页往前放：每档秒数翻一页，走到最后一页自己停下、
     // 那颗按钮也跟着回到「播放」，不留一颗亮着却什么都不做的开关
     LaunchedEffect(playing, autoSeconds, pager.currentPage) {

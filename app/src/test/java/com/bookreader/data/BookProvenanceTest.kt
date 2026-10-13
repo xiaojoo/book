@@ -51,4 +51,35 @@ class BookProvenanceTest {
         assertEquals("新简介", back.intro())
         assertEquals(listOf("乙", "丙"), back.outline())
     }
+
+    /** 书架那一层的反查：第二次点下载要靠它找回架上那本，不然同一本书会摆两本。 */
+    @Test
+    fun theShelfKnowsWhichBookCameFromWhichSourcePage() {
+        val root = dirFor("shelf")
+        BookProvenance(File(root, "1-夜无疆")).save("mengshu", "http://m/1/", "", listOf())
+        BookProvenance(File(root, "2-剑来")).save("aixiashu", "http://a/2/", "", listOf())
+        File(root, "3-本地导入").mkdirs()
+        val map = BookProvenance.downloadedBooks(root)
+        assertEquals("两条记录 = 两本（没 source.tsv 的那本不算）", 2, map.size)
+        assertEquals("1-夜无疆", map[BookProvenance.key("mengshu", "http://m/1/")])
+        assertEquals("同书名不同源不能撞键", "2-剑来", map[BookProvenance.key("aixiashu", "http://a/2/")])
+        assertEquals("这条源上没下过这本", null, map[BookProvenance.key("mengshu", "http://m/2/")])
+    }
+
+    /** 重复下过同一本（这一版之前留下的现场）：写回最近那本，别随机挑一本。 */
+    @Test
+    fun duplicatedCopiesResolveToTheNewestOne() {
+        val root = dirFor("dup")
+        BookProvenance(File(root, "1000-同一本")).save("mengshu", "http://m/1/", "", listOf())
+        BookProvenance(File(root, "2000-同一本")).save("mengshu", "http://m/1/", "", listOf())
+        assertEquals("2000-同一本", BookProvenance.downloadedBooks(root)[BookProvenance.key("mengshu", "http://m/1/")])
+    }
+
+    @Test
+    fun anEmptyRootIsNotAFailure() {
+        assertEquals(emptyMap<String, String>(), BookProvenance.downloadedBooks(File(rootOf("nope-" + System.nanoTime()))))
+    }
+
+    private fun rootOf(name: String): String =
+        File(System.getProperty("java.io.tmpdir"), name).apply { deleteOnExit() }.path
 }

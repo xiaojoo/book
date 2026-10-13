@@ -437,39 +437,27 @@ fun ReaderScreen(
         }
     }
 
-    DisposableEffect(volumePaging) {
-        val host = activity as? VolumeKeyHost
-        if (host == null || !volumePaging) {
-            onDispose { }
-        } else {
-            // 音量键只在**屏幕上没压着东西**的时候才翻页。原来反过来：抢了这一枪翻页，还顺手把
-            // 他正开着的菜单/抽屉关掉（他点名的就是这条 —— 菜单在的时候音量键该是系统的音量）
-            host.volumeHook = { up ->
-                // 第一个命中的就是"当时压着的那一层"，写进日志才分得清是哪一颗挡的
-                val open = when {
-                    listening != null -> "听书会话"
-                    listenPage -> "听书页"
-                    tocPage -> "目录页"
-                    historyPage -> "缓存历史"
-                    fixesPage -> "多音字表"
-                    selection != null -> "选段动作栏"
-                    panel != Panel.None -> "抽屉$panel"
-                    bars -> "上下栏"
-                    restPrompt -> "休息提示"
-                    else -> null
-                }
-                if (open != null) {
-                    Log.d(TAG_PERF, "volume key $up -> 系统音量（压着$open）")
-                    false
-                } else {
-                    Log.d(TAG_PERF, "volume key $up -> 翻页")
-                    turn(!up)
-                    true
-                }
+    // 音量键这条规则四族阅读器共用一颗 `VolumePageTurn`（小说 / pdf / pptx / 漫画）：
+    // 只在**屏幕上没压着东西**的时候翻页，压着哪一层就交回系统音量，那一层的名字进日志
+    VolumePageTurn(
+        enabled = volumePaging,
+        blockedBy = {
+            // 第一个命中的就是"当时压着的那一层"，写进日志才分得清是哪一颗挡的
+            when {
+                listening != null -> "听书会话"
+                listenPage -> "听书页"
+                tocPage -> "目录页"
+                historyPage -> "缓存历史"
+                fixesPage -> "多音字表"
+                selection != null -> "选段动作栏"
+                panel != Panel.None -> "抽屉$panel"
+                bars -> "上下栏"
+                restPrompt -> "休息提示"
+                else -> null
             }
-            onDispose { host.volumeHook = null }
-        }
-    }
+        },
+        onTurn = { up -> turn(!up) },
+    )
 
     /**
      * 自动阅读。两种模式共用一个口径「行/分钟」，所以换翻页模式时快慢感觉不变：
@@ -1436,7 +1424,7 @@ private fun colorSchemeOf(theme: ReaderTheme): ColorScheme {
 }
 
 @Composable
-private fun PanelTitle(text: String, theme: ReaderTheme, onClose: () -> Unit) {
+internal fun PanelTitle(text: String, theme: ReaderTheme, onClose: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,

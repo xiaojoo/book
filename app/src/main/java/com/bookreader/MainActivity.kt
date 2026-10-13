@@ -36,6 +36,7 @@ import com.bookreader.ui.BookSearchScreen
 import com.bookreader.ui.FeaturedHomeScreen
 import com.bookreader.ui.LibraryScreen
 import com.bookreader.ui.Chrome
+import com.bookreader.ui.ComicReaderScreen
 import com.bookreader.ui.PdfReaderScreen
 import com.bookreader.ui.PptReaderScreen
 import com.bookreader.ui.ReaderTheme
@@ -167,6 +168,7 @@ private fun Root(
 
                 MainTab.Search -> BookSearchScreen(
                     sources = sources,
+                    library = library,
                     page = searchPage,
                     onPage = { searchPage = it },
                     onOpen = { openAt(it, -1) },
@@ -192,6 +194,8 @@ private fun Root(
             PdfReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
         } else if (meta.kind == BookMeta.PPTX) {
             PptReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
+        } else if (meta.kind == BookMeta.COMIC) {
+            ComicReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
         } else {
             ReaderScreen(bookId = id, library = library, prefs = prefs, startChapter = openChapter, onBack = { openBook = null })
         }

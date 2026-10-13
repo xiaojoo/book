@@ -39,14 +39,14 @@ class Book private constructor(
         fun readMeta(dir: File): BookMeta? = runCatching { metaOf(manifestOf(dir)) }.getOrNull()
 
         /**
-         * pdf 的清单里没有 chunk/章节那一套（它不进排版引擎），所以那几个键缺省。
-         * 只在 kind=pdf 时放行默认值 —— 对引擎书来说缺字段就是真损坏，不能被静默成一本空书。
+         * pdf / pptx / comic 的清单里没有 chunk/章节那一套（它们不进排版引擎），那几个键缺省。
+         * 只在"确实没有这一套"的种类上放行 —— 对引擎书来说缺字段就是真损坏，不能被静默成一本空书。
          */
         fun metaOf(m: Map<String, String>): BookMeta {
             val kind = m["kind"] ?: BookMeta.TXT
-            val pdf = kind == BookMeta.PDF
-            fun long(key: String): Long = m[key]?.toLongOrNull() ?: if (pdf) 0L else error("manifest 缺 $key")
-            fun int(key: String): Int = m[key]?.toIntOrNull() ?: if (pdf) 0 else error("manifest 缺 $key")
+            val plain = kind in BookMeta.NO_TEXT_INDEX
+            fun long(key: String): Long = m[key]?.toLongOrNull() ?: if (plain) 0L else error("manifest 缺 $key")
+            fun int(key: String): Int = m[key]?.toIntOrNull() ?: if (plain) 0 else error("manifest 缺 $key")
             return BookMeta(
                 id = checkNotNull(m["id"]) { "manifest 缺 id" },
                 title = m["title"] ?: "未命名",

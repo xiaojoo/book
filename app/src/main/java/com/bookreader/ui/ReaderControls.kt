@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,15 +36,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -86,6 +91,44 @@ private val TURN_LABELS = listOf("平移", "仿真", "上下", "简洁")
 
 private fun chipBg(theme: ReaderTheme) = if (theme.night) Color(0xFF222222) else Color(0xFFEDEEF0)
 private fun trackBg(theme: ReaderTheme) = if (theme.night) Color(0xFF2A2B2E) else Color(0xFFE2E5EA)
+
+/**
+ * 音量键翻页。四族阅读器（小说 / pdf / pptx / 漫画）共用这一条挂法 ——
+ * 「我的 → 阅读偏好」里那颗「音量键翻页」写的就是同一个 `prefs.volumePaging`，
+ * 所以那一颗开了就得处处都翻得动，不能只有小说那一屏认它。
+ *
+ * `blockedBy` 回的不是布尔而是一句话：屏幕上压着哪一层（抽屉/上下栏/选段栏…）就把这一枪交回系统音量，
+ * 那句话同时进日志 —— 出问题时"是哪一颗挡的"要能一眼看出来。
+ */
+@Composable
+internal fun VolumePageTurn(enabled: Boolean, blockedBy: () -> String?, onTurn: (up: Boolean) -> Unit) {
+    val activity = LocalView.current.context as? android.app.Activity
+    // 钩子只注册一次（挂在 DisposableEffect(enabled) 上，比屏幕活得久），所以它拿到的必须是
+    // **当下这一帧**的那两个 lambda。直接闭包进去的话，抓到的是第一次组合时的环境：
+    // 那时章表还没从磁盘读回来，`total` 还是 0，跨章那一支 `to >= total` 一进门就静默 return ——
+    // 日志打了"翻页"、页没动、也没回话，正是真机量到的那个样子
+    val turn by rememberUpdatedState(onTurn)
+    val blocked by rememberUpdatedState(blockedBy)
+    DisposableEffect(enabled) {
+        val host = activity as? VolumeKeyHost
+        if (host == null || !enabled) {
+            onDispose { }
+        } else {
+            host.volumeHook = { up ->
+                val open = blocked()
+                if (open != null) {
+                    android.util.Log.d("ReaderPerf", "volume key $up -> 系统音量（压着$open）")
+                    false
+                } else {
+                    android.util.Log.d("ReaderPerf", "volume key $up -> 翻页")
+                    turn(up)
+                    true
+                }
+            }
+            onDispose { host.volumeHook = null }
+        }
+    }
+}
 
 /** 底栏四颗：目录 / 书签 / 白天(切日间) / 设置。图标在上、文字在下。 */
 @Composable
@@ -140,7 +183,7 @@ private fun RowScope.BarItem(label: String, iconRes: Int, theme: ReaderTheme, on
 fun Modifier.consumesPanelTaps(): Modifier = pointerInput(Unit) { detectTapGestures { } }
 
 @Composable
-private fun BoxScope.PanelShell(
+internal fun BoxScope.PanelShell(
     theme: ReaderTheme,
     capFraction: Float = 0.92f,
     content: @Composable ColumnScope.() -> Unit,
@@ -331,12 +374,21 @@ internal fun Modifier.tap(enabled: Boolean, onClick: () -> Unit): Modifier = cli
 )
 
 @Composable
-private fun RowLabel(text: String, theme: ReaderTheme) {
+internal fun RowLabel(text: String, theme: ReaderTheme) {
     Text(text, fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.width(38.dp))
 }
 
+/**
+ * 轨道上某一个像素位置对应的亮度值。抽成纯函数是因为这一格出过一次"拖不动"：
+ * 拖拽那一段原来算的是 `value * 轨宽 + 本次位移`，而 `value` 被 `pointerInput(Unit)` 关在
+ * 第一次组合的闭包里 —— 它再也不更新，于是每一枪都在"旧值 + 一小段位移"上打转，
+ * 手指划过去了值还停在原地。现在两档手势都只读**绝对位置**，不读上一次的 value。
+ */
+internal fun slideRatio(xPx: Float, widthPx: Float): Float =
+    (xPx / widthPx.coerceAtLeast(1f)).coerceIn(0.04f, 1f)
+
 @Composable
-private fun SlideBar(
+internal fun SlideBar(
     value: Float,
     enabled: Boolean,
     theme: ReaderTheme,
@@ -344,7 +396,6 @@ private fun SlideBar(
     modifier: Modifier = Modifier,
 ) {
     var widthPx by remember { mutableFloatStateOf(1f) }
-    fun ratio(x: Float) = (x / widthPx).coerceIn(0.04f, 1f)
     Box(
         modifier = modifier
             // 轨高 = 滑块直径：原来轨 30dp、滑块 24dp，两头各冒出 3dp，看着就是背景比圆高
@@ -353,19 +404,21 @@ private fun SlideBar(
             .background(trackBg(theme))
             .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
             .pointerInput(Unit) {
-                detectTapGestures { offset -> onChange(ratio(offset.x)) }
+                detectTapGestures { offset -> onChange(slideRatio(offset.x, widthPx)) }
             }
-            .pointerInput(Unit) {
-                detectDragGestures { change, drag ->
+            .pointerInput(enabled) {
+                detectDragGestures { change, _ ->
                     change.consume()
-                    onChange(ratio(value * widthPx + drag.x))
+                    onChange(slideRatio(change.position.x, widthPx))
                 }
             },
     ) {
         Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = (2 + value.coerceIn(0f, 1f) * 246).dp)
+                // 滑块走的是"轨道宽 - 自身宽"这一段：原来写死 246dp，
+                // 面板一窄滑块就跑到轨道外面、一宽就停在半路
+                .offset { IntOffset((value.coerceIn(0f, 1f) * (widthPx - 24.dp.toPx())).toInt().coerceAtLeast(0), 0) }
                 .size(24.dp)
                 .clip(CircleShape)
                 .background(if (enabled) Color(0xFF8A8D91) else theme.faintColor.copy(alpha = 0.4f)),

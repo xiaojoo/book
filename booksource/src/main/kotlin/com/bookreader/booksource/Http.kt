@@ -46,6 +46,9 @@ class HttpFetcher(
         conn.requestMethod = req.method
         conn.setRequestProperty("User-Agent", USER_AGENT)
         conn.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.8")
+        // 图床按这一格决定给不给图（见 PageRequest.referer 的实测数字），没有就不发这个头 ——
+        // 发了等于对每个站都声称"我是从某个页面点进来的"，那些站反而可能回一张占位图
+        req.referer?.let { conn.setRequestProperty("Referer", it) }
         // 明说要 gzip：不问就收到的站点也会压（探站时 悠久小说网 就这么回了），问了就要自己解，
         // 两边行为统一，本机 JVM 的测试和真机才走同一条路
         conn.setRequestProperty("Accept-Encoding", "gzip")

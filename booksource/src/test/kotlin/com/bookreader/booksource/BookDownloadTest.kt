@@ -59,7 +59,7 @@ class BookDownloadTest {
     }
 
     private fun rule(crawlOverride: String? = null): Rule {
-        var text = javaClass.getResourceAsStream("/rules/shuhu.json")!!.use { it.readBytes().toString(Charsets.UTF_8) }
+        var text = fixtureText("/rules/shuhu.json")
         if (crawlOverride != null) {
             text = text.replace("  \"crawl\": {\n    \"concurrency\": 3\n  }", "  \"crawl\": $crawlOverride")
         }

@@ -16,19 +16,20 @@
 {
   "id": "bqg", "name": "某某笔趣阁", "homeUrl": "http://.../", "note": "这一条的毛病/备注",
   "charset": "gbk",              // 空 = 先看 HTTP 头，再看页面 meta，最后按 UTF-8
+  "kind": "novel",               // novel（默认，可以不写）/ comic（漫画）/ paper（文献）
   "search": {
     "url": "http://.../search.php?kw=%s",   // %s = URL 编码后的关键词，%n = 页码
     "method": "GET",             // 或 POST
     "data": "{submit: Search, kw: %s}",     // POST 请求体，同样过 %s
+    "format": "html",            // html / xml（Atom 用 CSS 选择器）/ json（换成点号路径）
     "item": "div.cat > ul > li", // 一条结果一个元素
     "bookName": "span.name > a", // 取值写法见下
     "author": "span.au", "category": "", "latestChapter": "span.new > a",
     "lastUpdateTime": "span.time", "wordCount": "", "intro": "",
     "bookUrl": "span.name > a@href"
   },
-  "book":    { "urlPattern": "http://.../book/(\\d+)/" },
-  "toc":     { "url": "", "item": "#list dd a", "nextPage": "" },
-  "chapter": { "title": "h1", "content": "#content", "filter": ["\\(本章完\\)", "一秒记住.*?com"] },
+  "toc":     { "url": "", "item": "#list dd a", "nextPage": "", "name": "", "reverse": false },
+  "chapter": { "content": "#content", "filter": ["\\(本章完\\)", "一秒记住.*?com"], "nextPage": "", "image": "" },
   "crawl":   { "concurrency": 4, "minIntervalMs": 300, "maxIntervalMs": 1200, "maxAttempts": 3 }
 }
 ```
@@ -44,6 +45,57 @@
 `toc.nextPage` 指向的是那种"第 1/2/3 页"的下拉框（`select#indexselect > option`），
 每个 option 的 `value` 填进 `toc.url` 的 `%s`；没有下拉框就留空，只抓当前这一页。
 
+`chapter.nextPage` 是另一回事：一章被切成几页的站（`123.html` → `123_2.html` → …），
+这一格写"这一章的下一页"那颗链接的选择器（例：`#pager_next`、`.pagenext`）。正文框里的先试，
+框里找不到就整页找 —— 随包的 `shuhaige`（书海阁）就是框外的：`#pager_next` 在页顶、`#A3` 在页尾 `.bottem2`，
+两个都在 `#content` 外面，只认框内的话它那一章十页只会下回第一页。
+留空 = 这一家一章一页。填了也只跟"同一章的下一页"——目标地址必须和当前页同站、同目录、同扩展名，
+文件名只在末尾多出一段 `_数字`/`-数字`；`124.html`、`10.html` 那种是**下一章**，不跟（跟了就等于把整本书并进第一章）；
+书海阁末页那颗 `#pager_next` 指向 `/shu_102752.html`（书主页），同样被这一条挡下。
+一章最多跟 20 页，到顶还没完就整章记作"没抓到"，不交半截。链接那一行（连它旁边"上一章/返回目录"那一条）
+不会留在正文里；站点写在正文最后一行的"这章没有结束，请点击下一页…"之类要靠 `chapter.filter` 去掉（看 `shuhaige.json` 那五条）。
+
+### `kind` = comic：一章 = 一排图
+
+`chapter.content` 可以不写，改写 **`chapter.image`** —— 它选出的是**每一个**匹配（`pickAll`），顺序就是页面上的顺序：
+
+```json5
+"kind": "comic",
+"chapter": { "image": "img.lazy @data-original" }   // 图库漫画：真地址在 data-original，src 是占位灰图
+"chapter": { "image": "img.reading-image @src" }    // 瓜子漫画：就在 src 上
+```
+
+这一格**必须带 `@`**：不带的话 `pickAll` 老实回每个元素的**文字**，于是"抓一章图"变成拿那些 alt 当地址去请求 ——
+不报错，就是每一章一张也没有。导入时就拒（判据 `anImageSelectorWithoutAnAttributeIsRefusedAtInstall`）。
+`kind=comic` 而 `chapter.image` 是空的，同样在导入时就拒。
+
+图片地址是**相对路径**的（`/15/14095/a.jpg`）会按"这一章页面自己的地址"补全。
+
+抓图那一头会带上 `Referer: <这张图所在那一章的页面>` —— 和浏览器点进去时发的那一条一模一样，
+不是可配字段。图库漫画的图床实测**不带回 403、带了回 200 的一张 JPEG**，瓜子漫画不查这一格。
+字节还要过两道闸：小于 1KB、或者开头不是 JPEG/PNG/WebP/GIF 那四个魔数，都算这一次没抓到（要重试），
+因为图床被防盗链挡住时往往回的不是错误码而是一张几十 KB 的占位灰图。
+
+### `kind` = paper：一篇 = 一支 PDF
+
+`toc` 和 `chapter` 两段整个可以不写（引擎在这两段是空的时候直接报"这一条源没有目录可读"，
+而不是回一本 0 章的书）。`search.format` 决定那一页怎么解：
+
+| format | 页面 | 取值写法 | 随包例子 |
+| --- | --- | --- | --- |
+| `xml` | Atom（arXiv） | 还是 CSS 选择器：`entry`、`link[title=pdf] @href` | `arxiv.json` |
+| `json` | OpenAlex / DOAJ 那种接口 | 点号路径：`results[]`、`authorships[].author.display_name`、`best_oa_location.pdf_url` | `openalex.json` |
+
+`@invert` 是点号路径上唯一的函数，专给 OpenAlex：它不给明文摘要，只给 `abstract_inverted_index`（词 → 位置表），
+还原之后如果位置有洞，末尾会写明「摘要读到这里为止」而不是假装拼全了。
+
+### `toc.name` 和 `toc.reverse`
+
+`name`：章名不在那条 `<a>` 自己的文字里、挂在里面那个 `<span>` 上时指过去（瓜子每行后面还跟着「阅读」那颗按钮的字，
+不指过去章名就成了"第 1162 话 神之谷大逃杀阅读"）。
+`reverse`：站点把目录排成最新在最前时写 `true`。不翻的后果不是难看，是**第 1 章 = 最长那一话**，
+进度、"下一章"、听书取句全反着走。这一格是站点的事实，所以写在源里，不在界面上给一颗开关。
+
 ## 明确不支持（加载时就拒，不会让你对着一个空列表猜）
 
 - **要跑 JavaScript 的源**：字段里出现 `@js:` 直接拒。这类源要在手机里内嵌一个 V8，
@@ -58,7 +110,9 @@
 bash gradlew-local.sh :booksource:test
 ```
 
-53 条，全离线（`Fetcher` 给脚本化的假页、`sleep` 收进列表里断言、时钟给常数；联网那条打的是本机起的 http 服务）。分六类：
+97 条，全离线（`Fetcher` 给脚本化的假页、`sleep` 收进列表里断言、时钟给常数；联网那条打的是本机起的 http 服务）。
+其中 28 条要 `src/test/resources/live/` 那批**真站当天抓回的页面**才跑（那批夹具不进仓库，新克隆的机器上按跳过算，
+2026-10-13 这台机上是 28 条全跑）：`RealSiteFixturesTest` 19 + `ComicPaperFixturesTest` 9。分类：
 
 - `RuleLoaderTest`（11 条）——**该红的都红**：打错的字段名、多余的键、`@js:`、漏了必填、
   区间反了、方法写歪、JSON 语法歪（重复键、结尾多余内容）。
@@ -70,6 +124,17 @@ bash gradlew-local.sh :booksource:test
   （常数时钟下四章的等待精确等于 `[0, 800, 1600, 2400]`）；被打回的章重试满 3 次后仍进书；
   正文为空的章重试满之后进 `failed` 而不是当一章空字写进书；断点续抓对已存过的章**一次请求都不发**；
   站点目录只写"1"、或长到超纲时，补出来的标题行仍要能被 `ChapterPattern` 认出来；进度每章回调一次。
+- `ComicPaperTest`（10 条，全在合成夹具上）——漫画和文献这两族的取值层：`pickAll` 抽出章页那一排图
+  （占位图那张不算）、相对地址按章页补全、`toc.name` 从里面那个 span 取名而不是整条 a（否则章名带上"阅读"）、
+  `toc.reverse` 把 newest-first 翻回阅读顺序；`kind` 那一格在导入时验 —— comic 没写 `chapter.image`、
+  写了但不带 `@`、`kind` 拼错，三种都要红；paper 那一条允许 `toc`/`chapter` 整段不写，但走 `head()` 要报人话
+  而不是回一本 0 章的书。JSON 那一套：点号路径走数组（`authorships[].author.display_name`）、
+  `pdf_url` 是 null 的那条不算一条命中（点下去没东西可下）、OpenAlex 那份倒排摘要还原成句子且**有洞就写明**。
+  图片那一半数的是真字节：`pages.tsv` 不是图、`.part` 不是图、同一张存两遍还是 1 张。
+- `ComicPaperFixturesTest`（9 条，要 `live/` 夹具）——四条随包新源打在真页面上：图库漫画 435 话一次给全且
+  第 1 话在最前、那一话写着 28P 就得抽出 28 张、榜单能喂满精选那一排的「漫画」tab；瓜子那本整页 2148 条链接
+  只认 `div.all-chapter-grid` 那一格才等于 1068 话不重复、且**引擎交回来的正好是页面倒过来**；
+  arXiv 的 `entry` 抽出标题/作者/PDF 直链（不是 abs 页）；OpenAlex 走 JSON 路径且每条的 PDF 地址不重。
 - `HttpFetcherTest`（8 条）——真发请求那一层，打的是本机起的 http 服务：UA 必须是浏览器那串
   （默认 `Java/21` 会被站直接 403，表现却像规则写错）、HTTP 头里的字符集要带回去而不是在这里就解、
   非 2xx 要抛（交一张空页回去会被当成"这章正文是空的"，重试就白跑了）、跟完跳转之后的地址才是
@@ -115,6 +180,13 @@ bash gradlew-local.sh :booksource:test
 | 笔趣阁365 | 3930 字节、**0 结果** | 反爬页 |
 | 顶点小说 | **403**；上一轮还吐过 `Illegal mix of collations`（gbk_bin vs utf8mb3） | 中文查询要按站点字符集编码，这条已经会了，但站点这一关没过 |
 | 香书 / 笔尖中文 / 阅读库 | 首页 502 或 1400 字节零链接 | 当天不可达 |
+| 思思漫画网 `m.sisimanhua.com` | 书页 **811 话的链接都在 HTML 里** ✓、章页 **14,922 字节** | qTcms：章页里 `var qTcms_Pic_curUrl=""` 是空的，HTML 里唯一的"图"是 `https://m.sisimanhua.com/1.png` = **832 字节的占位像素**，其余 34 张是推荐位缩略图（`_small.jpg`）。桌面站一样空。图靠 JS 拼 |
+| 开心漫 `www.kaixinman.com` | 书页 121,976 字节 ✓、607 条章链接 ✓ | 章页只有 logo 那一张 `<img>`，图片列表在 `var params = 'IeVAUOAQybt7…'` 那一串 **AES 密文**里；解它的 `/static/js/cms.min.js`(27,395 字节) 被 **jsjiami.com.v7 混淆**，连 `CryptoJS` 的方法名都是运行时算出来的。要吃它就得写一家专用解密 —— 和燃文同一类"进度走到 100%、抓回来是空的"的账，不做 |
+
+**他给过这两条地址（2026-10-13），验完的结论是不装**：那本书《戒魔人》在随包的瓜子漫画上有
+（`comic.php?id=17591`，站点自己写 `numberOfItems: 811`，`div.all-chapter-grid` 那一格 HTML 给 808 条，
+`toc.reverse` 翻回正序后第一条就是第1话；那一话 18 张图，第一张实测 **200 / 54,711 字节的 JPEG**）。
+图库漫画搜「戒魔人」回 0 行。所以下这本走瓜子，别再回来试这两家。
 
 要再多带几条，缺的不是选择器而是**跟着 `_2.html` 把一章读完**这一格 —— 它同时也管着所有用户自己导入的分页站，
 那种表现在这里最坏：不报错、字数看着也对、下完才发现每章缺后半截。
@@ -144,10 +216,10 @@ DOM 里没有任何线索能判，所以这一格没法在规则里治 —— �
 到这一层，"搜到 → 抓完 → 成书 → 落盘 → 入库"这条链在纯 JVM 侧已经全通了：
 `HttpFetcher`（联网）、`FileChapterStore`（断点）、`writeBookText`（成书落盘）、
 `BookLibrary.importFile(file, title)`（入库，书名显式传 —— 下载来的那本，书名是搜索命中里那个，
-不是我们临时起的 `dl-<时间戳>.txt`）。剩下的是把它们接起来的那半边界面：
-- `book.urlPattern` 目前只是存下来了，还没被用到（它要在"搜索给的不是目录页"那种站上派活）。
-- 章节本身分页（`chapter.nextPage`）没做：真需要时再加这个字段，不留没人用的字段。
-- 界面：书籍源管理页（导入/删除/开关 + 源文件存哪儿）、搜索页、下载进度和"接着上次"的入口。
-- 章节本身分页（`chapter.nextPage`）没做：真需要时再加这个字段，不留没人用的字段。
-- 需要 cookie 的源（有些站的 POST 搜索要先取一次会话）没做：同样等有真实需要再加，
-  加了就得同时有判据。
+不是我们临时起的 `dl-<时间戳>.txt`）。接上它的那半边界面也在 `:app` 里了（源管理、搜书、下载任务和"接着上次"）。
+剩下的：
+
+- `chapter.nextPage` 目前只有 `shuhaige` 一家在用：剑来第52章实测十页，跟回来 10 页 / 18.9k 字；
+  同一趟把这一格留空就只剩 1 页 / 1.7k 字，而"没抓到的章"那一栏还是空的 —— 这就是这一格存在的理由。
+  另外两家随包源是一章一页，这一格留空。
+- 真机上还没从书海阁下过一本书：这一条现在只有 JVM 侧的判据（合成 10 条 + 真页 4 条）。

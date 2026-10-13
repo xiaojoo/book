@@ -183,6 +183,20 @@ private fun PdfBody(
         listState.animateScrollToItem(index.coerceIn(0, doc.pageCount - 1))
     }
 
+    // 音量键翻页：那颗开关在「我的 → 阅读偏好」里，小说/pdf/pptx/漫画四族共用同一格 ——
+    // 之前只有小说那一屏认它。上下栏（这一族的底栏就是那条抽屉）或抽屉里再开的一层压着时交回系统音量
+    VolumePageTurn(
+        enabled = prefs.volumePaging,
+        blockedBy = {
+            when {
+                sheet != WholeSheet.None -> "抽屉$sheet"
+                chrome -> "上下栏"
+                else -> null
+            }
+        },
+        onTurn = { up -> go(if (up) current - 1 else current + 1) },
+    )
+
     // 双指张合没有别的回显，捏合停下来打一行日志，方便对着真机核
     LaunchedEffect(zoom) {
         delay(400L)

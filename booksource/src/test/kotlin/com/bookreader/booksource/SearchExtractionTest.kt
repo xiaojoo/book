@@ -13,7 +13,7 @@ import java.nio.charset.Charset
 class SearchExtractionTest {
 
     private fun rule(name: String): Rule = RuleLoader.load(
-        javaClass.getResourceAsStream("/rules/$name.json")!!.use { it.readBytes().toString(Charsets.UTF_8) },
+        fixtureText("/rules/$name.json"),
         name,
     )
 

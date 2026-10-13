@@ -53,6 +53,7 @@ import com.bookreader.R
 import com.bookreader.booksource.HttpFetcher
 import com.bookreader.booksource.SearchEngine
 import com.bookreader.data.BookLibrary
+import com.bookreader.data.BookProvenance
 import com.bookreader.data.DownloadRecord
 import com.bookreader.data.Downloads
 import com.bookreader.data.StoredSource
@@ -123,15 +124,25 @@ fun BookInfoPage(
         }
     }
     val srcName = sources.firstOrNull { it.rule?.id == shown.sourceId }?.rule?.name.orEmpty()
+    // 从搜索结果/精选那一行进来的这一份不带 bookId（那两个入口手上只有站点给的字段）。
+    // 到书架上按"哪条源的哪个书页"把它找回来：找得回来这一页才写得对 —— 那颗按钮该是「补齐全本」
+    // 而不是「下载全书」，而「下载全书」再点一次过去只会多出第二本一样的书。
+    LaunchedEffect(shown.sourceId, shown.bookUrl, reload) {
+        if (shown.bookId.isNotEmpty() || !shown.hasSource) return@LaunchedEffect
+        val id = withContext(Dispatchers.IO) {
+            library.downloaded()[BookProvenance.key(shown.sourceId, shown.bookUrl)]
+        }
+        if (id != null) shown = shown.copy(bookId = id)
+    }
 
     // 每章字数只有"已经下过"的那一本有：那是引擎自己索引出来的字符数（`Chapter.charCount`）。
     // 没下过的书要看字数只能去读每一章，而两家站的目录页整页搜「N字」命中 0 次 —— 所以那一格宁可空着，
     // 不编一个数上去。开索引是读文件，走 IO，不在组合线程上。
     var counted by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    LaunchedEffect(info.bookId) {
-        counted = if (info.bookId.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
+    LaunchedEffect(shown.bookId) {
+        counted = if (shown.bookId.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
             runCatching {
-                library.open(info.bookId).chapters.chapters.map { it.title to "${it.charCount}字" }
+                library.open(shown.bookId).chapters.chapters.map { it.title to "${it.charCount}字" }
             }.getOrDefault(emptyList())
         }
     }
@@ -366,6 +377,12 @@ private fun rowActions(
     info.bookId.isNotEmpty() -> listOf(
         RowAction(R.drawable.ic_open, "打开来读") { onOpen(info.bookId) },
         RowAction(R.drawable.ic_download, "补齐全本：只补目录里新增的章") {
+            start(info, sources, ctx, onNote, head = 0); onStarted()
+        },
+    )
+    // 一篇文献就是一支 PDF：没有"前十章"可拉，那颗在这条源上点了抓回的是同一支文件
+    info.hasSource && sources.firstOrNull { it.rule?.id == info.sourceId }?.rule?.isPaper == true -> listOf(
+        RowAction(R.drawable.ic_download, "下载 PDF") {
             start(info, sources, ctx, onNote, head = 0); onStarted()
         },
     )

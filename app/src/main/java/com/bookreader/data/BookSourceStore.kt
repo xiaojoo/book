@@ -160,8 +160,19 @@ class BookSourceStore(private val context: Context) {
          * 燃文小说网因此被摘掉 —— 它搜得到、目录也齐，但正文是 `<script>document.writeln(qsbs.bb('BASE64'))</script>
          * 拼出来的，剥掉 script 之后 `#content` 只剩 726 字广告（2026-10-11 实测），下完是一本垃圾书。
          * 这条判据留在 `RealSiteFixturesTest` 里，谁想再把它加回来会先撞上。
+         *
+         * `shuhaige` = 书海阁小说网：第一台**一章切好几页**的源（剑来 第52章 = 十页），所以它是
+         * `chapter.nextPage` 的第一家真用户；那一条的判据也在 `RealSiteFixturesTest` 里。
          */
-        val BUILTIN = listOf("mengshu", "aixiashu")
+        val BUILTIN = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex")
+
+        /**
+         * 后四条不是小说源：`tuku`/`guazi` 是漫画（一章 = 一排图），`arxiv`/`openalex` 是文献（一篇 = 一支 PDF）。
+         * 进来的条件和小说那几条一样 —— 三格都从真站取回的页面判过（判据在 `:booksource` 的
+         * `ComicPaperFixturesTest`），差别只在"第三格"对漫画是**图片地址能不能抽全**、
+         * 对文献是**那个地址直下是不是 %PDF 开头**。DOAJ 没进来：它的 link 数组 102 条里只有 15 条看着像
+         * 直接可下的 PDF，实下 12 支里 7 支真是 PDF（2026-10-13 实测），十个下载里要失败三个 —— 那不像源，像坏网。
+         */
 
         /**
          * 从 `BUILTIN` 摘掉的，按文件名点名。摘掉只管新装，不管已经种过一次的手机（`seeded.` 故意不自愈），
