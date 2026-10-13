@@ -823,9 +823,16 @@ fun ReaderScreen(
     // 为什么不照图标那个"憋大半秒再走"的形状：那等于点完 0.6 秒屏幕上没有任何反应，比现在更差。
     // 用 0f 收尾而不是把它移出组合：淡出这一路还要画着，淡完了才不占、也不接点击
     val chrome = remember { Animatable(1f) }
-    LaunchedEffect(immersive) {
-        val ms = if (immersive) (Chrome.barHideMs * 0.82f).roundToInt() else Chrome.barShowMs
-        chrome.animateTo(if (immersive) 0f else 1f, tween(ms))
+    // key 里必须有 `bars`：只挂 immersive 的话，**没挂背景图的那本书**（或全屏开关关着）immersive 永远是
+    // false，chrome 就冻在 1f，而上面那两条栏的门槛是 `bars || chrome.value > 0f` —— 菜单再也收不下去
+    LaunchedEffect(bars, immersive, Chrome.barsSynced) {
+        // 藏系统栏那一枪被我们接管了（`barsSynced`）→ 两边本来就是同一个时长，不用再拟合；
+        // 没接管到才退回逐帧量出来的那档 0.82。key 里带上它，是为了接管在 120ms 后报"没接到"时
+        // 这条淡出能立刻改走拟合那一档，而不是已经按 275ms 淡完了才反应过来
+        val ms =
+            if (!bars && immersive && !Chrome.barsSynced) (Chrome.barHideMs * 0.82f).roundToInt()
+            else Chrome.barShowMs
+        chrome.animateTo(if (bars) 1f else 0f, tween(ms))
     }
 
     MaterialTheme(colorScheme = colorSchemeOf(theme)) {

@@ -129,7 +129,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
      时长仍然从平台回调里学（`Chrome.barHideMs` / `barShowMs`），不写死；只认我们自己刚发出去那一枪，
      键盘的 IME 动画不算（`pending` 那一对冲淡标记）。
      `window_animation_scale`、`transition_animation_scale`、`animator_duration_scale` 三个都是 1.0 —— 那些数没被放大。
-     试过用 0 时长的 `controlWindowInsetsAnimation` 把系统栏压成一瞬：compat 不给 `setProgress`、平台口签名对不上，**没走通、已撤**。
+     **系统栏那条动画可以接到应用手里**（这才是"隐藏速度能不能调"的正解 —— 手机上没有只调系统栏隐藏速度的
+     开关，开发者选项那三个缩放是全屏幕的）：compat 有 `WindowInsetsControllerCompat.controlWindowInsetsAnimation(
+     types, durationMillis, interpolator, cancellationSignal, listener)`，**时长是参数**；`onReady` 里逐帧
+     `WindowInsetsAnimationControllerCompat.setInsetsAndAlpha(insets, alpha, fraction)`，走完 `finish(false)`。
+     （我早先记的"compat 不给 `setProgress`、签名对不上"是**找错了名字**：这版 core 1.18 里没有 `setProgress`，
+     叫 `setInsetsAndAlpha`；`Insets` 也没有 `lerp`，四边自己插。签名是从 class 里 + 编译器报的候选抄准的。）
+     **只有"藏"这一向接**：上一版两向都接，这台 MIUI 在"还回来"那一向不认我们报回去的 alpha，
+     栏就停在藏那一态（他截图量到：菜单开着、图标墨 0 / 时钟墨 0 / 导航墨 0）→ 那条已经退回走系统 `show()`。
+     **这一条还没在屏上量过**：欠两笔 —— ① 接管成没成（`Chrome.barsSynced`）+ 图标墨归 0 和我们那条淡出
+     是不是同一帧；② 开菜单时栏还回得来回不回（上次就是这条办坏的）。量不出来之前，0.82 那档拟合还在原地兜着。
      ⑥ **淡出这一路那两条栏不能再当菜单点**（时长从 275ms 拉到 1.2 秒带出来的副作用）：栏在淡的时候还在组合里，
      命中窗口原本跟着那条曲线走，就成了"收了菜单还点得到栏"。`Modifier.fadingTap(bars)`（`ReaderScreen` 文件尾）
      把命中窗口钉回 `bars`：**这一枪在 Initial pass 就消费掉**，抬指时位移没过 touchSlop 再按正文判据补发一次。
