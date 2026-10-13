@@ -95,7 +95,6 @@ fun ComicReaderScreen(
     var themeIndex by remember { mutableIntStateOf(prefs.themeIndex) }
     val theme = remember(themeIndex) { ReaderTheme.of(themeIndex) }
     var brightness by remember { mutableFloatStateOf(prefs.brightness) }
-    ApplySystemBars(darkIcons = !theme.night)
     BackHandler(onBack = onBack)
     // 亮度 -1 = 跟随系统，那时要把窗口属性还原成默认（和小说那一屏同一条写法）
     LaunchedEffect(brightness, activity) {
@@ -173,11 +172,13 @@ fun ComicReaderScreen(
         onTurn = { up -> step(!up) },
     )
 
+    ApplySystemBars(darkIcons = !theme.night)
+
     Box(
         Modifier
             .fillMaxSize()
             // 整屏让开系统栏（和小说那一屏同一条写法）：底栏压在导航条上，"目录/书签/夜间/设置"
-            // 就和 ‹ □ ☰ 挤在同一行里，按下去先撞系统的颗
+            // 就和 ‹ □ ☰ 挤在同一行里，按下去先撞系统的颗。全屏模式下这一条让位不给
             .safeDrawingPadding()
             .background(theme.pageColor)
             .pointerInput(chapter, pages.size) {

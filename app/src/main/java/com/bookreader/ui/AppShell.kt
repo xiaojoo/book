@@ -39,6 +39,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -122,6 +124,25 @@ object Chrome {
     /** 夜间开关。"我的"页那颗开关写它，启动和从阅读页回来时从 `prefs.themeIndex` 同步。 */
     var night by mutableStateOf(false)
 
+    /**
+     * 全局字号的倍率（「我的 → 字体管理」）。和 [night] 同一个道理：SharedPreferences 不是可观察状态，
+     * 所以改完写这里一份，`TipHost` 读它来换 density —— 外壳四页跟着变，阅读正文不吃这一档
+     * （ReaderScreen 排版用的是系统 fontScale，他点的「各算一档」）。
+     */
+    var uiScale by mutableFloatStateOf(1f)
+
+    /** 全局字体文件名，同上；空 = 系统字体。改完由字体管理那一屏写进来，`TipHost` 按它重解一次字体。 */
+    var fontFile by mutableStateOf("")
+
+    /**
+     * 系统栏那条动画的时长，**从平台自己的动画回调里学**（K40 / MIUI 实测：藏 1519ms 走 93 帧、
+     * 还 311ms 走 19 帧；三个动画倍率都是 1.0，所以这不是被放大出来的）。
+     * 阅读页那两条菜单的淡入淡出跟着这两个数走 —— 他点的口径是"过渡时间和菜单栏一样"，
+     * 而平台那条 1.5 秒我们改不动，所以动的是我们这边。
+     */
+    var barHideMs by mutableIntStateOf(1500)
+    var barShowMs by mutableIntStateOf(275)
+
     private val day = Palette(
         page = Color(0xFFF6F7F9), card = Color(0xFFFFFFFF), ink = Color(0xFF22262E),
         faint = Color(0xFF8B93A1), accent = Color(0xFFE30000), dot = Color(0xFFE30000),
@@ -169,6 +190,7 @@ fun AppScaffold(
     tab: MainTab,
     onTab: (MainTab) -> Unit,
     barVisible: Boolean = true,
+    hidden: Set<MainTab> = emptySet(),
     content: @Composable () -> Unit,
 ) {
     // 系统导航条也铺界面底色：它是底栏往下那条，留着卡片白就等于同一条栏有两个主人
@@ -195,7 +217,8 @@ fun AppScaffold(
                     .height(52.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                MainTab.values().forEach { item ->
+                // 「菜单管理」里藏掉的那几格不进底栏（SpaceEvenly + weight(1f) 会自动把剩下的几格摊满）
+                MainTab.values().filterNot { it in hidden }.forEach { item ->
                     val on = item == tab
                     Column(
                         modifier = Modifier
@@ -628,8 +651,11 @@ fun MarksScreen(
 fun MeScreen(
     library: BookLibrary,
     prefs: ReaderPrefs,
-    onOpenAi: () -> Unit,
+    onOpenAi: (AiSection) -> Unit,
     onEditName: () -> Unit,
+    onSkin: () -> Unit,
+    onFont: () -> Unit,
+    onMenu: () -> Unit,
 ) {
     val context = LocalContext.current
     var books by remember { mutableStateOf(library.list()) }
@@ -650,9 +676,11 @@ fun MeScreen(
     LaunchedEffect(Unit) { measureCache() }
 
     Column(Modifier.fillMaxSize().background(Chrome.page)) {
-        // 头像那一行：平铺在页面底色上，不是卡片（参考图就是这样）
+        // 头像那一行：平铺在页面底色上，不是卡片（参考图就是这样）。
+        // 右边 26dp = 下面那一叠行的 12dp（整页内衬）+ 14dp（行内衬）：顶上那颗 `>` 的墨右
+        // 要和「皮肤管理」那行的 `>` 墨右落在同一条线上（改前差 38px = 13.8dp）
         Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 26.dp, top = 14.dp, bottom = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -701,13 +729,6 @@ fun MeScreen(
         ) {
             item {
                 Card {
-                    Line("消息通知", on = { note = "消息要接书源服务端才有地方存" })
-                    Hairline()
-                    Line("自动订阅", on = { note = "自动订阅要有书源账号，本机只读本地文件" })
-                }
-            }
-            item {
-                Card {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -733,52 +754,52 @@ fun MeScreen(
                 }
             }
             item {
+                // 单独一张卡：这三行都是"改这台机上的样子"，和上面那颗开关、下面那两档 AI 不是一类事
                 Card {
-                    Line("隐私设置", on = {
-                        note = if (prefs.aiBaseUrl.isBlank()) {
-                            "本机不上传任何数据：书、位置、书签都只存在这台手机上"
-                        } else {
-                            "书、位置、书签仍然只在本机；只有 AI 词典会把你要查的那一段发到 " +
-                                prefs.aiBaseUrl + "，其它功能一个字节都不发"
-                        }
-                    })
-                    Hairline()
-                    Line("偏好设置", trailing = prefsSummary(prefs), on = { prefsSheet = true })
-                    Hairline()
-                    // AI 服务这一档必须在这一页看得见：藏在阅读页里等于没做（他点过这条）
                     Line(
-                        "AI 服务",
-                        sub = "长按「词典」的翻译和拼音；「听书」的语音也在这里配",
-                        trailing = if (prefs.aiBaseUrl.isBlank() && prefs.aiKeyCipher.isBlank()) "未配置" else "已配置",
-                        on = onOpenAi,
+                        "皮肤管理",
+                        sub = "上传一张图当阅读背景",
+                        trailing = if (prefs.bgImageFile.isBlank()) "纯色纸" else "已用图",
+                        on = onSkin,
                     )
                     Hairline()
-                    Line("其他设置", on = { note = "其他项要接书源服务端，本机没有" })
+                    Line(
+                        "字体管理",
+                        sub = "全局字体和全局字号",
+                        trailing = if (prefs.uiFontFile.isBlank()) "系统字体" else "已换字体",
+                        on = onFont,
+                    )
+                    Hairline()
+                    Line("菜单管理", sub = "底栏哪几格要显示", on = onMenu)
                 }
             }
             item {
                 Card {
-                    Line("账号设置", on = { note = "没有账号体系：昵称只是本机显示用" })
+                    Line("偏好设置", trailing = prefsSummary(prefs), on = { prefsSheet = true })
                     Hairline()
-                    Line("未成年人模式", on = { note = "要接实名和时长统计，本机没有" })
+                    // 两档各开一屏（他点名从「AI 服务」这一格拆开）：两家的地址和秘钥本来就各存一份
+                    Line(
+                        "AI 翻译",
+                        sub = "长按选段 →「词典」的翻译和拼音走这一档",
+                        trailing = if (prefs.aiBaseUrl.isBlank() && prefs.aiKeyCipher.isBlank()) "未配置" else "已配置",
+                        on = { onOpenAi(AiSection.Translate) },
+                    )
                     Hairline()
+                    Line(
+                        "AI 听书",
+                        sub = "长按选段 → 念出来；地址 / 模型 / 音色在这里配",
+                        trailing = if (prefs.aiVoiceBaseUrl.isBlank() && prefs.aiVoiceKeyCipher.isBlank()) "未配置" else "已配置",
+                        on = { onOpenAi(AiSection.Speech) },
+                    )
+                }
+            }
+            item {
+                Card {
                     Line(
                         "清理缓存",
                         trailing = "${"%.2f".format(cacheBytes / 1048576f)}MB",
                         on = { confirmClean = true },
                     )
-                }
-            }
-            item {
-                Card(pad = 0.dp) {
-                    Box(
-                        Modifier.fillMaxWidth().height(50.dp).tap {
-                            note = "没有账号可退出：这台机上的书和位置不会被任何服务器记录"
-                        },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("退出登录", fontSize = 15.sp, color = Chrome.danger)
-                    }
                 }
             }
             note?.let {
@@ -896,6 +917,7 @@ private fun prefsSummary(prefs: ReaderPrefs): String =
     listOf(
         if (prefs.volumePaging) "音量键翻页" else "",
         if (prefs.keepScreenOn) "屏幕常亮" else "",
+        if (prefs.fullScreen) "全屏模式" else "",
         if (prefs.bothSidesNext) "两侧下一页" else "",
         if (prefs.paragraphIndent) "段首缩进" else "",
     ).filter { it.isNotEmpty() }.joinToString(" · ")
@@ -924,8 +946,9 @@ internal fun RedSwitch(on: Boolean, onToggle: (Boolean) -> Unit) {
     }
 }
 
+// 这三颗皮肤页（皮肤/字体/菜单管理）也要用：同一张卡、同一条发丝线、同一行形状，不各写一份
 @Composable
-private fun Card(pad: Dp = 0.dp, content: @Composable () -> Unit) {
+internal fun Card(pad: Dp = 0.dp, content: @Composable () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -936,7 +959,7 @@ private fun Card(pad: Dp = 0.dp, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Hairline() {
+internal fun Hairline() {
     // 1dp 在 2.75 倍密度上取整成 3 行；这条线要的是 1 个物理像素
     val d = LocalDensity.current
     Box(
@@ -949,7 +972,7 @@ private fun Hairline() {
 }
 
 @Composable
-private fun Line(
+internal fun Line(
     title: String,
     sub: String? = null,
     trailing: String? = null,
@@ -984,6 +1007,7 @@ private fun Line(
 private fun PrefSheet(prefs: ReaderPrefs, onDismiss: () -> Unit) {
     var volume by remember { mutableStateOf(prefs.volumePaging) }
     var keep by remember { mutableStateOf(prefs.keepScreenOn) }
+    var full by remember { mutableStateOf(prefs.fullScreen) }
     var both by remember { mutableStateOf(prefs.bothSidesNext) }
     var indent by remember { mutableStateOf(prefs.paragraphIndent) }
     ModalBottomSheet(
@@ -999,6 +1023,7 @@ private fun PrefSheet(prefs: ReaderPrefs, onDismiss: () -> Unit) {
             Text("偏好设置", fontSize = 16.sp, color = Chrome.ink, modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp))
             SwitchLine("音量键翻页", volume) { volume = it; prefs.volumePaging = it }
             SwitchLine("阅读时屏幕常亮", keep) { keep = it; prefs.keepScreenOn = it }
+            SwitchLine("全屏模式", full) { full = it; prefs.fullScreen = it }
             SwitchLine("点屏幕两侧都往后翻", both) { both = it; prefs.bothSidesNext = it }
             SwitchLine("段首空两格", indent) { indent = it; prefs.paragraphIndent = it }
         }
@@ -1008,7 +1033,9 @@ private fun PrefSheet(prefs: ReaderPrefs, onDismiss: () -> Unit) {
 @Composable
 private fun SwitchLine(title: String, on: Boolean, onToggle: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 16.dp, vertical = 8.dp),
+        // 整行都是命中区：原来只有右边那颗开关点得动，点标题那一片什么都不会发生
+        // （真机撞过：脚本按标题中心点下去，prefs 一位没变）
+        Modifier.fillMaxWidth().heightIn(min = 50.dp).tap { onToggle(!on) }.padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(title, fontSize = 15.sp, color = Chrome.ink, modifier = Modifier.weight(1f))

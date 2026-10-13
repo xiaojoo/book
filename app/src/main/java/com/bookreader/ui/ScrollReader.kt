@@ -70,6 +70,8 @@ fun ScrollReader(
     onLongPress: (Long) -> LongRange?,
     onSelectionRect: (topPx: Float, bottomPx: Float) -> Unit,
     modifier: Modifier = Modifier,
+    // 同 PageView：上传了背景图时这一层要透，图压在下面
+    paper: androidx.compose.ui.graphics.Color = theme.pageColor,
 ) {
     val density = LocalDensity.current
     val paint = readerPaint(theme, style.fontSizePx, typeface)
@@ -255,7 +257,7 @@ fun ScrollReader(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(theme.pageColor)
+            .background(paper)
             // 顶缝底缝是给"文字带"的，不是给文档首末行的：滚动时行要从边底下穿过去，只垫首行等于没垫。
             // 所以整条带子往里挪、上下边缘都裁掉 —— 这样上下那一档的缝和按页那一档量出来是同一个数。
             .padding(top = with(density) { bandTopPx.toDp() }, bottom = with(density) { bandBottomPx.toDp() })

@@ -122,7 +122,6 @@ fun PptReaderScreen(
 ) {
     val density = LocalDensity.current
     val view = LocalView.current
-    ApplySystemBars(darkIcons = !Chrome.night)
     BackHandler(onBack = onBack)
     SideEffect { view.keepScreenOn = prefs.keepScreenOn }
 
@@ -255,6 +254,8 @@ private fun PptBody(
         chrome = false
         note = null
     }
+
+    ApplySystemBars(darkIcons = !Chrome.night)
 
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     Box(Modifier.fillMaxSize().background(Chrome.page).safeDrawingPadding()) {

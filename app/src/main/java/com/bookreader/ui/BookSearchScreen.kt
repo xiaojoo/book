@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
@@ -59,9 +60,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import android.content.Context
@@ -362,9 +365,23 @@ fun BookSearchScreen(
 internal fun TipHost(content: @Composable () -> Unit) {
     val tip = remember { mutableStateOf<Tip?>(null) }
     var root by remember { mutableStateOf(Rect.Zero) }
+    val ctx = LocalContext.current
+    val density = LocalDensity.current
+    // 全局字号 = 在系统 fontScale 上再乘一档。挂在这一层是因为它是所有屏的最外面一圈；
+    // 阅读正文不吃这一档 —— ReaderScreen 排版读的是系统 fontScale（他点的「各算一档」）
+    val scale = remember(Chrome.uiScale) { Chrome.uiScale.coerceIn(0.7f, 1.6f) }
+    // 全局字体：MaterialTheme 的 typography 是唯一能盖住所有 Text 的 fontFamily 的地方。
+    // 阅读屏里那层嵌套的 MaterialTheme 只换 colorScheme，typography 从这一层继承下来
+    val font = remember(Chrome.fontFile) { loadAppFont(ctx, Chrome.fontFile) ?: FontFamily.Default }
     // 气泡画在这一格最外层，不画进 Popup：这台机上 Popup 那扇窗口的坐标原点不是应用窗口，
     // 量到整块偏 (-46, +267) px；外层这格的位置是自己 onGloballyPositioned 拿回来的，错不了。
-    CompositionLocalProvider(LocalTip provides tip) {
+    CompositionLocalProvider(
+        LocalTip provides tip,
+        LocalDensity provides Density(density.density, fontScale = density.fontScale * scale),
+        // 全局字体挂这一层：Material3 的 Text 是 localTextStyle.merge(style)，而它默认那 15 档
+        // 没有写 fontFamily，所以这里给的字体留得下来；阅读屏里那层嵌套 MaterialTheme 只换 colorScheme
+        LocalTextStyle provides TextStyle(fontFamily = font),
+    ) {
         Box(
             Modifier
                 .fillMaxSize()
