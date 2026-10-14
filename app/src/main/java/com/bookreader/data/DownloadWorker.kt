@@ -68,9 +68,9 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
 
         val update = inputData.getBoolean(KEY_UPDATE, false)
         val head = inputData.getInt(KEY_HEAD, 0)
-        // 三类源交回来的东西不一样：小说是一整串文字、漫画是几万个图文件、文献是一支 PDF。
+        // 四类源交回来的东西不一样：小说是一整串文字、漫画是几万个图文件、有声书是几 GB 音频、文献是一支 PDF。
         // 抓和入库各走各的头，共用的是这一行的进度、取消、退避重试和那张下载表
-        if (!rule.isPaper && !rule.isComic) {
+        if (!rule.isPaper && !rule.isComic && !rule.isAudio) {
             val store = FileChapterStore(BookSourceStore(ctx).cacheDir(ruleId, bookUrl))
             val novel = try {
                 BookDownloader(rule, HttpFetcher(), store)
@@ -86,6 +86,7 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
             return if (rec.state == DownloadRecord.STATE_DONE) Result.success() else Result.failure()
         }
         if (rule.isComic) return runComic(ctx, rule, hit, rec, head)
+        if (rule.isAudio) return runAudio(ctx, rule, hit, rec, head)
         return runPaper(ctx, rule, hit, rec)
     }
 
@@ -169,6 +170,44 @@ class DownloadWorker(appContext: Context, params: WorkerParameters) : CoroutineW
         runCatching { saveCover(done.bookId, rule, hit.bookUrl) }
         history.put(rec)
         android.util.Log.d("ComicDl", "入库 ${done.bookId} 章=${done.onDisk}/${done.chapters} 图=${done.images} 缺=${done.failed.size}")
+        return Result.success()
+    }
+
+    /**
+     * 一本有声书：音频直接写进书目录，写完把清单和数字落到下载表那一行。形状和 [runComic] 同一份。
+     *
+     * id 在这里就定下来并写进表：一本有声书要抓几个 GB、中间进程随时会被系统收回，
+     * 那一行要是还不认得自己写的是哪一本，下一次点「下载全书」就只能另起一本 —— 架上又多一本。
+     */
+    private suspend fun runAudio(ctx: Context, rule: Rule, hit: BookHit, rec: DownloadRecord, head: Int): Result {
+        val id = shelfId(ctx, hit, rec)
+        val done = try {
+            AudioImport.run(ctx, rule, hit, id, head, { isStopped }) { d, t -> progress(rec, d, t) }
+        } catch (e: Exception) {
+            if (isStopped) {
+                withContext(NonCancellable) { cancelled(rec) }
+                return Result.success()
+            }
+            return failed(rec, e)
+        }
+        if (isStopped) {
+            withContext(NonCancellable) { cancelled(rec) }
+            return Result.success()
+        }
+        rec.missing = done.failed.size
+        // 有声书数的是"集"，不是"字"：把集数塞进 chars 那一列，界面上那行就写成"1,830 字"的假话
+        rec.chars = 0
+        rec.state = DownloadRecord.STATE_DONE
+        rec.bookId = done.bookId
+        rec.done = done.chapters
+        rec.total = done.chapters
+        rec.endedAt = System.currentTimeMillis()
+        runCatching { saveCover(done.bookId, rule, hit.bookUrl) }
+        history.put(rec)
+        android.util.Log.d(
+            "AudioDl",
+            "入库 ${done.bookId} 集=${done.onDisk}/${done.chapters} 段=${done.parts} 字节=${done.bytes} 缺=${done.failed.size}",
+        )
         return Result.success()
     }
 

@@ -470,9 +470,10 @@ private fun BookRow(
 ) {
     val whole = BookMeta.WHOLE_PAGE.contains(meta.kind)
     // 漫画的进度是「第几话第几页」，未读要按章号减出来才说得准，而它存的不是字符偏移 —— 算不出"未读几章"，
-    // 就不摆那一行（摆一个 0 或未读全是假话）
+    // 就不摆那一行（摆一个 0 或未读全是假话）。有声书同一档：它存的是「第几集第几毫秒」
     val comic = meta.kind == BookMeta.COMIC
-    val unread = if (whole || comic) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
+    val audio = meta.kind == BookMeta.AUDIO
+    val unread = if (whole || comic || audio) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
     Row(
         modifier = Modifier
                 .fillMaxWidth()
@@ -513,6 +514,8 @@ private fun BookRow(
                 when {
                     // 漫画数的是话和张，不是字：那一本 1068 话的书写"0 字"是一句假话
                     comic -> "${meta.chapterCount} 话 · ${meta.pages} 张"
+                    // 有声书数的是集和大小：它没有"字"这个口径（totalChars 恒 0），账面是磁盘上那些字节
+                    audio -> "${meta.chapterCount} 集 · ${humanBytes(meta.contentBytes)}"
                     whole -> "${meta.kind.uppercase()} 原件整页"
                     else -> "${meta.chapterCount} 章 · ${formatChars(meta.totalChars)}"
                 },
@@ -605,8 +608,8 @@ private fun BookCard(
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
 ) {
-    // pdf 没有"章"这个口径，也没有排版位置可算未读；漫画有章但存的是「第几话第几页」，同一原因不摆未读
-    val whole = BookMeta.WHOLE_PAGE.contains(meta.kind) || meta.kind == BookMeta.COMIC
+    // pdf 没有"章"这个口径，也没有排版位置可算未读；漫画/有声有章但存的是「第几话第几页」/「第几集第几毫秒」，同一原因不摆未读
+    val whole = BookMeta.WHOLE_PAGE.contains(meta.kind) || meta.kind == BookMeta.COMIC || meta.kind == BookMeta.AUDIO
     // 参考截图那一行写的是"12章未读"，我们手上有章号，就用同一个口径，不写"读到 0%"这种看不出东西的百分比
     val unread = if (whole) null else position?.let { (meta.chapterCount - it.chapterIndex - 1).coerceAtLeast(0) }
     Column(
@@ -676,4 +679,17 @@ private fun AddBookCard(onClick: () -> Unit) {
 fun formatChars(chars: Long): String = when {
     chars >= 10_000 -> "${chars / 10_000} 万字"
     else -> "$chars 字"
+}
+
+/**
+ * 字节数说成人话。书架上那一本有声书会到 GB（一整本几十集 × 几十 MB），
+ * 而"1,267,244,320"这种要数位的数没人读。
+ * 「AI 听书」那一页的缓存大小另有一格（`ListenExtras.charsOf`）：那一档只到 MB，
+ * 因为 TTS 缓存到不了 GB —— 给它加一档会把那页已经认可的写法一起改掉，所以不动它。
+ */
+fun humanBytes(bytes: Long): String = when {
+    bytes >= 1_000_000_000L -> "%.2fGB".format(bytes / 1_000_000_000.0)
+    bytes >= 1_000_000L -> "%.1fMB".format(bytes / 1_000_000.0)
+    bytes >= 1_000L -> "%dKB".format(bytes / 1000)
+    else -> "$bytes B"
 }

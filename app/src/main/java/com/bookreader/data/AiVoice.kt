@@ -278,8 +278,13 @@ class AiVoicePlayer {
             .onFailure { Log.w("AiVoice", "no-focus request failed: ${it.javaClass.simpleName}") }
     }
 
-    /** @return 真的开口了没有。失败时把 MediaPlayer 的错误码回成一句日志，界面上由调用方给话。 */
-    fun play(file: File, onEnd: () -> Unit = {}): Boolean {
+    /**
+     * @param startAtMs 断点续听：从第几毫秒起播（0 = 从头）。放在 `onEnd` **前面**，
+     *   因为现有调用方用的是尾随 lambda 写法 `play(file) { ... }` —— 尾随 lambda 绑的是最后一个
+     *   函数型参数，把 Int 排在它后面就会绑不上（编译报"actual type is () -> Unit, but Int was expected"）。
+     * @return 真的开口了没有。失败时把 MediaPlayer 的错误码回成一句日志，界面上由调用方给话。
+     */
+    fun play(file: File, startAtMs: Int = 0, onEnd: () -> Unit = {}): Boolean {
         stop()
         if (!file.exists() || file.length() == 0L) return false
         return runCatching {
@@ -296,6 +301,8 @@ class AiVoicePlayer {
                 setOnPreparedListener {
                     // 新实例默认 1.0x：每一段都要把界面上选着的速率套上
                     runCatching { it.playbackParams = it.playbackParams.setSpeed(rate.coerceIn(0.5f, 2.0f)) }
+                    // 断点续听：seek 得等 prepared 才靠得住（prepareAsync 没回来时 seekTo 会白跑一趟）
+                    if (startAtMs > 0) runCatching { it.seekTo(startAtMs) }
                     it.start()
                 }
                 setOnCompletionListener { stop(); onEnd() }
@@ -307,6 +314,39 @@ class AiVoicePlayer {
                 prepareAsync()
             }
         }.onSuccess { player = it; playing = true }.isSuccess
+    }
+
+    /**
+     * **只准备、不开口**：把播放器建到 prepared、并 seek 到 `atMs`，但不 `start()`。
+     *
+     * 有声书那一屏要的就是这一档 —— 翻开一本书不该直接出声，可进度条和"共 26:22"得是真的。
+     * 用 [play] 再立刻 [pause] 也能到同样的地方，但那中间会响一下；所以这里另开一条，
+     * 建好之后由调用方决定什么时候 [resume]。
+     * @return 文件在不在、建得起来。
+     */
+    fun prepare(file: File, atMs: Int = 0): Boolean {
+        stop()
+        if (!file.exists() || file.length() == 0L) return false
+        return runCatching {
+            MediaPlayer().apply {
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                setDataSource(file.absolutePath)
+                setOnPreparedListener {
+                    if (atMs > 0) runCatching { it.seekTo(atMs) }
+                }
+                setOnErrorListener { _, what, extra ->
+                    Log.w("AiVoice", "prepare failed what=$what extra=$extra")
+                    stop()
+                    true
+                }
+                prepareAsync()
+            }
+        }.onSuccess { player = it; playing = false }.isSuccess
     }
 
     /** 进度条要的两个数。`prepareAsync` 还没回来时 duration 是 0，界面按 0 处理成"还没就绪"。 */
@@ -339,6 +379,33 @@ class AiVoicePlayer {
         val want = if (runCatching { p.isPlaying }.getOrDefault(false)) rate.coerceIn(0.5f, 2.0f) else 0f
         return runCatching { p.playbackParams = p.playbackParams.setSpeed(want) }
             .onFailure { Log.w("AiVoice", "applyRate failed: ${it.javaClass.simpleName}") }.isSuccess
+    }
+
+    /** 手上是不是还攥着一个没释放的播放器（暂停中 = true，停止/出错 = false）。 */
+    val active: Boolean get() = player != null
+
+    /**
+     * 停下来。**只 pause，不碰 playbackParams**。
+     *
+     * 为什么不学 [toggle] 那样跟着塞一个 0 倍速：`setSpeed` 在部分机型上会顺手把播放器又顶起来，
+     * 表现就是"按了暂停，图标变了，声音照旧"。有声书一屏要的是"按下去就真停"，
+     * 所以这一格和 [resume] 是给它单独的一对；听书那一屏仍走 [toggle]（那一条的行为他已认可，不动）。
+     */
+    fun pause() {
+        val p = player ?: return
+        runCatching { if (p.isPlaying) p.pause() }
+        playing = false
+    }
+
+    /** 接着放。@return 是不是真的在放了（没起过播 = false，调用方该改走 [play]）。 */
+    fun resume(): Boolean {
+        val p = player ?: return false
+        return runCatching {
+            p.playbackParams = p.playbackParams.setSpeed(rate.coerceIn(0.5f, 2.0f))
+            p.start()
+            playing = true
+            true
+        }.getOrDefault(false)
     }
 
     /** 暂停 / 继续。@return 现在是不是在放。 */

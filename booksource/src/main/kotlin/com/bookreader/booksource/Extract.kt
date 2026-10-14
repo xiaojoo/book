@@ -43,11 +43,20 @@ fun chapterImages(rule: Rule, body: String, at: String): List<String> {
         .filter { it.startsWith("http://") || it.startsWith("https://") }
 }
 
+/** 一集有声 = 一段（或几段）音频：这一集页面上 [ChapterRule.audio] 选中的那些地址，按页面顺序。 */
+fun chapterAudio(rule: Rule, body: String, at: String): List<String> {
+    if (rule.chapter.audio.isBlank()) return emptyList()
+    // 整页都选，不先夹到某个容器：和漫画那一条同一口径，夹错一个容器就是"这一集抓到了、一段音频也没有"
+    return pickAll(parseDoc(rule, at, body), rule.chapter.audio)
+        .map { absolutize(at, it) }
+        .filter { it.startsWith("http://") || it.startsWith("https://") }
+}
+
 /**
  * 懒加载的站把真地址写在 `data-original`，那是个裸路径或完整地址都可能：
  * `/15/14095/a.jpg` 这种得按"这一页自己的地址"补全，否则请求发不出去（URI 直接抛）。
  */
-private fun absolutize(at: String, v: String): String {
+internal fun absolutize(at: String, v: String): String {
     if (v.startsWith("http://") || v.startsWith("https://") || v.startsWith("//")) return if (v.startsWith("//")) {
         runCatching { URI(at).scheme + ":" + v }.getOrDefault(v)
     } else v
@@ -57,9 +66,16 @@ private fun absolutize(at: String, v: String): String {
 /**
  * 一页 → 一棵可选择的树。`html` 和 `xml` 两套都用 CSS 选择器（jsoup 把 Atom 也解成一棵树），
  * 只有 json 那一套走 [jsonResults] 的点号路径，所以这一格只负责前两档。
+ *
+ * [format] 留空 = 跟这条源 `search.format`（绝大多数源每一页都是同一种格式）。
+ * **书页/目录页**那一头要显式传 [tocFormat]：有一类源搜索口和书页不是一种东西
+ * （iTunes 搜索回 JSON、书页回 RSS），按 HTML 解 RSS 不会报错，会把 `<![CDATA[…]]>` 的壳留在集名里。
  */
-internal fun parseDoc(rule: Rule, base: String, body: String): Element =
-    if (rule.search?.format == FORMAT_XML) Jsoup.parse(body, base, Parser.xmlParser()) else Jsoup.parse(body, base)
+internal fun parseDoc(rule: Rule, base: String, body: String, format: String = rule.search?.format ?: "html"): Element =
+    if (format == FORMAT_XML) Jsoup.parse(body, base, Parser.xmlParser()) else Jsoup.parse(body, base)
+
+/** 书页/目录页按哪一档解：`toc.format` 优先，没写就跟着 `search.format`。 */
+internal fun tocFormat(rule: Rule): String = rule.toc.format.ifBlank { rule.search?.format ?: "html" }
 
 /**
  * 一条 JSON 命中页 → 列表。

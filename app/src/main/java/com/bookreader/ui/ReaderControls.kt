@@ -130,7 +130,13 @@ internal fun VolumePageTurn(enabled: Boolean, blockedBy: () -> String?, onTurn: 
     }
 }
 
-/** 底栏四颗：目录 / 书签 / 白天(切日间) / 设置。图标在上、文字在下。 */
+/**
+ * 底栏四颗：目录 / 书签 / 白天(切日间) / 设置。图标在上、文字在下。
+ *
+ * 第二颗的名字和图标可换（默认还是「书签」）：有声书那一屏没有"第几页"可记，
+ * 那一格给它当「语速」—— 换的是**这一格的内容**，不是再复制一排四颗。
+ * 同一件事不留两个主人：这一族的高度、发丝线、图标 21dp、字 11sp 只有这一处定义。
+ */
 @Composable
 fun ReaderBottomBar(
     theme: ReaderTheme,
@@ -139,6 +145,8 @@ fun ReaderBottomBar(
     onMarks: () -> Unit,
     onToggleNight: () -> Unit,
     onSettings: () -> Unit,
+    marksLabel: String = "书签",
+    marksIcon: Int = R.drawable.ic_reader_marks,
 ) {
     Row(
         modifier = modifier
@@ -150,7 +158,7 @@ fun ReaderBottomBar(
             .height(58.dp),
     ) {
         BarItem("目录", R.drawable.ic_reader_toc, theme, onToc)
-        BarItem("书签", R.drawable.ic_reader_marks, theme, onMarks)
+        BarItem(marksLabel, marksIcon, theme, onMarks)
         BarItem(
             if (theme.night) "白天" else "夜间",
             if (theme.night) R.drawable.ic_reader_day else R.drawable.ic_reader_night,
@@ -708,5 +716,67 @@ internal fun BoxScope.Sheet(
         Column(
             modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
         ) { content() }
+    }
+}
+
+/**
+ * 「设置」点开的那一格：**亮度那一整行**（滑轨 + 跟随系统那颗）和**背景那排色块**。
+ *
+ * 从漫画那一屏挪过来的，不是新写一份 —— 漫画/有声两屏点「设置」开的就是这一格，
+ * 小说那屏还多几行版式（那些行挂在文字上，接不过来）。
+ * 亮度 -1 = 跟随系统：滑轨置灰、那颗打勾，窗口属性由调用方还原成默认。
+ */
+@Composable
+internal fun BoxScope.BrightnessBackgroundPanel(
+    theme: ReaderTheme,
+    brightness: Float,
+    onBrightness: (Float) -> Unit,
+    onFollowSystem: () -> Unit,
+    onPickTheme: (ReaderTheme) -> Unit,
+) {
+    PanelShell(theme) {
+        Spacer(Modifier.height(20.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            RowLabel("亮度", theme)
+            Spacer(Modifier.width(6.dp))
+            SlideBar(
+                value = if (brightness < 0f) 0.5f else brightness,
+                enabled = brightness >= 0f,
+                theme = theme,
+                onChange = onBrightness,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text("跟随系统", fontSize = 13.sp, color = theme.faintColor)
+            Spacer(Modifier.width(7.dp))
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(if (brightness < 0f) theme.accentColor else if (theme.night) theme.barColor else theme.dividerColor)
+                    .tap(onFollowSystem),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("✓", fontSize = 12.sp, color = if (brightness < 0f) Color.White else theme.faintColor)
+            }
+        }
+        Spacer(Modifier.height(26.dp))
+        RowLabel("背景", theme)
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth()) {
+            ReaderTheme.SWATCHES.forEachIndexed { index, option ->
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(option.tileColor)
+                        .then(if (option == theme) Modifier.border(1.dp, theme.accentColor, RoundedCornerShape(18.dp)) else Modifier)
+                        .tap { onPickTheme(option) },
+                )
+                if (index < ReaderTheme.SWATCHES.lastIndex) Spacer(Modifier.width(10.dp))
+            }
+        }
+        Spacer(Modifier.height(20.dp))
     }
 }

@@ -106,7 +106,7 @@ fun FeaturedHomeScreen(
             val r = s.rule ?: continue
             runCatching {
                 withContext(Dispatchers.IO) { SearchEngine(r, HttpFetcher()).hot() }
-            }.onSuccess { found += it.comicAs(r).perCategory(HOT_PER_CAT) }.onFailure { failed += r.name }
+            }.onSuccess { found += it.kindAs(r).perCategory(HOT_PER_CAT) }.onFailure { failed += r.name }
         }
         FeaturedCache.books = found
         FeaturedCache.failed = failed
@@ -205,10 +205,13 @@ internal fun featureCat(category: String): String =
  * 这一类和别的可能撞字（"科幻"里含"幻"、站点自己写的"热血魔幻"之类），
  * 而它靠的不是站点给的类名 —— 漫画源抓回来的书在 [FeaturedHomeScreen] 里就被改成这一类了。
  */
-internal val FEATURE_CATS = listOf("玄幻", "修真", "都市", "穿越", "网游", "科幻", CAT_COMIC)
+internal val FEATURE_CATS = listOf("玄幻", "修真", "都市", "穿越", "网游", "科幻", CAT_COMIC, CAT_AUDIO)
 
 /** 漫画那一类不归站点说：一条 `kind=comic` 的源交回来的每一本都是漫画，类名由种类定。 */
 internal const val CAT_COMIC = "漫画"
+
+/** 同上一条：`kind=audio` 的源交回来的每一本都是有声书，类名由种类定。 */
+internal const val CAT_AUDIO = "有声"
 
 internal const val CAT_OTHER = "其他"
 
@@ -230,13 +233,17 @@ private const val PAGE_BROWSE = "#分类"
 private const val HOT_PER_CAT = 6
 
 /**
- * 漫画源的榜单：类名一律改成「漫画」。
+ * 漫画源和有声源的榜单：类名一律改成「漫画」/「有声」。
  *
- * 不按站点给的标签归类的理由：它那一格写的是"热血 / 冒险 / 恋爱"，和小说那六类撞不进一张表；
- * 而"这是漫画"是这条源的**种类**给的实话（`kind=comic`），不是站点的分类词能改判的东西。
+ * 不按站点给的标签归类的理由：漫画那一格写的是"热血 / 冒险 / 恋爱"，有声那一格写的是
+ * "都市 / 推理"，和小说那六类撞不进一张表；而"这是漫画/有声书"是这条源的**种类**给的实话
+ * （`kind=...`），不是站点的分类词能改判的东西。
  */
-internal fun List<BookHit>.comicAs(rule: Rule): List<BookHit> =
-    if (!rule.isComic) this else map { it.copy(category = CAT_COMIC) }
+internal fun List<BookHit>.kindAs(rule: Rule): List<BookHit> = when {
+    rule.isComic -> map { it.copy(category = CAT_COMIC) }
+    rule.isAudio -> map { it.copy(category = CAT_AUDIO) }
+    else -> this
+}
 
 internal fun List<BookHit>.perCategory(max: Int): List<BookHit> =
     groupBy { featureCat(it.category) }.values.flatMap { c -> c.take(max) }

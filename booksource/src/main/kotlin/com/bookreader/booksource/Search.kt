@@ -86,7 +86,7 @@ fun searchResults(rule: Rule, html: String, base: String): List<BookHit> {
 /** 书页 → 那段内容简介。规则没写这一格、或者页上选不中 → 空串（简介没有就不显示，不编）。 */
 fun introOf(rule: Rule, html: String, base: String): String {
     if (rule.intro.isBlank()) return ""
-    return runCatching { pick(html(base, html), rule.intro) }.getOrDefault("")
+    return runCatching { pick(parseDoc(rule, base, html, tocFormat(rule)), rule.intro) }.getOrDefault("")
 }
 
 /**
@@ -116,13 +116,19 @@ fun hotBooks(rule: Rule, html: String, base: String): List<BookHit> {
     }
 }
 
-/** 目录页 → 每一章的 (标题, 链接)。只取 item 选中的那些 <a>，顺序就是页面上的顺序（`toc.reverse` 翻它）。 */
+/**
+ * 目录页 → 每一章的 (标题, 链接)。只取 item 选中的那些元素，顺序就是页面上的顺序（`reverse` 翻它）。
+ *
+ * 链接默认取这条元素自己的 `href`；条目不是 `<a>` 而是"容器里另一格挂地址"的那种源（播客 RSS 的
+ * `<item>` 把音频地址写在 `<enclosure url="…">` 上）用 `toc.href` 指过去，写法同 [pick]。
+ */
 fun tocChapters(rule: Rule, html: String, base: String): List<Pair<String, String>> {
     val t = rule.toc
-    val out = html(base, html).select(t.item).mapNotNull { a ->
-        val url = a.attr("abs:href").trim()
+    val out = parseDoc(rule, base, html, tocFormat(rule)).select(t.item).mapNotNull { a ->
+        val raw = (if (t.href.isBlank()) a.attr("abs:href") else pick(a, t.href)).trim()
+        val url = if (raw.isEmpty()) "" else absolutize(base, raw)
         if (url.isEmpty()) return@mapNotNull null
-        // 章名默认取这条 a 自己的文字；挂在里面那个 span 上的（后面还跟着"阅读"那种按钮字，
+        // 章名默认取这条 a 自己的文字；挂在里面那个 span 上的（后面还跟着"阅读"那颗按钮字那种，
         // 或者站点在名字后面又缀了一格"(45p)"页数）用 toc.name 指过去。
         // 指过去**取空**要退回 a 自己的文字，不能一路退到 URL 尾巴：那目录上就写出"166498.html"，
         // 站点少给一个 class 的表现不该是几百行网址
@@ -267,8 +273,13 @@ class SearchEngine(private val rule: Rule, private val fetch: Fetcher) {
         val body = if (s.method == "POST") formBody(s.data, keyword, rule.charset) else ""
         val p = fetch.fetch(PageRequest(url, s.method, body, s.cookies.ifBlank { null }, rule.charset.ifBlank { "UTF-8" }))
         val text = p.text(rule.charset)
-        // JSON 那一档连"解成一棵树"都不是，取值写法是点号路径，所以在这里就分岔
-        return if (s.format == FORMAT_JSON) jsonResults(rule, text) else searchResults(rule, text, p.finalUrl)
+        // JSON 那一档连"解成一棵树"都不是，取值写法是点号路径，所以在这里就分岔。
+        // 出口统一按书页地址去重：iTunes 那个索引口会把同一本回两条，而结果那一列的 key 是
+        // 「源 id + 书页地址」—— 重复就是撞 key，真机上整页闪退过一次
+        // （`Key "podcast-rsshttps://www.ximalaya.com/album/78520485.xml" was already used`）。
+        // 两条同地址的行本来也是一本书：在架查找和下载表都按 bookUrl 认，摆两行只会让人点错一次。
+        return (if (s.format == FORMAT_JSON) jsonResults(rule, text) else searchResults(rule, text, p.finalUrl))
+            .distinctBy { it.bookUrl }
     }
 
     /** 一本书的"头"：简介 + 完整目录。**一次书页请求拿全**，大纲就是目录的前若干条章名。 */
@@ -287,7 +298,9 @@ class SearchEngine(private val rule: Rule, private val fetch: Fetcher) {
     fun hot(): List<BookHit> {
         val h = rule.hot ?: return emptyList()
         val p = fetch.fetch(PageRequest(h.url))
-        return hotBooks(rule, p.text(rule.charset), p.finalUrl)
+        // 和 search 同一个口径去重：首页上"同一本书既在玄幻块、又在热销块"是常态，
+        // 而精选那两排卡片的 key 也是「源 id + 书页地址」—— 不去重就是同一颗撞 key 的雷
+        return hotBooks(rule, p.text(rule.charset), p.finalUrl).distinctBy { it.bookUrl }
     }
 
     /** 目录 = 这一页上选到的章 + 下拉框里其它页的章。`base` 就是这一页自己的 URL，等于它就不重取。 */

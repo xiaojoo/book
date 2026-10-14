@@ -339,7 +339,8 @@ fun BookSearchScreen(
                             onHead = {
                                 val r = current
                                 if (r == null) note = "先在上面选一条能用的源" else {
-                                    Downloads.start(context, r, h, update = false, head = HEAD_CHAPTERS)
+                                    // 有声书的"头"是一集不是十章：一集几十 MB，拉十章等于几个 GB
+                                    Downloads.start(context, r, h, update = false, head = if (r.isAudio) 1 else HEAD_CHAPTERS)
                                     reload++
                                 }
                             },
@@ -471,8 +472,8 @@ private fun SearchResultRow(
                     SheetAction("下载 PDF", Chrome.accent, true) { onStart(false) }
                 }
                 task == null -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // 两颗分开：先拉十章 = 快点能读，下载 = 一次到底。他要的是"全本那颗不动"
-                    SheetAction("先拉开头", Chrome.accent, rule != null) { onHead() }
+                    // 两颗分开：先拉开头 = 快点能读，下载 = 一次到底。他要的是"全本那颗不动"
+                    SheetAction(if (rule?.isAudio == true) "先听一集" else "先拉开头", Chrome.accent, rule != null) { onHead() }
                     SheetAction("下载", Chrome.accent, rule != null) { onStart(false) }
                 }
                 task.running -> IconAction(R.drawable.ic_pause, "暂停这一本", Chrome.accent) { onPause() }
@@ -494,7 +495,8 @@ private fun SearchResultRow(
                     (if (task.state == DownloadRecord.STATE_PAUSED) "已暂停，" else "已取消，") +
                         "抓到 " + task.done + " / " + task.total + " 章在磁盘上 —— 点 ▶ 从没抓的那一章接着来"
                 task.missing > 0 -> "已进书架，缺 " + task.missing + " 章 —— 再点一次「下载」只补那几章"
-                else -> "已进书架，共 " + task.total + " 章 · " + task.chars + " 字"
+                // 漫画/有声那一族 chars 恒为 0：尾巴上挂一句"· 0 字"是一句假话，有字数才说字数
+                else -> "已进书架，共 " + task.total + " 章" + (if (task.chars > 0) " · " + task.chars + " 字" else "")
             }
             if (line.isNotEmpty()) {
                 Text(

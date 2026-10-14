@@ -7,7 +7,7 @@ import java.net.URI
  *
  * 字段少是有意的：这一族只做"搜到 → 抓完 → 合成一本"，
  * 所以只有四段取值（search / book / toc / chapter）加一段抓取节奏（crawl），
- * 外加一格 `kind` 说明这条源交出来的是**文字、图片还是 PDF**（小说 / 漫画 / 文献）。
+ * 外加一格 `kind` 说明这条源交出来的是**文字、图片、音频还是 PDF**（小说 / 漫画 / 有声 / 文献）。
  * 明确不支持的：需要跑 JS 才能算参数或解密的源（手机端不内嵌 V8）、CF 盾的站。
  * 这两类在加载时就拒绝并说清原因，不让它变成"按了没反应"。
  */
@@ -18,7 +18,7 @@ data class Rule(
     val note: String,
     /** 站点响应体的字符集；空 = 先看 HTTP 头，再看 meta 标签，最后按 UTF-8。老站一大半是 GBK。 */
     val charset: String,
-    /** 这条源给的是哪一类东西：[Rule.NOVEL]（默认）/ [Rule.COMIC] / [Rule.PAPER]。 */
+    /** 这条源给的是哪一类东西：[Rule.NOVEL]（默认）/ [Rule.COMIC] / [Rule.AUDIO] / [Rule.PAPER]。 */
     val kind: String,
     /** 搜索那一段。文献站也要这一格，所以它不在 kind 里重复一遍。 */
     val search: SearchRule?,
@@ -41,13 +41,20 @@ data class Rule(
     /** 一篇文献 = 一支可以直接下下来的 PDF，没有目录、没有正文容器。 */
     val isPaper: Boolean get() = kind == PAPER
 
+    /** 一本有声书 = 一章（这一族叫"一集"）一段（少数站切成几段）音频，抓回来的是音频地址不是文字。 */
+    val isAudio: Boolean get() = kind == AUDIO
+
+    /** `chapter.audio` 写的是 [ChapterRule.SELF]：目录里那一条地址本身就是音频，**不再打一次集页**。 */
+    val selfAudio: Boolean get() = chapter.audio == ChapterRule.SELF
+
     companion object {
         const val NOVEL = "novel"
         const val COMIC = "comic"
         const val PAPER = "paper"
+        const val AUDIO = "audio"
 
         /** 导入时按这张表验 kind：写错的那一条源要在装上的那一刻就说，不该等到"下载下来一本空的"。 */
-        val KINDS = mapOf(NOVEL to "小说", COMIC to "漫画", PAPER to "文献")
+        val KINDS = mapOf(NOVEL to "小说", COMIC to "漫画", AUDIO to "有声", PAPER to "文献")
     }
 }
 
@@ -97,6 +104,15 @@ data class SearchRule(
  * `name` 是章名**不在 a 自己的文字里**的那种站给的写法（瓜子漫画：`<a href=…><span>第 68 卷</span><em>阅读</em></a>`，
  * 整条 a 的文字会读成"第 68 卷阅读"）。留空 = 还用 a 自己的文字。
  *
+ * `href` 是同一族道理给**链接那一格**的写法：条目不是 `<a>` 而是"一个容器 + 里面某格挂地址"的源
+ * （播客 RSS 的 `<item>` 把音频地址写在 `<enclosure url="…">` 上）。留空 = 还用 item 自己的 `href`。
+ *
+ * `format` 是**这一页**用什么解析：`html` / `xml`。留空 = 跟 `search.format`。
+ * 要这一格的原因是有一类源两页不是一种东西：搜索口回 JSON、书页回 RSS。
+ * 而 RSS 按 HTML 解不是报错，是**名字变脏** —— HTML 里 `<title>` 是 RCDATA，
+ * `<![CDATA[…]]>` 那两层壳被当成正文字符留着，界面上每一行都是 `<![CDATA[001 第一回…]]>`
+ * （判据 `theSameFeedKeepsCdataShellInTitlesWhenParsedAsHtml`）。
+ *
  * `reverse` 给"目录 newest-first"的那一类（瓜子漫画两格都是倒着排的）：不翻的话第 1 章是最长的那一话，
  * 进度、书签、"下一章"全都反。翻不翻是站点的事实，不是"看着顺不顺眼"，所以写在源里而不是在界面上给一颗开关。
  */
@@ -105,6 +121,8 @@ data class TocRule(
     val item: String,
     val nextPage: String,
     val name: String,
+    val href: String,
+    val format: String,
     val reverse: Boolean,
 )
 
@@ -119,13 +137,25 @@ data class TocRule(
  * `image` 是漫画那一族用的：一章 = 一排图，这一格选出每一张（按页面上的先后顺序，就是页序）。
  * 写法还是 [pick] 那一套，只是取的是**每一个**匹配（见 [pickAll]）—— 懒加载的站把真地址放在
  * `data-original` 而不是 `src`，所以这一格通常得写成 `img.lazy @data-original`。
+ *
+ * `audio` 是有声那一族用的，和 [image] 同一套写法：一章（一集）= 一段（或几段）音频，
+ * 这一格选出每一段的地址。写在 `src` 里的（`audio source @src`）取到的就是补全过的绝对地址；
+ * 懒加载写在 `data-src` 的就写 `@data-src`。
+ * 写 [ChapterRule.SELF]（`@self`）= **目录里那一条地址本身就是音频文件**，没有第二层集页可点
+ * （播客 RSS 那一族：`<enclosure url="….m4a">` 就是那一集的全部）。
  */
 data class ChapterRule(
     val content: String,
     val filter: List<String>,
     val nextPage: String,
     val image: String,
-)
+    val audio: String,
+) {
+    companion object {
+        /** `chapter.audio` 的这一档不是选择器，是一句声明：集地址就是文件本身，别再打一次集页。 */
+        const val SELF = "@self"
+    }
+}
 
 /**
  * 抓取节奏。区间和重试次数不是"调快点省时间"的参数：
@@ -162,9 +192,9 @@ object RuleLoader {
         "url", "method", "data", "cookies", "format", "item", "bookName", "author", "category",
         "latestChapter", "lastUpdateTime", "wordCount", "intro", "bookUrl",
     )
-    private val TOC = setOf("url", "item", "nextPage", "name", "reverse")
+    private val TOC = setOf("url", "item", "nextPage", "name", "href", "format", "reverse")
     private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl")
-    private val CHAPTER = setOf("content", "filter", "nextPage", "image")
+    private val CHAPTER = setOf("content", "filter", "nextPage", "image", "audio")
     private val CRAWL = setOf("concurrency", "minIntervalMs", "maxIntervalMs", "maxAttempts")
 
     /** 一頁回來的东西长什么样：决定了用哪一套取值写法。文献接口回 JSON，arXiv 回 Atom。 */
@@ -231,6 +261,9 @@ object RuleLoader {
                 item = str(toc, "item", "$where.toc", required = kind != Rule.PAPER),
                 nextPage = str(toc, "nextPage", "$where.toc"),
                 name = str(toc, "name", "$where.toc"),
+                href = str(toc, "href", "$where.toc"),
+                // 留空 = 跟 search.format；写错的那一档当场报，别让它变成"目录一行都是网址"
+                format = oneOf(toc, "format", "$where.toc", "", FORMATS),
                 reverse = bool(toc, "reverse", "$where.toc"),
             ),
             chapter = ChapterRule(
@@ -240,6 +273,7 @@ object RuleLoader {
                 },
                 nextPage = str(chapter, "nextPage", "$where.chapter"),
                 image = str(chapter, "image", "$where.chapter"),
+                audio = str(chapter, "audio", "$where.chapter"),
             ),
             crawl = CrawlRule(
                 concurrency = intAt(crawl, "concurrency", "$where.crawl", 4, 1, 16),
@@ -264,6 +298,17 @@ object RuleLoader {
                 }
                 if (!it.chapter.image.contains('@')) {
                     throw RuleException("$where.chapter.image：得写成「选择器 @属性」，例：#images img @data-original")
+                }
+            }
+            // 同一族错法在有声那一格上：音频地址也一定挂在属性上（src / data-src），
+            // 不带 @ 取回来的就是 <audio> 标签里那段"您的浏览器不支持"的兜底文字，
+            // 表现是"每一集都抓到了，一段音频也没有"
+            if (it.isAudio) {
+                if (it.chapter.audio.isBlank()) {
+                    throw RuleException("$where.chapter.audio：这是一条有声源（\"kind\": \"audio\"），得指出每一集那段音频在哪一格")
+                }
+                if (!it.chapter.audio.contains('@')) {
+                    throw RuleException("$where.chapter.audio：得写成「选择器 @属性」，例：audio source @src")
                 }
             }
             if (it.isPaper && it.search == null) {
