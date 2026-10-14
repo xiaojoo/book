@@ -122,6 +122,54 @@ class BookLibrary(private val context: Context) {
         "pages" to m.pages.toString(),
     )
 
+    fun audioDir(id: String): File = File(dir(id), AUDIO_FILE)
+
+    /**
+     * 一本有声书的清单。和漫画同一族：没有"抽正文 → 建 chunk/章索引"那一步，音频本身就在目录里躺着，
+     * 这里只写种类、全书几集（按源站目录，不是按已下的集）、一共几段、一共多少字节。
+     *
+     * 账面那一格和漫画差一处：漫画数"张"，有声书的账面是**字节数**（`contentBytes`）——
+     * "这本 1.2 GB"对挑书的人有用，"这本 240 段"只对下载那一头有用，两样各写各的格。
+     */
+    fun writeAudioMeta(id: String, title: String, author: String, tocChapters: Int, parts: Int, bytes: Long): BookMeta {
+        val d = dir(id)
+        d.mkdirs()
+        // 集表（`audio/chapters.tsv`）不在这里写：那一头是 AudioBook.record 每抓完一集 append 一行，
+        // 抓一半被杀或按暂停时那一半已经落地了。这里只写清单那一样
+        val meta = BookMeta(
+            id = id,
+            title = title,
+            author = author,
+            totalChars = 0L,
+            chunkChars = 0,
+            chunkCount = 0,
+            chapterCount = tocChapters,
+            contentBytes = bytes,
+            sourceBytes = 0L,
+            sourceCharset = "MP3/M4A",
+            kind = BookMeta.AUDIO,
+            pages = parts,
+        )
+        IndexCodec.writeManifest(File(d, IndexCodec.MANIFEST), audioManifest(meta))
+        return meta
+    }
+
+    private fun audioManifest(m: BookMeta) = linkedMapOf(
+        "id" to m.id,
+        "title" to m.title,
+        "author" to m.author,
+        // 有声书同样没有"字"这个口径：totalChars 恒 0，大小写在 contentBytes 那一格
+        "totalChars" to "0",
+        "chunkChars" to "0",
+        "chunkCount" to "0",
+        "chapterCount" to m.chapterCount.toString(),
+        "contentBytes" to m.contentBytes.toString(),
+        "sourceBytes" to "0",
+        "sourceCharset" to m.sourceCharset,
+        "kind" to BookMeta.AUDIO,
+        "pages" to m.pages.toString(),
+    )
+
     fun displayName(uri: Uri): String {
         // file:// 没有 DISPLAY_NAME 可查，只能拿路径末段，否则书架上会全叫"未命名小说"
         if (uri.scheme == "file") return uri.lastPathSegment?.substringAfterLast('/') ?: "未命名小说"
@@ -315,6 +363,9 @@ class BookLibrary(private val context: Context) {
         const val PPTX_FILE = "deck.pptx"
         const val COVER_FILE = "cover.jpg"
         const val COMIC_FILE = "comic"
+
+        /** 一本有声书的音频都在这一层：`filesDir/books/<id>/audio/<集目录>/`。 */
+        const val AUDIO_FILE = "audio"
 
         /** 一本漫画的章表：`章号  目录名  张数  章名`，一行一章，只有磁盘上真有图的那几章在里面。 */
         const val CHAPTERS_TSV = "chapters.tsv"

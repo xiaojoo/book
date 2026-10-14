@@ -386,6 +386,15 @@ private fun rowActions(
             start(info, sources, ctx, onNote, head = 0); onStarted()
         },
     )
+    // 一本有声书的"头"是一集不是十章：一集几十 MB，预览十章等于几个 GB
+    info.hasSource && sources.firstOrNull { it.rule?.id == info.sourceId }?.rule?.isAudio == true -> listOf(
+        RowAction(R.drawable.ic_play_first, "先听一集：只拉第一集 + 封面 + 简介") {
+            start(info, sources, ctx, onNote, head = 1); onStarted()
+        },
+        RowAction(R.drawable.ic_download, "下载全书") {
+            start(info, sources, ctx, onNote, head = 0); onStarted()
+        },
+    )
     info.hasSource -> listOf(
         RowAction(R.drawable.ic_play_first, "预览十章：只拉前十章 + 封面 + 简介") {
             start(info, sources, ctx, onNote, head = 10); onStarted()

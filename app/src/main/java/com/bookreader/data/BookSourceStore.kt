@@ -164,7 +164,19 @@ class BookSourceStore(private val context: Context) {
          * `shuhaige` = 书海阁小说网：第一台**一章切好几页**的源（剑来 第52章 = 十页），所以它是
          * `chapter.nextPage` 的第一家真用户；那一条的判据也在 `RealSiteFixturesTest` 里。
          */
-        val BUILTIN = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex")
+        val BUILTIN = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss")
+
+        /**
+         * `podcast-rss` 是有声那一族的第一条：搜索走 Apple 的 iTunes 播客索引（公开、免登录），
+         * `feedUrl` 就是书页，书页那份 RSS 的每个 `<item>` 是一集、`<enclosure url>` 就是那集的文件
+         * （所以 `chapter.audio` 写的是 `@self`，一集一次集页请求都不发）。
+         * 进来的判据和小说/漫画同一档：2026-10-14 在**PC 的 `HttpFetcher` 和手机各自的网络上打过同一支文件**，
+         * 两边都是 200 / 3,787,944 字节 / `ftyp`+`M4A ` 开头，逐位相同。
+         * 这一族能通的道理是协议性的 —— RSS 是给第三方播放器直取的，挡裸请求就等于挡自己的订阅者。
+         *
+         * CRI（国际在线）也在 iTunes 索引里，但**没进来**：它那 19 条 feed 的首集 17 条回 423、
+         * 剩下 2 条给的是 `video/mp4` 的视频播客，不是有声书（同一天的实测，数字在主 README）。
+         */
 
         /**
          * 后四条不是小说源：`tuku`/`guazi` 是漫画（一章 = 一排图），`arxiv`/`openalex` 是文献（一篇 = 一支 PDF）。

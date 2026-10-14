@@ -1,0 +1,31 @@
+{
+  "id": "podcast-rss",
+  "name": "公开播客·RSS",
+  "homeUrl": "https://www.ximalaya.com/",
+  "note": "搜索走 Apple 的 iTunes 播客索引（公开接口、免登录），搜出来的 feedUrl 就是书页；书页那份 RSS 里每一个 item 是一集，enclosure 的地址本身就是那集的音频文件。这一族能通的道理是协议性的：RSS 是给第三方播放器直取用的，站点挡裸请求就等于挡自己的订阅者。喜马拉雅、荔枝这些家的公开 feed 都在这个索引里；CRI（国际在线）也在，但它 19 条 feed 里 17 条的首集已经回 423，别照搬。",
+  "kind": "audio",
+  "search": {
+    "url": "https://itunes.apple.com/search?term=%s&media=podcast&limit=20&country=cn",
+    "format": "json",
+    "item": "results[]",
+    "bookName": "collectionName",
+    "author": "artistName",
+    "category": "genres",
+    "bookUrl": "feedUrl"
+  },
+  "toc": {
+    "item": "item",
+    "name": "title",
+    "href": "enclosure @url",
+    "format": "xml"
+  },
+  "chapter": {
+    "audio": "@self"
+  },
+  "crawl": {
+    "concurrency": 2,
+    "minIntervalMs": 300,
+    "maxIntervalMs": 1200,
+    "maxAttempts": 3
+  }
+}

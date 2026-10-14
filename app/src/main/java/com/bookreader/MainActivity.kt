@@ -28,6 +28,7 @@ import com.bookreader.data.BookSourceStore
 import com.bookreader.data.ReaderPrefs
 import com.bookreader.core.model.BookMeta
 import com.bookreader.ui.AppScaffold
+import com.bookreader.ui.AudioReaderScreen
 import com.bookreader.ui.BookInfo
 import com.bookreader.ui.BookInfoPage
 import com.bookreader.ui.NicknameScreen
@@ -231,6 +232,8 @@ private fun Root(
             PptReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
         } else if (meta.kind == BookMeta.COMIC) {
             ComicReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
+        } else if (meta.kind == BookMeta.AUDIO) {
+            AudioReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
         } else {
             ReaderScreen(bookId = id, library = library, prefs = prefs, startChapter = openChapter, onBack = { openBook = null })
         }

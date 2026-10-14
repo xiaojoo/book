@@ -326,6 +326,27 @@ class ReaderPrefs(context: Context) {
     }
 
     /**
+     * 一本有声书听到哪了：`集号|毫秒`。
+     *
+     * 毫秒进这一格和漫画的页号同一份理由：位置是**二维**的（第 12 集第 41 分 07 秒），
+     * 集内的毫秒只有磁盘上那份音频自己知道，压成一个数就得在每一处读它的地方再除一次。
+     */
+    fun saveAudioPos(bookId: String, episode: Int, ms: Int) {
+        p.edit { putString("audio.$bookId", episode.coerceAtLeast(0).toString() + "|" + ms.coerceAtLeast(0)) }
+    }
+
+    /** 没存过 = 从第一集 0 秒开始。串写歪了也当没存过，别把一个人扔进一个不存在的集号。 */
+    fun loadAudioPos(bookId: String): Pair<Int, Int> {
+        val c = (p.getString("audio.$bookId", "") ?: "").split('|')
+        return (c.getOrNull(0)?.toIntOrNull() ?: 0) to (c.getOrNull(1)?.toIntOrNull() ?: 0)
+    }
+
+    /** 听书的语速，全本共用一格（换集、换本都不重置）：0.5~2.0。 */
+    var audioRate: Float
+        get() = p.getFloat("audioRate", 1.0f)
+        set(v) = p.edit { putFloat("audioRate", v) }
+
+    /**
      * 一本漫画的书签：一串「章号|页号」，两个都是 0 基（和 [saveComicPos] 同一口径，
      * 存 1 基的话每一处读它的地方要各自再加一次 1 —— 页码书签那一族已经栽过一次）。
      */

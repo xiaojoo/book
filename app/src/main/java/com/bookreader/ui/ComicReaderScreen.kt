@@ -478,7 +478,8 @@ private fun BoxScope.MarksDrawer(
     }
 }
 
-/** 设置：只留小说的那两行 —— 亮度那一整行（滑轨 + 跟随系统那颗）和背景那排色块。 */
+/** 设置：只留小说的那两行 —— 亮度那一整行（滑轨 + 跟随系统那颗）和背景那排色块。
+ *  面板本体在 `ReaderControls.BrightnessBackgroundPanel`（有声书那一屏点的是同一格，不各写一份）。 */
 @Composable
 private fun BoxScope.SettingsDrawer(
     theme: ReaderTheme,
@@ -486,53 +487,7 @@ private fun BoxScope.SettingsDrawer(
     onBrightness: (Float) -> Unit,
     onFollowSystem: () -> Unit,
     onPickTheme: (ReaderTheme) -> Unit,
-) {
-    PanelShell(theme) {
-        Spacer(Modifier.height(20.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            RowLabel("亮度", theme)
-            Spacer(Modifier.width(6.dp))
-            SlideBar(
-                value = if (brightness < 0f) 0.5f else brightness,
-                enabled = brightness >= 0f,
-                theme = theme,
-                onChange = onBrightness,
-                modifier = Modifier.weight(1f),
-            )
-            Spacer(Modifier.width(12.dp))
-            Text("跟随系统", fontSize = 13.sp, color = theme.faintColor)
-            Spacer(Modifier.width(7.dp))
-            Box(
-                modifier = Modifier
-                    .size(22.dp)
-                    .clip(CircleShape)
-                    .background(if (brightness < 0f) theme.accentColor else if (theme.night) theme.barColor else theme.dividerColor)
-                    .tap(onFollowSystem),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("✓", fontSize = 12.sp, color = if (brightness < 0f) androidx.compose.ui.graphics.Color.White else theme.faintColor)
-            }
-        }
-        Spacer(Modifier.height(26.dp))
-        RowLabel("背景", theme)
-        Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth()) {
-            ReaderTheme.SWATCHES.forEachIndexed { index, option ->
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(36.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(option.tileColor)
-                        .then(if (option == theme) Modifier.border(1.dp, theme.accentColor, RoundedCornerShape(18.dp)) else Modifier)
-                        .tap { onPickTheme(option) },
-                )
-                if (index < ReaderTheme.SWATCHES.lastIndex) Spacer(Modifier.width(10.dp))
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-    }
-}
+) = BrightnessBackgroundPanel(theme, brightness, onBrightness, onFollowSystem, onPickTheme)
 
 /**
  * 一张页。解码在 IO 线程：一张 980x1403 的页在主线程解要 20ms 上下，一屏两张就是掉帧。

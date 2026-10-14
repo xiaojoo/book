@@ -32,8 +32,14 @@ data class BookMeta(
          */
         const val COMIC = "comic"
 
+        /**
+         * 有声书：一章（一集）= 一段（或几段）音频。同样不进排版引擎、有章，
+         * `pages` 对它是"一共多少段"，`totalChars` 恒为 0（账面是 [contentBytes] 那个字节数）。
+         */
+        const val AUDIO = "audio"
+
         /** 清单里没有 chunk/章索引那一套的几类：读清单时对那几个键给默认值，别把一本好书判成损坏。 */
-        val NO_TEXT_INDEX = setOf(PDF, PPTX, COMIC)
+        val NO_TEXT_INDEX = setOf(PDF, PPTX, COMIC, AUDIO)
     }
 }
 

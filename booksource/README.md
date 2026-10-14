@@ -76,6 +76,75 @@
 字节还要过两道闸：小于 1KB、或者开头不是 JPEG/PNG/WebP/GIF 那四个魔数，都算这一次没抓到（要重试），
 因为图床被防盗链挡住时往往回的不是错误码而是一张几十 KB 的占位灰图。
 
+### `kind` = audio：一章（一集）= 一段音频
+
+`chapter.content` 可以不写，改写 **`chapter.audio`** —— 和 `chapter.image` 同一套（`pickAll`，顺序就是页面顺序）：
+
+```json5
+"kind": "audio",
+"chapter": { "audio": "audio source @src" }        // 地址就写在 src 上
+"chapter": { "audio": "source.player @data-src" }  // 懒加载：真地址在 data-src
+```
+
+同一族两条闸：这一格**必须带 `@`**（不带就取回 `<audio>` 里那段"您的浏览器不支持"的兜底文字），
+也不能留空 —— 都在导入时报，判据 `AudioTest.anAudioRuleWithoutAnAudioSelectorIsRefusedAtInstall`
+和 `…SelectorWithoutAnAttributeIsRefusedAtInstall`。相对地址按"这一集页面自己的地址"补全。
+
+取回那段字节过两道闸：小于 4KB、或开头不是 **ID3 / MPEG 帧同步 / `ftyp` / `OggS` / `fLaC` / `RIFF…WAVE`**
+那几种魔数之一，就算这一次没抓到（重试到 `maxAttempts`）。要拦的是这种站：会话被踢时回的是 **200 的一张 HTML 登录页**，
+状态码看着是成的 —— 存下来就是"每一集都下到了，一集都放不出"。判据 `AudioTest.anHtmlLoginPageIsNeverStoredAsAudioAndTheEpisodeIsReportedMissing`。
+
+**一集的成败按真落地的段数算，不按地址表**：地址写着三段、只到两段，整集记进"缺集"那一栏。
+断在半截的一集播到一半就停，听着像"这本就这么长"，比缺一集更难发现。
+下次进来 `has()` 会把已有的段跳过、只补缺的那一段（`AudioTest.resumeSkipsPartsAlreadyStored`）。
+
+请求那一段也带 `Referer: <这一集页面自己>`，和漫画同一口径：音频 CDN 里也有按这一格决定给不给的。
+
+落盘的形状在 `:app` 那半边：`filesDir/books/<id>/audio/<集地址 sha1>/parts.tsv` + 按地址 sha1 命名的那些段。
+
+**随包的有声源：一条**，是喜马拉雅**公开分发**的播客 RSS（形状见下一节）。
+另一条走"自己家 CDN + 签名"的路径（恋听网 ting55）探明了**不能用**，证据链写在主 README 的「有声书」那一节，别再来问第二遍。
+
+### `toc.format` 和 `toc.href`：书页不是 HTML 的那一族
+
+有一类源**每一页不是一种格式**：搜索口回 JSON、书页回 XML（播客 RSS 就是这样）。
+所以"解析这一页用哪一档"给了目录/书页单独的一格 `toc.format`（`html` / `xml`，留空 = 跟 `search.format`）。
+不写会怎样：**不报错，集名变脏** —— HTML 解析里 `<title>` 是 RCDATA，
+`<![CDATA[001 第一回…]]>` 那两层壳会原样留在名字里（判据 `theSameFeedKeepsCdataShellInTitlesWhenParsedAsHtml`）。
+
+`toc.href` 是同一族道理给**链接那一格**的写法：目录条目不是 `<a>`、地址挂在里面另一格时指过去，写法同 `pick`
+（`toc.name` 管名字、`toc.href` 管地址）。留空 = 还用条目自己的 `href`，三家随包小说/漫画源都不受影响。
+
+`chapter.audio` 还可以写 **`@self`**：声明"目录里那一条地址本身就是音频文件"，没有第二层集页可点。
+这一档下载器**一次集页请求都不发**（发出去就是拿 10MB 的 m4a 当一页 HTML 读回来再解一遍），
+Referer 改发书页那一页。判据 `selfAudioDownloadsTheLinkItselfAndNeverAsksForAnEpisodePage`。
+
+一条完整形状（2026-10-14 在 PC 和手机上**两侧都真取到过字节**：同一个地址 3,787,944 字节、
+`audio/mp4`、开头 `00 00 00 1c 66 74 79 70 4d 34 41 20` = `ftyp` + `M4A `）：
+
+```json5
+{
+  "id": "xmly-rss", "name": "喜马拉雅·公开播客", "homeUrl": "https://www.ximalaya.com/", "kind": "audio",
+  "search": {
+    "url": "https://itunes.apple.com/search?term=%s&media=podcast&limit=10&country=cn", "format": "json",
+    "item": "results[]", "bookName": "collectionName", "author": "artistName",
+    "bookUrl": "feedUrl", "category": "genres"
+  },
+  "toc": { "item": "item", "name": "title", "href": "enclosure @url", "format": "xml" },
+  "chapter": { "audio": "@self" },
+  "crawl": { "concurrency": 1, "minIntervalMs": 300, "maxIntervalMs": 1200, "maxAttempts": 3 }
+}
+```
+
+搜索走 Apple 的 iTunes 搜索口（它替我们把"哪些专辑有公开 RSS"索引好了），`feedUrl` 就是书页；
+书页那份 `.xml` 里每一个 `<item>` 是一集，`<enclosure url>` 就是那一集的地址。
+地址外面套了一层 `jt.ximalaya.com`、真文件写在它的 `jt=` 参数里 —— **不用自己抽**：
+`HttpURLConnection` 跟得动那一跳 302，`finalUrl` 回来就是 `aod.cos.tx.xmcdn.com/…m4a`，
+拿外壳地址打和拿抽出来的直链打，字节数逐位相同（这是量出来的，不是推的）。
+
+**为什么这一条能通而 ting55 不通**：RSS 是播客行业的分发契约 —— Apple 的抓取器就是同款纯 HTTP 客户端，
+站点必须让裸请求拿到字节，否则别人的播放器放不了。这一族不是"找到了不设防的站"，是**找到了按协议必须设防不了的地方**。
+
 ### `kind` = paper：一篇 = 一支 PDF
 
 `toc` 和 `chapter` 两段整个可以不写（引擎在这两段是空的时候直接报"这一条源没有目录可读"，

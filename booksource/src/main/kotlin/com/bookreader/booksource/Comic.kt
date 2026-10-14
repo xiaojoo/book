@@ -280,8 +280,8 @@ fun looksLikeImage(b: ByteArray): Boolean = when {
     else -> false
 }
 
-/** 从 [from] 起是不是那串 ASCII（ByteArray 没有 regionMatches 那套重载，比字节就行）。 */
-private fun ByteArray.at(from: Int, s: String): Boolean {
+/** 从 [from] 起是不是那串 ASCII（ByteArray 没有 regionMatches 那套重载，比字节就行）。漫画、有声两族都用它。 */
+internal fun ByteArray.at(from: Int, s: String): Boolean {
     if (from + s.length > size) return false
     for (i in s.indices) if (this[from + i] != s[i].code.toByte()) return false
     return true
