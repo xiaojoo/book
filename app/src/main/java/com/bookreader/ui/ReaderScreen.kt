@@ -43,7 +43,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -1463,11 +1462,18 @@ fun ReaderScreen(
     }
 
     if (restPrompt) {
-        AlertDialog(
-            onDismissRequest = { restPrompt = false },
-            title = { Text("该休息一下") },
-            text = { Text("已经连续阅读 $restMinutes 分钟。") },
-            confirmButton = { TextButton(onClick = { restPrompt = false }) { Text("继续看") } },
+        // 这一颗不是"回不去的动作"，所以不刷红；颜色跟着这一屏的纸色走，别刷成外壳的卡片白
+        ConfirmDialog(
+            title = "该休息一下",
+            body = "已经连续阅读 $restMinutes 分钟。",
+            confirm = "继续看",
+            onConfirm = { restPrompt = false },
+            onDismiss = { restPrompt = false },
+            cancel = null,
+            card = theme.barColor,
+            ink = theme.inkColor,
+            faint = theme.faintColor,
+            confirmColor = theme.accentColor,
         )
     }
 }

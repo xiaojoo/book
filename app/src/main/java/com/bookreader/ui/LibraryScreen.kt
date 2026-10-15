@@ -28,7 +28,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -36,7 +35,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -316,21 +314,19 @@ fun LibraryScreen(
     }
 
     confirmDeleteFor?.let { meta ->
-        AlertDialog(
-            onDismissRequest = { confirmDeleteFor = null },
+        ConfirmDialog(
             // 他点名要的就是这一句，所以不加第二行说明
-            title = { Text("确认将《${meta.title}》删除？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    library.delete(meta.id)
-                    // 书都删了还把按书存的那串键留在 prefs 里 = 永远读不到的死字节，一并摘掉
-                    prefs.clearBook(meta.id)
-                    reload()
-                    confirmDeleteFor = null
-                    note = "已删除《${meta.title}》"
-                }) { Text("删除", color = Chrome.danger) }
+            title = "确认将《${meta.title}》删除？",
+            confirm = "删除",
+            onConfirm = {
+                library.delete(meta.id)
+                // 书都删了还把按书存的那串键留在 prefs 里 = 永远读不到的死字节，一并摘掉
+                prefs.clearBook(meta.id)
+                reload()
+                confirmDeleteFor = null
+                note = "已删除《${meta.title}》"
             },
-            dismissButton = { TextButton(onClick = { confirmDeleteFor = null }) { Text("取消") } },
+            onDismiss = { confirmDeleteFor = null },
         )
     }
 }
