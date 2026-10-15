@@ -102,6 +102,25 @@ private fun chipBg(theme: ReaderTheme) = if (theme.night) Color(0xFF222222) else
 private fun trackBg(theme: ReaderTheme) = if (theme.night) Color(0xFF2A2B2E) else Color(0xFFE2E5EA)
 
 /**
+ * 铺了背景图那一屏，进度条轨道的透明度。**他给的是"加个透明度"没给数**，所以这一档按"看得出台阶、
+ * 又让图透出来"取，并把系数写明：**轨道和脚下那层的色差压到原来的 45%**。
+ *
+ * 拿他真图（`files/theme/bg.jpg`，进度条那一条 340×12 采样）算过透出来多少：
+ * 背后图案最亮 (219,219,231) / 最暗 (6,6,16)，图案差 ΔRGB=641；页面先压了 82% 纸之后，
+ * 轨道 alpha = 1 → 透出来 **0**（一条实心灰药丸浮在图上）；0.6 → 47；**0.45 → 64（图案差的 10%）**；
+ * 0.3 → 81；0.15 → 100。再往下就只剩"一条快看不见的痕"，进度条本身要能读，所以停在 0.45。
+ *
+ * 滑块跟着轨道一起淡（他点名要的），共用同一个数。淡完还剩多少可抓性，量的还是"和轨道差多少"：
+ * 实心时 ΔRGB=265（每通道 88），一起淡到 0.45 之后 ΔRGB=**119~120**（每通道 40）；
+ * 再看滑块和脚下那层差多少 —— 图最亮处 147、最暗处 93，也就是不管圆点走到图的哪一段，
+ * 它都还是"深一截的圆压在浅一截的带上"，读得出也抓得住。禁用那颗（还没时长）不跟着乘，仍是原来那 0.4。
+ *
+ * 为什么不由 `bgDim` 推（比如 `1 − bgDim`）：那一格是"图压多少才读得清正文"，和"轨道该多实"
+ * 是两件事 —— 他把正文压淡到 95% 时，进度条不该跟着一起消失。
+ */
+internal const val BAR_ALPHA_ON_IMAGE = 0.45f
+
+/**
  * 音量键翻页。四族阅读器（小说 / pdf / pptx / 漫画）共用这一条挂法 ——
  * 「我的 → 阅读偏好」里那颗「音量键翻页」写的就是同一个 `prefs.volumePaging`，
  * 所以那一颗开了就得处处都翻得动，不能只有小说那一屏认它。
@@ -405,12 +424,18 @@ internal fun slideRatio(xPx: Float, widthPx: Float): Float =
     (xPx / widthPx.coerceAtLeast(1f)).coerceIn(0.04f, 1f)
 
 @Composable
+/**
+ * 进度条那一格。`barAlpha` 管**轨道和滑块两颗**：铺了背景图的那一屏要 0.45f（来由见
+ * [BAR_ALPHA_ON_IMAGE]），没铺图仍是实心的（1f）。禁用那颗滑块（时长还没读出来）不跟着乘 ——
+ * 它本来就是 0.4 的淡灰，再乘一遍就没了。
+ */
 internal fun SlideBar(
     value: Float,
     enabled: Boolean,
     theme: ReaderTheme,
     onChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    barAlpha: Float = 1f,
 ) {
     var widthPx by remember { mutableFloatStateOf(1f) }
     Box(
@@ -418,7 +443,7 @@ internal fun SlideBar(
             // 轨高 = 滑块直径：原来轨 30dp、滑块 24dp，两头各冒出 3dp，看着就是背景比圆高
             .height(24.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(trackBg(theme))
+            .background(trackBg(theme).copy(alpha = barAlpha))
             .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
             .pointerInput(Unit) {
                 detectTapGestures { offset -> onChange(slideRatio(offset.x, widthPx)) }
@@ -438,7 +463,11 @@ internal fun SlideBar(
                 .offset { IntOffset((value.coerceIn(0f, 1f) * (widthPx - 24.dp.toPx())).toInt().coerceAtLeast(0), 0) }
                 .size(24.dp)
                 .clip(CircleShape)
-                .background(if (enabled) Color(0xFF8A8D91) else theme.faintColor.copy(alpha = 0.4f)),
+                .background(
+                    // 滑块跟着轨道一起淡（他点名要的），共用同一个数；禁用那颗不跟着乘
+                    if (enabled) Color(0xFF8A8D91).copy(alpha = barAlpha)
+                    else theme.faintColor.copy(alpha = 0.4f),
+                ),
         )
     }
 }

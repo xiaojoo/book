@@ -121,6 +121,7 @@ import com.bookreader.core.search.ScanResult
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.DeviceFonts
 import com.bookreader.data.ReaderPrefs
+import com.bookreader.data.ReaderScope
 import com.bookreader.data.TraditionalText
 import com.bookreader.reader.PaintBreaker
 import kotlinx.coroutines.Dispatchers
@@ -154,6 +155,13 @@ fun ReaderScreen(
     val activity = view.context as? Activity
 
     var theme by remember { mutableStateOf(ReaderTheme.of(prefs.themeIndex)) }
+    /**
+     * AI 听书那一屏**自己的**纸色。它和正文是两屏（同一本书的两种看法），各存各的：
+     * 在听书页里换到夜间，退回正文应该还是原来那档 —— 以前两边共用 `themeIndex` 那一格，
+     * 听书页换个色、正文跟着变，正是他这轮要停掉的"全局生效"。
+     */
+    val listenPrefs = remember(prefs) { prefs.forReader(ReaderScope.LISTEN) }
+    var listenTheme by remember { mutableStateOf(ReaderTheme.of(listenPrefs.themeIndex)) }
     var fontSizeSp by remember { mutableFloatStateOf(prefs.fontSizeSp) }
     var linePreset by remember { mutableIntStateOf(prefs.linePreset) }
     var marginPreset by remember { mutableIntStateOf(prefs.marginPreset) }
@@ -1302,7 +1310,7 @@ fun ReaderScreen(
             val hasPrev = remember(lr) { engine.prevParagraph(lr) != null }
             val hasNext = remember(lr) { engine.nextParagraph(lr) != null }
             ListenScreen(
-                theme = theme,
+                theme = listenTheme,
                 bgBmp = bgBmp,
                 bgDim = prefs.bgDim,
                 chapterTitle = "第 ${engine.currentChapterIndex + 1} 章 " +
@@ -1378,16 +1386,16 @@ fun ReaderScreen(
                 onFixes = { fixesPage = true },
                 onToc = { tocPage = true },
                 onPaper = { picked ->
-                    // 和快捷面板那排色块同一个主人：改的就是 themeIndex，回阅读页也是这一档
-                    theme = picked
-                    prefs.themeIndex = picked.ordinal
+                    // 只改听书这一屏那一格（`theme.listen`）：正文那档不动，退回正文还是他原来选的色
+                    listenTheme = picked
+                    listenPrefs.themeIndex = picked.ordinal
                 },
             )
         }
         Box(Modifier.fillMaxSize().fixedBarsPadding()) {
             if (historyPage) {
                 ListenHistoryPage(
-                    theme = theme,
+                    theme = listenTheme,
                     entries = voiceHistory,
                     preview = { off, n -> engine.book.cache.slice(off, n).replace('\n', ' ') },
                     totalBytes = voiceHistory.sumOf { it.bytes },
@@ -1405,7 +1413,7 @@ fun ReaderScreen(
 
             if (fixesPage) {
                 ListenFixesPage(
-                    theme = theme,
+                    theme = listenTheme,
                     table = prefs.aiFixes,
                     hits = voiceHistory.size,
                     onBack = { fixesPage = false },
@@ -1415,7 +1423,7 @@ fun ReaderScreen(
 
             if (tocPage) {
                 ListenTocPage(
-                    theme = theme,
+                    theme = listenTheme,
                     chapters = engine.book.chapters.chapters,
                     current = engine.currentChapterIndex,
                     cached = tocCached,

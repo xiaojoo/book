@@ -121,7 +121,12 @@ class Palette(
  * 夜间开关一拨，四页加状态栏/导航条一起换，不用每个调用点传参。
  */
 object Chrome {
-    /** 夜间开关。"我的"页那颗开关写它，启动和从阅读页回来时从 `prefs.themeIndex` 同步。 */
+    /**
+     * 外壳的夜间开关。「我的」页那颗写它，回到壳子上时从 `prefs.shellNight` 同步（`MainActivity`）。
+     *
+     * 某一屏阅读器开着的时候也会把它写成自己那档纸色的明暗（pdf / ppt 整屏用的是这套色板），
+     * 退出那一屏就按 `shellNight` 还回来 —— **阅读模式里改的东西不该留在外壳上**。
+     */
     var night by mutableStateOf(false)
 
     /**
@@ -661,9 +666,9 @@ fun MeScreen(
 ) {
     val context = LocalContext.current
     var books by remember { mutableStateOf(library.list()) }
-    var themeIndex by remember { mutableIntStateOf(prefs.themeIndex) }
-    // 开夜之前的那一档纸色：关掉夜间要还回原来那档，不是一律拍回"纸白"
-    var dayBefore by remember { mutableIntStateOf(ReaderTheme.of(prefs.themeIndex).let { if (it.night) 0 else prefs.themeIndex }) }
+    // 外壳的夜间。它和每一屏阅读器那档纸色**是两个主人**：这颗开关只动外壳那四页 + 状态栏，
+    // 不再顺手把小说/漫画/pdf 的纸色一起改掉（那些现在是各屏一份，见 ReaderPrefs.forReader）。
+    var night by remember { mutableStateOf(prefs.shellNight) }
     var confirmClean by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var cacheBytes by remember { mutableLongStateOf(0L) }
@@ -738,18 +743,17 @@ fun MeScreen(
                         Text("夜间模式", fontSize = 15.sp, color = Chrome.ink)
                         Spacer(Modifier.weight(1f))
                         RedSwitch(
-                            on = themeIndex == ReaderTheme.ALL.lastIndex,
+                            on = night,
                             onToggle = {
-                                themeIndex = if (it) {
-                                    dayBefore = themeIndex
-                                    ReaderTheme.ALL.lastIndex
-                                } else {
-                                    dayBefore
-                                }
-                                prefs.themeIndex = themeIndex
-                                // 外壳（这四页 + 状态栏）跟着一起换，不然开关只改阅读页、看着是假的
+                                night = it
+                                prefs.shellNight = it
+                                // 当场换外壳这四页 + 状态栏，不然开关按下去没反应、看着是假的
                                 Chrome.night = it
-                                note = if (it) "已切到夜间：外壳和阅读页一起变" else "已切回${ReaderTheme.of(dayBefore).label}"
+                                note = if (it) {
+                                    "已切到夜间：只改外壳这四页；翻开书那一屏在它自己的设置里换"
+                                } else {
+                                    "已切回白天（外壳）；某一屏阅读器要是自己开着夜间，进去还是夜间"
+                                }
                             },
                         )
                     }

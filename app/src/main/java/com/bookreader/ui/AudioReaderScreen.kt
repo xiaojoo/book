@@ -438,6 +438,9 @@ fun AudioReaderScreen(
                         enabled = durationMs > 0,
                         theme = theme,
                         onChange = { seekTo(it) },
+                        // 铺了图的那一屏：轨道和滑块一起让图透出来（0.45 那一档的来由和真图算出的
+                        // 读数写在 `BAR_ALPHA_ON_IMAGE` 上头）；纯色纸仍走原来那两笔实心
+                        barAlpha = if (bgBmp != null) BAR_ALPHA_ON_IMAGE else 1f,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
