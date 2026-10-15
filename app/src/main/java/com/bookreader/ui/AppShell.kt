@@ -32,11 +32,9 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -68,6 +66,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
@@ -182,6 +182,74 @@ object Chrome {
  * 10dp = 这台机 27.5px。阅读页里那四处弹层（快捷/更多设置/字体/书签）仍是 16dp —— 那是他认可过的另一档。
  */
 val SHEET_RADIUS = 10.dp
+
+/** 确认框那一族的几何：圆角比 Material 默认的 28dp 收一半，上下内衬同数、左右内衬同数。 */
+val DIALOG_RADIUS = 12.dp
+val DIALOG_SIDE = 16.dp
+val DIALOG_CAP = 14.dp
+
+/**
+ * 确认框。**自绘，不用 `AlertDialog`** —— Material 那一颗的圆角（28dp）和四边内衬都在库里，
+ * 想调"标题到顶 = 按钮到底"得去猜它内部那几段 padding，而且它给按钮留的是 `TextButton` 的命中框，
+ * 看着的间隙和量的间隙不是一条数。这里每一段间隙都是一个写死的常量，改哪一段说得清。
+ *
+ * 三处共用：书架删书、我的 → 清理缓存、阅读页的休息提醒。颜色按调用方那一屏给
+ * （阅读页那层要跟着纸色走，不能一律刷成外壳的卡片白）。
+ */
+@Composable
+fun ConfirmDialog(
+    title: String,
+    confirm: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    body: String? = null,
+    cancel: String? = "取消",
+    onCancel: (() -> Unit)? = null,
+    card: Color = Chrome.card,
+    ink: Color = Chrome.ink,
+    faint: Color = Chrome.faint,
+    confirmColor: Color = Chrome.danger,
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        // 两颗按钮的命中区（左右 8dp、上下 6dp）是**长在间隙里**的，不另外占间隙：
+        // 行的 padding 一律给"间隙减命中区"，这样标题墨迹到顶、按钮墨迹到底、左右两条，
+        // 四条数都落在同一档上（原来直接给行 16dp，按钮那颗会再往外顶 8dp，右边比左边宽一截）。
+        val hitX = 8.dp
+        val hitY = 6.dp
+        Column(
+            Modifier
+                .width(300.dp)
+                .clip(RoundedCornerShape(DIALOG_RADIUS))
+                .background(card),
+        ) {
+            Text(
+                title, fontSize = 17.sp, color = ink,
+                modifier = Modifier.padding(start = DIALOG_SIDE, end = DIALOG_SIDE, top = DIALOG_CAP),
+            )
+            if (body != null) {
+                Text(
+                    body, fontSize = 14.sp, color = faint, lineHeight = 20.sp,
+                    modifier = Modifier.padding(start = DIALOG_SIDE, end = DIALOG_SIDE, top = 8.dp),
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(start = hitX, end = hitX, top = 16.dp, bottom = DIALOG_CAP - hitY),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (cancel != null) {
+                    Box(Modifier.tap { (onCancel ?: onDismiss)() }.padding(horizontal = hitX, vertical = hitY)) {
+                        Text(cancel, fontSize = 15.sp, color = faint)
+                    }
+                }
+                Box(Modifier.tap(onConfirm).padding(horizontal = hitX, vertical = hitY)) {
+                    Text(confirm, fontSize = 15.sp, color = confirmColor)
+                }
+            }
+        }
+    }
+}
 
 enum class MainTab(val label: String, val iconRes: Int) {
     Shelf("书架", R.drawable.ic_tab_shelf),
@@ -820,22 +888,20 @@ fun MeScreen(
         PrefSheet(prefs, onDismiss = { prefsSheet = false })
     }
     if (confirmClean) {
-        AlertDialog(
-            onDismissRequest = { confirmClean = false },
-            title = { Text("清理缓存 ${"%.2f".format(cacheBytes / 1048576f)}MB？") },
-            text = { Text("只删 cache 目录里可再生的临时文件。书的正文副本、索引、位置、书签都在 files 目录，不动。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    val before = cacheBytes
-                    deleteContents(context.cacheDir)
-                    context.externalCacheDir?.let { deleteContents(it) }
-                    context.cacheDir.deleteRecursively()
-                    measureCache()
-                    confirmClean = false
-                    note = "释放 ${"%.2f".format((before - cacheBytes) / 1048576f)}MB，剩下 ${"%.2f".format(cacheBytes / 1048576f)}MB"
-                }) { Text("清理", color = Chrome.danger) }
+        ConfirmDialog(
+            title = "清理缓存 ${"%.2f".format(cacheBytes / 1048576f)}MB？",
+            body = "只删 cache 目录里可再生的临时文件。书的正文副本、索引、位置、书签都在 files 目录，不动。",
+            confirm = "清理",
+            onConfirm = {
+                val before = cacheBytes
+                deleteContents(context.cacheDir)
+                context.externalCacheDir?.let { deleteContents(it) }
+                context.cacheDir.deleteRecursively()
+                measureCache()
+                confirmClean = false
+                note = "释放 ${"%.2f".format((before - cacheBytes) / 1048576f)}MB，剩下 ${"%.2f".format(cacheBytes / 1048576f)}MB"
             },
-            dismissButton = { TextButton(onClick = { confirmClean = false }) { Text("取消") } },
+            onDismiss = { confirmClean = false },
         )
     }
 }
