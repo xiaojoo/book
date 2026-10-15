@@ -143,6 +143,12 @@ data class TocRule(
  * 懒加载写在 `data-src` 的就写 `@data-src`。
  * 写 [ChapterRule.SELF]（`@self`）= **目录里那一条地址本身就是音频文件**，没有第二层集页可点
  * （播客 RSS 那一族：`<enclosure url="….m4a">` 就是那一集的全部）。
+ * 属性那一格后面还能再挂一档函数后缀 `@url`：地址埋在 `href="javascript:Play(…,'https://x/a.mp3',…)"`
+ * 的参数串里那种站（古文岛），正则抠第一个 http 地址、**不跑 JS**。
+ *
+ * 有声源**也可以同时写 [content]**：音频和正文在同一页的那一族（还是古文岛），抓一集时那一页已经在手上，
+ * 顺手把正文一起抽走，落在同一集目录里的 `text.txt`（界面上"文字跟着读"读的就是它）。
+ * 抽不到正文**不影响**这一集算成功 —— 音频才是这本书的主体，缺文字只等于"这一集没得跟读"。
  */
 data class ChapterRule(
     val content: String,

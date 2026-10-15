@@ -1,5 +1,6 @@
 package com.bookreader.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -45,16 +47,23 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bookreader.R
@@ -432,6 +441,72 @@ internal fun SlideBar(
                 .background(if (enabled) Color(0xFF8A8D91) else theme.faintColor.copy(alpha = 0.4f)),
         )
     }
+}
+
+/**
+ * 菜单亮着的时候，状态栏 / 导航条那两条用**实心纸色盖住**背景图 —— 盖，不改任何一层的高度。
+ * 阅读屏、有声书屏共用这一份口径（他 2026-10-15 点名"菜单出现的时候，导航栏和状态栏保持白色，和阅读界面一样"）。
+ *
+ * 高度取"藏了栏也不变"那一份（[systemBarHeights]），所以一收一放时这两条不抖、也不会把图挤回去。
+ * `alpha` 是给阅读屏那条淡出用的（`chrome.value`）；别的屏非 0 即 1。
+ */
+@Composable
+internal fun BoxScope.BarPaper(theme: ReaderTheme, alpha: Float) {
+    if (alpha <= 0f) return
+    val inset = systemBarHeights()
+    Box(
+        Modifier.align(Alignment.TopCenter).fillMaxWidth()
+            .height(inset.calculateTopPadding())
+            .background(theme.pageColor.copy(alpha = alpha))
+    )
+    Box(
+        Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            .height(inset.calculateBottomPadding())
+            .background(theme.pageColor.copy(alpha = alpha))
+    )
+}
+
+/**
+ * 上下各淡出 `fadeDp` 那一档：**滚到边缘的那半行不是被硬切掉，是淡出去**。
+ *
+ * 听书页那个两行窗口和有声书的跟读格共用这一份（同一档 8dp）—— 两屏边缘的观感才是同一条。
+ * 淡出用 `DstIn` 而不是盖一层渐变色：盖色会把底下的背景图也盖掉。
+ * 比例夹在 0.4f：窗口很矮的时候（听书页就两行高）淡出带不能吃掉整块内容。
+ */
+fun Modifier.edgeFade(fadeDp: Dp): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val f = (fadeDp.toPx() / size.height).coerceAtMost(0.4f)
+            drawRect(
+                // verticalGradient 默认就是从上到下铺满这块画布，不用再给起止点
+                brush = Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    f to Color.Black,
+                    1f - f to Color.Black,
+                    1f to Color.Transparent,
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
+
+/**
+ * 「我的 → 皮肤管理」那张背景图的**那一叠**：图铺满整格 → 上面压一层当前那档纸色（浓淡 = `bgDim`）。
+ *
+ * 阅读屏和听书屏共用这一份，不各写一遍：两屏必须同一张图、同一档压色、同一种裁法，
+ * 换纸色/换浓淡时才不会一屏跟了一屏没跟。调用方那一层要自己铺好**不透明的底色纸**
+ * （图叠在它上面），否则半透明那层会把身后的东西透出来。
+ */
+@Composable
+internal fun PaperBackground(theme: ReaderTheme, bgBmp: ImageBitmap?, dim: Float) {
+    if (bgBmp == null) return
+    Image(
+        bitmap = bgBmp,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxSize(),
+    )
+    Box(Modifier.fillMaxSize().background(theme.pageColor.copy(alpha = dim)))
 }
 
 @Composable

@@ -186,6 +186,9 @@ fun BookSearchScreen(
                 "所有源都关着，到「管理书籍源」里开一条"
             }
             q.isEmpty() -> { hits = null; note = "先输入要搜的书名" }
+            // 没有 `search` 那一段的那一条源（古文岛：站内搜索 302 到登录页）—— 不打那一枪，
+            // 因为打回来的是空表，而空表在界面上写的是"这本书没搜到"，那是句假话：它根本没有口
+            !r.canSearch -> { hits = null; note = "「${r.name}」这条源没有搜索口（源文件里没写 search 那一段），只能从「精选」那一页进" }
             searching -> {}
             else -> {
                 keyboard?.hide()

@@ -177,10 +177,12 @@ fun ComicReaderScreen(
     Box(
         Modifier
             .fillMaxSize()
-            // 整屏让开系统栏（和小说那一屏同一条写法）：底栏压在导航条上，"目录/书签/夜间/设置"
-            // 就和 ‹ □ ☰ 挤在同一行里，按下去先撞系统的颗。全屏模式下这一条让位不给
-            .safeDrawingPadding()
+            // **先铺满底色、再让开安全区**（和 `PdfReaderScreen` 顶上那条同一个写法，那一条早就写对了）。
+            // 这两句原来反着：底色只铺进安全区里侧，edge-to-edge 之后系统那两条栏是透明的，栏背后露的
+            // 是窗口默认灰 —— 在「设置 → 背景」换一档纸色，正文跟着换、状态栏和导航条那两条不跟着换。
+            // 让开安全区本身不能省：底栏压在导航条上的话，"目录/书签/夜间/设置" 就和 ‹ □ ☰ 挤在同一行里。
             .background(theme.pageColor)
+            .safeDrawingPadding()
             .pointerInput(chapter, pages.size) {
                 detectTapGestures { off ->
                     // 抽屉开着的时候，点到它外面任何一侧都是**先收抽屉**，不是翻页

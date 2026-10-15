@@ -346,7 +346,121 @@ class AudioTest {
         assertEquals("留的是先出现那一条（页面上的顺序就是站点给的顺序）", "西游记评书", hits[0].bookName)
     }
 
+    /**
+     * 地址埋在 `href="javascript:Play(9801,'id','https://…/a.mp3',…)"` 的参数串里那一族：
+     * `@href@url` 从整串里抠出第一个 http 地址。**不用跑 JS**，可那串本身不是地址。
+     * 抠不到（串里没有 http）就当这一章没有音频，不交半条假地址下去。
+     */
+    @Test
+    fun urlSuffixPullsTheAddressOutOfAJavaScriptParameterString() {
+        val page = """
+            <html><body>
+              <a href="javascript:PlayBookv(9801,'b630af160f65','gujizhangjie','https://oss.example/song/b630af160f65.mp3','','第一回','曹雪芹')">收听</a>
+              <a href="javascript:PlayBookv(9802,'nope','','','','')">没有地址的那一颗</a>
+            </body></html>
+        """.trimIndent()
+        val r = RuleLoader.load(audioJson.replace("\"audio source @src\"", "\"a[href^='javascript:PlayBookv'] @href@url\""), "测试源")
+        val urls = chapterAudio(r, page, "https://a.example/ep/1/")
+        assertEquals("两颗里只有一颗真带地址：" + urls, listOf("https://oss.example/song/b630af160f65.mp3"), urls)
+    }
+
+    /**
+     * "音频和正文在同一页上"那一族（古文岛）：抓一集时那一页已经在手上了，
+     * 顺手把正文抽出来一起落盘 —— 跟读那一屏读的就是它。
+     *
+     * 要钉的是**不多打一次站子**：正文和音频同源同页，一次请求两样都要拿到。
+     */
+    @Test
+    fun textFromTheSameEpisodePageLandsNextToItsAudio() {
+        val page = """
+            <html><body>
+              <div class="box">
+                <p>　　第一回开头的这一段。</p>
+                <p>　　这一段里有“引号”，也有逗号，句子在句号这里断。</p>
+              </div>
+              <audio controls><source src="https://cdn.example/a1.mp3"></audio>
+            </body></html>
+        """.trimIndent()
+        val s = Script(
+            mapOf(bookUrl to tocPage, "https://a.example/ep/1/" to page, "https://a.example/ep/2/" to ep2Page, "https://a.example/ep/3/" to ep3Page),
+            mapOf("https://cdn.example/a1.mp3" to mp3(), "https://a.example/media/ep2.mp3" to mp3(), "https://cdn.example/a3.mp3" to mp3()),
+        )
+        val store = MemoryAudioStore()
+        val out = AudioDownloader(textRule(), s, store).download(hit, limit = 1)
+        val text = store.texts["https://a.example/ep/1/"] ?: ""
+        println("[正文] 段数=${text.split("\n\n").size} 字数=${text.length} 集页请求=" + s.count("https://a.example/ep/1/"))
+        assertTrue("抽出来的该是那一盒里的两段：" + text, text.startsWith("第一回开头的这一段。"))
+        assertEquals("两段", 2, text.split("\n\n").size)
+        assertTrue(out.complete)
+        assertEquals("正文和音频同一页：一次集页请求就够", 1, s.count("https://a.example/ep/1/"))
+    }
+
+    /**
+     * 那一页换了版式、正文容器选不中：**这一集仍算下到了**。
+     *
+     * 音频才是这本书的主体。缺正文只等于"这一集没得跟读"，不该在任务那一行报一句红字，
+     * 更不该把整集记进缺集 —— 表现就是"下载失败"，而东西明明在盘上。
+     */
+    @Test
+    fun anEpisodeWithNoTextIsStillAWholeEpisode() {
+        val s = Script(
+            mapOf(bookUrl to tocPage, "https://a.example/ep/1/" to ep1Page, "https://a.example/ep/2/" to ep2Page, "https://a.example/ep/3/" to ep3Page),
+            mapOf("https://cdn.example/a1.mp3" to mp3(), "https://a.example/media/ep2.mp3" to mp3(), "https://cdn.example/a3.mp3" to mp3()),
+        )
+        val store = MemoryAudioStore()
+        val out = AudioDownloader(textRule(), s, store).download(hit, limit = 1)
+        println("[没正文] 缺集=${out.failed} 写进仓的正文=" + store.texts.keys)
+        assertTrue(out.complete)
+        assertEquals("那一页上没有正文容器，就别写一份空的下去", emptySet<String>(), store.texts.keys)
+    }
+
+    /** `@self` 那一族连集页都不打，所以它**不可能有正文** —— 不该为它白抽一次、也不该写个空文件下去。 */
+    @Test
+    fun selfAudioHasNoPageToTakeTextFromAndStoresNoText() {
+        val feed = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <rss><channel><item>
+              <title><![CDATA[第一集 石猴出世]]></title>
+              <enclosure url="https://cdn.example/e1.mp3"/>
+            </item></channel></rss>
+        """.trimIndent()
+        val r = RuleLoader.load(
+            rssJson.replace("\"chapter\": {\"audio\": \"@self\"}", "\"chapter\": {\"content\": \"div.box\", \"audio\": \"@self\"}"),
+            "测试播客源",
+        )
+        val store = MemoryAudioStore()
+        val s = Script(mapOf(bookUrl to feed), mapOf("https://cdn.example/e1.mp3" to mp3()))
+        val out = AudioDownloader(r, s, store).download(hit)
+        println("[@self] 集=${out.chapters} 正文=" + store.texts.keys + " 请求=" + s.requests.map { it.url })
+        assertTrue(out.complete)
+        assertEquals("规则写了正文容器也没用：这一族没有集页可抽", emptySet<String>(), store.texts.keys)
+    }
+
+    /** 仓里那一格正文**不是音频**：数段数、数字节的两本账都不能把它算进去。 */
+    @Test
+    fun theStoredTextIsNotCountedAsAnAudioPart() {
+        val root = tmp.newFolder("text-not-a-part")
+        val store = FileAudioStore(root)
+        // 集目录名由 putParts 给（地址的散列）：后面三格都得用它返回的那个，不能拿地址当目录名
+        val dir = store.putParts("https://a.example/ep/1/", listOf("https://cdn.example/a1.mp3"))
+        store.put(dir, "https://cdn.example/a1.mp3", mp3())
+        store.putText(dir, "一整段正文\n\n另一段")
+        val back = FileAudioStore(root)
+        println("[仓账面] 段=${back.parts()} 字节=${back.bytes()}（一段音频=${mp3().size}）")
+        assertEquals("text.txt 不是第二段音频", 1, back.parts())
+        assertEquals("正文的字节不该混进有声书的账面", mp3().size.toLong(), back.bytes())
+    }
+
+    private fun textRule(): Rule = RuleLoader.load(
+        audioJson.replace(
+            "\"chapter\": {\"audio\": \"audio source @src\"}",
+            "\"chapter\": {\"content\": \"div.box\", \"audio\": \"audio source @src\"}",
+        ),
+        "测试源",
+    )
+
     // ---- 魔数 ----
+
 
     @Test
     fun onlyRealAudioBytesCountAsAudio() {
@@ -396,6 +510,7 @@ class AudioTest {
     /** 内存里的音频仓：判据给的是这一份（`:app` 给的是落在书目录里的 FileAudioStore）。 */
     private class MemoryAudioStore : AudioStore {
         val have = HashMap<String, ByteArray>()
+        val texts = HashMap<String, String>()
         override fun putParts(chapterUrl: String, urls: List<String>): String {
             return chapterUrl
         }
@@ -404,6 +519,10 @@ class AudioTest {
 
         override fun put(dir: String, audioUrl: String, bytes: ByteArray) {
             have[dir + "|" + audioUrl] = bytes
+        }
+
+        override fun putText(dir: String, text: String) {
+            texts[dir] = text
         }
 
         override fun parts(): Int = have.size

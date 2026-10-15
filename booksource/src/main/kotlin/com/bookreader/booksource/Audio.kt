@@ -21,6 +21,7 @@ import kotlin.math.min
  * ```text
  * <集地址的 sha1>/parts.tsv           这一集的音频地址，一行一段，顺序就是播放顺序
  * <集地址的 sha1>/<音频地址的 sha1>    那一段本身（没有后缀：解码看的是字节，不是文件名）
+ * <集地址的 sha1>/text.txt            这一集的正文（只有"音频和正文在同一页"的那一族有，见 [AudioStore.putText]）
  * ```
  * 键都用地址的散列而不是序号：和漫画同一份理由 —— 站点补一集、或者把某一集的段序动了，
  * 按序号存的会张冠李戴，而"文件名对、内容是另一段"这种错在音频上比在小说上更难发现。
@@ -122,14 +123,19 @@ class AudioDownloader(
      * 所以**一次集页请求都不发** —— 发出去就是拿 10MB 的音频当一页 HTML 读回来再解一遍。
      */
     private fun fetchChapter(bookUrl: String, chapterUrl: String, shouldStop: () -> Boolean, gate: () -> Unit): One {
-        val urls = if (rule.selfAudio) {
-            listOf(chapterUrl)
-        } else {
-            val page = fetch.fetch(PageRequest(chapterUrl))
-            chapterAudio(rule, page.text(rule.charset), page.finalUrl)
+        val body = if (rule.selfAudio) null else fetch.fetch(PageRequest(chapterUrl)).let {
+            it.text(rule.charset) to it.finalUrl
         }
+        val urls = if (body == null) listOf(chapterUrl) else chapterAudio(rule, body.first, body.second)
         if (urls.isEmpty()) return One("", 0)
         val dir = store.putParts(chapterUrl, urls)
+        // 正文和音频是**同一页**上的两样（古文岛那一族）：页已经在手上了，顺手抽一遍文字，
+        // 不再多打一次站子。抽不到（规则没写 content、那一页换了版式）只等于"这一集没正文可跟读"，
+        // 这一集照样算成功 —— 音频才是这本书的主体，缺文字不该在任务那一行报红字。
+        if (body != null && rule.chapter.content.isNotBlank()) {
+            val text = runCatching { chapterText(rule, body.first, body.second) }.getOrDefault("")
+            if (text.isNotBlank()) store.putText(dir, text)
+        }
         var landed = 0
         for (u in urls) {
             // 每段之前问一次取消：一集几十 MB 要拉几分钟，只在集头问的话按了暂停还要等一整集
@@ -213,6 +219,14 @@ interface AudioStore {
     /** 记下这一集该有哪些段（一行一个地址），返回这一集的目录名。 */
     fun putParts(chapterUrl: String, urls: List<String>): String
 
+    /**
+     * 记下这一集的正文（跟读那一屏要高亮的就是它）。
+     *
+     * 只有"音频和正文在同一页上"的那一族（古文岛）才有这一格：播客那一族集页上根本没有正文可抽，
+     * 所以它是**可选的一格** —— 没写过它的集，读回来是空串，界面上就不开跟读那一屏。
+     */
+    fun putText(dir: String, text: String) {}
+
     /** 这一段已经在仓里了（断点续抓就靠这一格，不再打站子）。 */
     fun has(dir: String, audioUrl: String): Boolean
 
@@ -262,9 +276,23 @@ class FileAudioStore(private val root: File) : AudioStore {
         }
     }
 
-    /** 只数"那一集该有 N 段"里数出来的真音频：`parts.tsv` 是地址表不是音频，`.part` 是没写完的垃圾。 */
+    override fun putText(dir: String, text: String) {
+        val box = File(root, dir).apply { mkdirs() }
+        val f = File(box, TEXT)
+        val tmp = File(box, "$TEXT.part")
+        tmp.writeText(text, Charsets.UTF_8)
+        if (!tmp.renameTo(f)) {
+            f.delete()
+            tmp.renameTo(f)
+        }
+    }
+
+    /**
+     * 只数"那一集该有 N 段"里数出来的真音频：`parts.tsv` 是地址表不是音频，`text.txt` 是正文不是音频，
+     * `.part` 是没写完的垃圾。
+     */
     private fun realFiles(d: File): Array<File>? =
-        d.listFiles { f -> f.isFile && f.name != PARTS && !f.name.endsWith(".part") }
+        d.listFiles { f -> f.isFile && f.name != PARTS && f.name != TEXT && !f.name.endsWith(".part") }
 
     override fun parts(): Int = root.listFiles()?.sumOf { d ->
         if (!d.isDirectory) 0 else realFiles(d)?.size ?: 0
@@ -277,8 +305,15 @@ class FileAudioStore(private val root: File) : AudioStore {
     companion object {
         /** 一集的地址表叫什么：读它的那一头（播放页）和写它的那一头（这里）必须是同一个名字。 */
         const val PARTS = "parts.tsv"
+
+        /** 同一集那份正文叫什么：跟读那一屏读它，写它的是 [FileAudioStore.putText]。 */
+        const val TEXT = "text.txt"
     }
 }
+
+/** 一集的正文（没有就空串）。和 [audioPartOrder] 同一个道理：写和读只认这一个文件名。 */
+fun audioChapterText(chapterDir: File): String =
+    runCatching { File(chapterDir, FileAudioStore.TEXT).readText(Charsets.UTF_8) }.getOrDefault("")
 
 /** `parts.tsv` 里那一行一个地址的表，读回播放顺序。调用方（播放那一头）按这个顺序连播。 */
 fun audioPartOrder(chapterDir: File): List<String> =

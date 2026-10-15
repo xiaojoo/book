@@ -1,0 +1,29 @@
+{
+  "id": "gushiwen-audio",
+  "name": "古文岛·古籍有声",
+  "homeUrl": "https://www.gushiwen.cn/",
+  "note": "古籍正文 + 该章朗读 mp3 在同一页：红楼梦/三国演义/史记这类章回与史部，一回一条目录、一回一支整回音频。站内搜索要登录，所以这条源没有 search 那一段——它从「精选 → 有声」那一档进（hot 指向分类页）。音频地址写在 href=\"javascript:PlayBookv(...)\" 的参数串里，用 @href@url 抠出来，不跑 JS。",
+  "kind": "audio",
+  "hot": {
+    "url": "https://www.gushiwen.cn/guwen/Default.aspx?p=1&type=%E5%B0%8F%E8%AF%B4%E5%AE%B6%E7%B1%BB",
+    "group": "div.sonspic",
+    "item": "div.cont",
+    "bookName": "b",
+    "author": "div.book-tag span",
+    "category": "",
+    "bookUrl": "a[href^=\"/guwen/book_\"] @href"
+  },
+  "toc": {
+    "item": "a[href^=\"/guwen/bookv_\"]"
+  },
+  "chapter": {
+    "content": "div.contson",
+    "audio": "a[href^=\"javascript:PlayBookv\"] @href@url"
+  },
+  "crawl": {
+    "concurrency": 1,
+    "minIntervalMs": 500,
+    "maxIntervalMs": 1500,
+    "maxAttempts": 2
+  }
+}

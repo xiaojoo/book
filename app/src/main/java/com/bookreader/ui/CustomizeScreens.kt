@@ -230,7 +230,8 @@ fun SkinScreen(prefs: ReaderPrefs, onBack: () -> Unit) {
         }
         SectionLabel("背景图")
         Card {
-            Line("选一张图", sub = "只铺在小说正文那一屏", trailing = if (name.isBlank()) "没选" else name, on = { picker.launch(arrayOf("image/*")) })
+            Line("选一张图", sub = "铺在小说正文、AI 听书、有声书那三屏（漫画 / pdf / ppt 不铺）",
+                trailing = if (name.isBlank()) "没选" else name, on = { picker.launch(arrayOf("image/*")) })
             if (file != null) {
                 Hairline()
                 Line("不用背景图", color = Chrome.danger, on = {
