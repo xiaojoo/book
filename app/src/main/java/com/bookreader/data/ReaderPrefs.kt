@@ -1,29 +1,107 @@
 package com.bookreader.data
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.bookreader.core.model.BookPosition
 import com.bookreader.core.model.PageStyle
 
 /**
- * 阅读偏好和阅读位置。位置只存 absoluteOffset（页码是派生值，存了就会在换字号后说谎）。
+ * 哪一屏阅读器。设置按这一格分开存：六屏各有一份，在漫画里换的纸色不会串到小说里，
+ * 在阅读页调的字号也不会改掉有声书（他点名的口径：阅读模式里改的东西只在**当前这一屏**生效）。
  */
-class ReaderPrefs(context: Context) {
+enum class ReaderScope(val tag: String) {
+    NOVEL("novel"), LISTEN("listen"), COMIC("comic"), PDF("pdf"), PPT("ppt"), AUDIO("audio"),
+}
 
-    private val p = context.getSharedPreferences("reader", Context.MODE_PRIVATE)
+/**
+ * 阅读偏好和阅读位置。位置只存 absoluteOffset（页码是派生值，存了就会在换字号后说谎）。
+ *
+ * **两副面孔**：`ReaderPrefs(context)` 是外壳那一份（全局键），`forReader(范围)` 是某一屏阅读器那一份。
+ * 同一个 SharedPreferences，只有[下面标了「按屏」的那十几档]的键名带上 `.范围` 后缀。
+ *
+ * 读的时候**这一屏存过就读这一屏的，没存过就跟着全局那一份走** —— 不做一次性迁移，
+ * 于是第一次翻开任何一屏，看到的还是他今天这一套设置，只有他真在某屏里改过，那一屏才分叉出去。
+ * 写的时候永远写带后缀的那一份（不会去动全局，所以改漫画不会把外壳一起改掉）。
+ */
+class ReaderPrefs internal constructor(private val p: SharedPreferences, private val scope: ReaderScope?) {
 
+    constructor(context: Context) : this(context.getSharedPreferences("reader", Context.MODE_PRIVATE), null)
+
+    /** 翻开某一屏阅读器拿到的那一份设置。 */
+    fun forReader(s: ReaderScope): ReaderPrefs = ReaderPrefs(p, s)
+
+    /** 这一屏有没有存过这一格：哨兵值法，不用 `p.all`（那玩意每次调用复制一整张表，组合期要读十几格）。 */
+    private fun intOf(name: String, def: Int): Int {
+        val s = scope ?: return p.getInt(name, def)
+        val v = p.getInt("$name.${s.tag}", Int.MIN_VALUE)
+        return if (v == Int.MIN_VALUE) p.getInt(name, def) else v
+    }
+
+    private fun floatOf(name: String, def: Float): Float {
+        val s = scope ?: return p.getFloat(name, def)
+        val v = p.getFloat("$name.${s.tag}", Float.NaN)
+        return if (v.isNaN()) p.getFloat(name, def) else v
+    }
+
+    /** 布尔没有可用的哨兵值，所以**带后缀那一份存成 1/0**；全局那一份仍是布尔（老键不动）。 */
+    private fun boolOf(name: String, def: Boolean): Boolean {
+        val s = scope ?: return p.getBoolean(name, def)
+        val v = p.getInt("$name.${s.tag}", -1)
+        return if (v < 0) p.getBoolean(name, def) else v != 0
+    }
+
+    private fun stringOf(name: String, def: String?): String? {
+        val s = scope ?: return p.getString(name, def)
+        val v = p.getString("$name.${s.tag}", null)
+        return when {
+            // 键不在 = 这一屏没存过 → 跟着全局那一份
+            v == null -> p.getString(name, def)
+            // 空串是合法值（"用系统字体"就是空），所以"明确清空"另有哨兵，不能靠 null 表达
+            v == NULL_MARK -> null
+            else -> v
+        }
+    }
+
+    private fun putInt(name: String, v: Int) = p.edit { if (scope == null) putInt(name, v) else putInt("$name.${scope.tag}", v) }
+    private fun putFloat(name: String, v: Float) = p.edit { if (scope == null) putFloat(name, v) else putFloat("$name.${scope.tag}", v) }
+    private fun putBool(name: String, v: Boolean) = p.edit { if (scope == null) putBoolean(name, v) else putInt("$name.${scope.tag}", if (v) 1 else 0) }
+    private fun putString(name: String, v: String?) = p.edit {
+        if (scope == null) putString(name, v) else putString("$name.${scope.tag}", v ?: NULL_MARK)
+    }
+
+    /** 按屏：字号。 */
     var fontSizeSp: Float
-        get() = p.getFloat(KEY_FONT, 17f)
-        set(v) = p.edit { putFloat(KEY_FONT, v.coerceIn(12f, 34f)) }
+        get() = floatOf(KEY_FONT, 17f)
+        set(v) = putFloat(KEY_FONT, v.coerceIn(12f, 34f))
 
     /** 下面四个都是"档位派生出来的值"：面板上按的是档，不是连续滑块。 */
     val lineHeightMultiplier: Float get() = LINE_PRESETS[linePreset]
     val marginHorizontalDp: Float get() = MARGIN_PRESETS[marginPreset]
     val paragraphIndentEm: Float get() = if (paragraphIndent) 2f else 0f
 
+    /** 按屏：纸色六档（含夜间）。外壳那份走 [shellNight]，两边互不影响。 */
     var themeIndex: Int
-        get() = p.getInt(KEY_THEME, 0)
-        set(v) = p.edit { putInt(KEY_THEME, v) }
+        get() = intOf(KEY_THEME, 0)
+        set(v) = putInt(KEY_THEME, v)
+
+    /**
+     * 外壳（书架 / 搜书 / 精选 / 书签 / 我的那四页 + 状态栏）的夜间开关。
+     *
+     * 它和阅读器的 [themeIndex] **是两个主人**：「我的」页那颗只管外壳，翻开任何一屏阅读器
+     * 都不改它 —— 以前它写的是同一个 `theme`，所以在漫画里点一下夜间，书架也跟着黑了。
+     */
+    var shellNight: Boolean
+        get() = p.getBoolean("shellNight", legacyShellNight())
+        set(v) = p.edit { putBoolean("shellNight", v) }
+
+    /**
+     * 老版本没有 `shellNight` 这一格：第一次读它时拿当时那档全局纸色是不是"夜间"顶上，
+     * 别一升级外壳就自己跳回白天。`6` 档里只有最后一档是夜间（`ReaderTheme.Night`），
+     * 这里不 import 那一层是 :data 不该反过来依赖 :ui —— 序号写死，改动在那边编译会红。
+     */
+    private fun legacyShellNight(): Boolean = p.getInt(KEY_THEME, 0) == NIGHT_THEME_INDEX
+
 
     /**
      * 全局字号：只管**外壳那一层**（他点的「各算一档」）。阅读正文仍走上面那档 [fontSizeSp]，
@@ -52,76 +130,80 @@ class ReaderPrefs(context: Context) {
      * 全屏模式：阅读那一屏在**自己的菜单全收起来**的时候，把系统状态栏和底部导航条也盖过去。
      * 上下栏一亮起来就还回去 —— 顶着状态栏画我们那条栏就是两层叠在一起。
      */
+    /** 按屏：菜单全收时要不要连系统那两条栏一起盖过去。 */
     var fullScreen: Boolean
-        get() = p.getBoolean("fullScreen", false)
-        set(v) = p.edit { putBoolean("fullScreen", v) }
+        get() = boolOf("fullScreen", false)
+        set(v) = putBool("fullScreen", v)
 
     /** 底栏藏掉哪几格：存 `MainTab` 的名字，`;` 分隔。只藏得掉 搜书 / 精选 两颗（书架/书签/我的藏了就没出口了）。 */
     var hiddenTabs: String
         get() = p.getString("hiddenTabs", "") ?: ""
         set(v) = p.edit { putString("hiddenTabs", v) }
 
+    /** 按屏：读着不灭屏。 */
     var keepScreenOn: Boolean
-        get() = p.getBoolean(KEY_KEEP, true)
-        set(v) = p.edit { putBoolean(KEY_KEEP, v) }
+        get() = boolOf(KEY_KEEP, true)
+        set(v) = putBool(KEY_KEEP, v)
 
-    /** 0=简洁(瞬切) 1=平移。上下/仿真没做，UI 里点了会提示，不写进这里。 */
+    /** 按屏：0=简洁(瞬切) 1=平移。上下/仿真没做，UI 里点了会提示，不写进这里。 */
     var turnMode: Int
-        get() = p.getInt("turnMode", 0)
-        set(v) = p.edit { putInt("turnMode", v) }
+        get() = intOf("turnMode", 0)
+        set(v) = putInt("turnMode", v)
 
-    /** 行间距档位：0松散 1较宽 2适中 3紧凑 4密集 */
+    /** 按屏：行间距档位 0松散 1较宽 2适中 3紧凑 4密集 */
     var linePreset: Int
-        get() = p.getInt("linePreset", 2)
-        set(v) = p.edit { putInt("linePreset", v.coerceIn(0, 4)) }
+        get() = intOf("linePreset", 2)
+        set(v) = putInt("linePreset", v.coerceIn(0, 4))
 
-    /** 边距档位：0较窄 1适中 2较宽 */
+    /** 按屏：边距档位 0较窄 1适中 2较宽 */
     var marginPreset: Int
-        get() = p.getInt("marginPreset", 1)
-        set(v) = p.edit { putInt("marginPreset", v.coerceIn(0, 2)) }
+        get() = intOf("marginPreset", 1)
+        set(v) = putInt("marginPreset", v.coerceIn(0, 2))
 
+    /** 按屏：段首缩进两字。 */
     var paragraphIndent: Boolean
-        get() = p.getBoolean("indentOn", true)
-        set(v) = p.edit { putBoolean("indentOn", v) }
+        get() = boolOf("indentOn", true)
+        set(v) = putBool("indentOn", v)
 
+    /** 按屏：音量键翻页（漫画 / pdf / ppt 也各有一颗）。 */
     var volumePaging: Boolean
-        get() = p.getBoolean("volumePaging", false)
-        set(v) = p.edit { putBoolean("volumePaging", v) }
+        get() = boolOf("volumePaging", false)
+        set(v) = putBool("volumePaging", v)
 
-    /** 点左右两侧都往后翻（参考截图里那颗开关） */
+    /** 按屏：点左右两侧都往后翻（参考截图里那颗开关） */
     var bothSidesNext: Boolean
-        get() = p.getBoolean("bothSidesNext", false)
-        set(v) = p.edit { putBoolean("bothSidesNext", v) }
+        get() = boolOf("bothSidesNext", false)
+        set(v) = putBool("bothSidesNext", v)
 
-    /** 护眼模式：叠一层暖色，不是系统级滤光 */
+    /** 按屏：护眼模式，叠一层暖色，不是系统级滤光。 */
     var eyeCare: Boolean
-        get() = p.getBoolean("eyeCare", false)
-        set(v) = p.edit { putBoolean("eyeCare", v) }
+        get() = boolOf("eyeCare", false)
+        set(v) = putBool("eyeCare", v)
 
-    /** 亮度：-1f 表示跟随系统 */
+    /** 按屏：亮度，-1f 表示跟随系统。它本来就是"这一屏的窗口亮度"，所以按屏存才对得齐观感。 */
     var brightness: Float
-        get() = p.getFloat("brightness", -1f)
-        set(v) = p.edit { putFloat("brightness", v) }
+        get() = floatOf("brightness", -1f)
+        set(v) = putFloat("brightness", v)
 
-    /** 休息提醒分钟数，0=不提醒 */
+    /** 按屏：休息提醒分钟数，0=不提醒。 */
     var restMinutes: Int
-        get() = p.getInt("restMinutes", 0)
-        set(v) = p.edit { putInt("restMinutes", v) }
+        get() = intOf("restMinutes", 0)
+        set(v) = putInt("restMinutes", v)
 
-    /** 繁→简：只对繁体正文有效果，简体书开了也一个字不改（ICU 是恒等变换） */
+    /** 按屏：繁→简。只对繁体正文有效果，简体书开了也一个字不改（ICU 是恒等变换）。 */
     var convertTraditional: Boolean
-        get() = p.getBoolean("t2s", false)
-        set(v) = p.edit { putBoolean("t2s", v) }
+        get() = boolOf("t2s", false)
+        set(v) = putBool("t2s", v)
 
-    /** 自动阅读 */
+    /** 按屏：自动阅读。 */
     var autoRead: Boolean
-        get() = p.getBoolean("autoRead", false)
-        set(v) = p.edit { putBoolean("autoRead", v) }
+        get() = boolOf("autoRead", false)
+        set(v) = putBool("autoRead", v)
 
-    /** 自动阅读速度档，单位是"行/分钟" —— 上下和按页两种模式共用这一个口径 */
+    /** 按屏：自动阅读速度档，单位是"行/分钟" —— 上下和按页两种模式共用这一个口径 */
     var autoSpeedPreset: Int
-        get() = p.getInt("autoSpeed", 1)
-        set(v) = p.edit { putInt("autoSpeed", v.coerceIn(0, AUTO_LINES_PER_MIN.lastIndex)) }
+        get() = intOf("autoSpeed", 1)
+        set(v) = putInt("autoSpeed", v.coerceIn(0, AUTO_LINES_PER_MIN.lastIndex))
 
     val autoLinesPerMinute: Int get() = AUTO_LINES_PER_MIN[autoSpeedPreset]
 
@@ -138,10 +220,10 @@ class ReaderPrefs(context: Context) {
             )
         }
 
-    /** 正文字体：null = 系统默认 */
+    /** 按屏：正文字体。null = 系统默认。 */
     var fontPath: String?
-        get() = p.getString("fontPath", null)
-        set(v) = p.edit { putString("fontPath", v) }
+        get() = stringOf("fontPath", null)
+        set(v) = putString("fontPath", v)
 
     /** 昵称：只存在这台机上，没有账号体系。 */
     var nickname: String
@@ -149,8 +231,8 @@ class ReaderPrefs(context: Context) {
         set(v) = p.edit { putString("nickname", v.take(12)) }
 
     var fontLabel: String
-        get() = p.getString("fontLabel", "系统默认") ?: "系统默认"
-        set(v) = p.edit { putString("fontLabel", v) }
+        get() = stringOf("fontLabel", "系统默认") ?: "系统默认"
+        set(v) = putString("fontLabel", v)
 
     /** 书架排布：false = 图墙（三列封面），true = 列表（一行一本）。默认图墙，和改之前一致。 */
     var shelfList: Boolean
@@ -498,6 +580,16 @@ class ReaderPrefs(context: Context) {
         const val KEY_FONT = "fontSizeSp"
         const val KEY_THEME = "theme"
         const val KEY_KEEP = "keepScreenOn"
+
+        /** `ReaderTheme.ALL` 里「夜间」那一档的序号。:data 不反向依赖 :ui，所以这里写死一个数。 */
+        const val NIGHT_THEME_INDEX = 5
+
+        /**
+         * 「这一屏明确没有值」的哨兵。字体文件名那一格要能表达三件事：没选过（跟全局）、
+         * 选了某个文件、**明确改回系统字体** —— 前两件靠键在不在，第三件没哨兵就写不出来。
+         * 真文件名不可能长成这样（都是 `xxx.ttf` / `xxx.otf` 这种带后缀的）。
+         */
+        private const val NULL_MARK = "__none__"
 
         /** 参考截图的 5 档行间距：松散/较宽/适中/紧凑/密集 */
         val LINE_PRESETS = floatArrayOf(2.10f, 1.90f, 1.65f, 1.45f, 1.30f)

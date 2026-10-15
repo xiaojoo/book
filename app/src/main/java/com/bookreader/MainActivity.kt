@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.BookSourceStore
 import com.bookreader.data.ReaderPrefs
+import com.bookreader.data.ReaderScope
 import com.bookreader.core.model.BookMeta
 import com.bookreader.ui.AppScaffold
 import com.bookreader.ui.AudioReaderScreen
@@ -46,7 +47,6 @@ import com.bookreader.ui.Chrome
 import com.bookreader.ui.ComicReaderScreen
 import com.bookreader.ui.PdfReaderScreen
 import com.bookreader.ui.PptReaderScreen
-import com.bookreader.ui.ReaderTheme
 import com.bookreader.ui.MainTab
 import com.bookreader.ui.SearchPage
 import com.bookreader.ui.TipHost
@@ -149,10 +149,12 @@ private fun Root(
         Log.d("ReaderPerf", "view-import ok=${outcome.isSuccess} title=$title")
     }
 
-    // 外壳的夜间跟着阅读页那六档：启动时、换 tab 时、从阅读页回来时各同步一次。
+    // 外壳的夜间 = 外壳自己那一格（「我的」页那颗开关写的就是它）。
+    // **只在壳子上同步**：翻开某一屏之后，那一屏的夜间归它自己那档设置管（见各阅读器里的
+    // `Chrome.night = theme.night`），回到书架再按这一格还回来 —— 阅读模式里改的东西不该把外壳改掉。
     // 全局字号/字体也在这里补启动的那一次 —— 改它们的那一屏是当场写进 Chrome 的
     LaunchedEffect(tab, openBook) {
-        Chrome.night = ReaderTheme.of(prefs.themeIndex).night
+        if (openBook == null) Chrome.night = prefs.shellNight
         Chrome.uiScale = prefs.uiFontScale
         Chrome.fontFile = prefs.uiFontFile
     }
@@ -175,7 +177,9 @@ private fun Root(
         if (sec != null) AiSettingsScreen(prefs = prefs, section = sec, onBack = { aiSection = null })
     } else if (customize != null) {
         when (customize) {
-            Customize.Skin -> SkinScreen(prefs, onBack = { customize = null })
+            // 预览拿的是**小说正文那一屏**那档纸色：背景图压的那层纸按各屏自己的色，
+            // 这里只能挑一屏当代表（那一屏也是这张图最主要的使用场景）。
+            Customize.Skin -> SkinScreen(prefs.forReader(ReaderScope.NOVEL), onBack = { customize = null })
             Customize.Font -> FontScreen(prefs, onChanged = { }, onBack = { customize = null })
             Customize.Menu -> MenuScreen(
                 prefs,
@@ -226,19 +230,31 @@ private fun Root(
         val meta = remember(id) { library.list().firstOrNull { it.id == id } }
         if (meta == null) {
             LaunchedEffect(id) { openBook = null }
-        } else if (meta.kind == BookMeta.PDF) {
-            PdfReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
-        } else if (meta.kind == BookMeta.PPTX) {
-            PptReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
-        } else if (meta.kind == BookMeta.COMIC) {
-            ComicReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
-        } else if (meta.kind == BookMeta.AUDIO) {
-            AudioReaderScreen(
-                bookId = id, title = meta.title, author = meta.author,
-                library = library, prefs = prefs, onBack = { openBook = null },
-            )
         } else {
-            ReaderScreen(bookId = id, library = library, prefs = prefs, startChapter = openChapter, onBack = { openBook = null })
+            // 每一屏阅读器拿的是**自己那一份**设置（`forReader`）：在这一屏改的纸色 / 字号 / 亮度 / 翻页
+            // 只写进「键.<这一屏>」，不动全局那一份、也不碰别的屏。没改过的格子读到的是全局旧值，
+            // 所以升级完第一眼看到的样子和升级前一样。
+            val rp = when (meta.kind) {
+                BookMeta.PDF -> prefs.forReader(ReaderScope.PDF)
+                BookMeta.PPTX -> prefs.forReader(ReaderScope.PPT)
+                BookMeta.COMIC -> prefs.forReader(ReaderScope.COMIC)
+                BookMeta.AUDIO -> prefs.forReader(ReaderScope.AUDIO)
+                else -> prefs.forReader(ReaderScope.NOVEL)
+            }
+            if (meta.kind == BookMeta.PDF) {
+                PdfReaderScreen(bookId = id, title = meta.title, library = library, prefs = rp, onBack = { openBook = null })
+            } else if (meta.kind == BookMeta.PPTX) {
+                PptReaderScreen(bookId = id, title = meta.title, library = library, prefs = rp, onBack = { openBook = null })
+            } else if (meta.kind == BookMeta.COMIC) {
+                ComicReaderScreen(bookId = id, title = meta.title, library = library, prefs = rp, onBack = { openBook = null })
+            } else if (meta.kind == BookMeta.AUDIO) {
+                AudioReaderScreen(
+                    bookId = id, title = meta.title, author = meta.author,
+                    library = library, prefs = rp, onBack = { openBook = null },
+                )
+            } else {
+                ReaderScreen(bookId = id, library = library, prefs = rp, startChapter = openChapter, onBack = { openBook = null })
+            }
         }
     }
 }

@@ -767,20 +767,30 @@ fun rememberScreenRotate(): Pair<Boolean, (Boolean) -> Unit> {
 }
 
 /**
- * 「夜间模式」那颗开关的落地：和「我的」页那颗同一个主人（`prefs.themeIndex` + `Chrome.night`），
- * 两处各写一套就会出现"这页切了夜间、那页回来又变回白天"。
+ * 「夜间模式」那颗开关的落地。**读的是传进来那一份设置**（pdf / pptx 各自一份，见 `ReaderPrefs.forReader`），
+ * 所以在这两屏里点夜间不会把小说、漫画的纸色一起改掉 —— 它只改这一屏那一格 `theme.pdf` / `theme.ppt`。
+ *
+ * pdf / pptx 整屏用的是外壳那套色板（`Chrome.*`），所以这一屏的明暗要**当场映进 `Chrome.night`**，
+ * 不然按下去只有状态栏的图标换了色、正文一动不动。退出这一屏时 `MainActivity` 按 `shellNight` 还回去。
+ *
  * 开夜之前那一档纸色要记住：关掉夜间该还回他原来选的那档，不是一律拍回"纸白"。
  */
 @Composable
 fun rememberNightToggle(prefs: ReaderPrefs): Pair<Boolean, (Boolean) -> Unit> {
-    var dayBefore by rememberSaveable { mutableIntStateOf(if (Chrome.night) 0 else prefs.themeIndex) }
-    return Chrome.night to { on ->
+    var theme by rememberSaveable { mutableIntStateOf(prefs.themeIndex) }
+    var dayBefore by rememberSaveable {
+        mutableIntStateOf(if (ReaderTheme.of(theme).night) ReaderTheme.Paper.ordinal else theme)
+    }
+    val night = ReaderTheme.of(theme).night
+    LaunchedEffect(night) { Chrome.night = night }
+    return night to { on ->
         if (on) {
-            dayBefore = prefs.themeIndex
-            prefs.themeIndex = ReaderTheme.ALL.lastIndex
+            dayBefore = theme
+            theme = ReaderTheme.Night.ordinal
         } else {
-            prefs.themeIndex = dayBefore
+            theme = dayBefore
         }
+        prefs.themeIndex = theme
         Chrome.night = on
     }
 }
