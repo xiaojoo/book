@@ -1,5 +1,6 @@
 package com.bookreader.data
 
+import com.bookreader.booksource.FileAudioStore
 import com.bookreader.booksource.audioPartName
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,6 +91,27 @@ class AudioBookTest {
         val back = AudioBook(dir).episodes()
         assertEquals("两行同一集不该在目录里出现两次", 2, back.size)
         assertEquals("补抓之后该读到新的那个段数", 2, back.first { it.index == 0 }.parts)
+    }
+
+    /**
+     * 同一集那份正文（"音频和正文在同一页"那一族才有，古文岛）读回来就是写进去的那一串。
+     *
+     * 读的一头在 `AudioBook.text`、写的一头在 `FileAudioStore.putText`，文件名只有一份定义 ——
+     * 这一条钉的就是它俩认的确实是同一个文件。
+     */
+    @Test
+    fun theTextStoredBesideAnEpisodeComesBackForThatEpisode() {
+        val dir = book(Triple(0, "第一回", listOf("https://c/a.mp3")))
+        File(dir, "${BookLibrary.AUDIO_FILE}/d0").let { File(it, FileAudioStore.TEXT).writeText("第一行\n\n第二行", Charsets.UTF_8) }
+        assertEquals("第一行\n\n第二行", AudioBook(dir).text(0))
+    }
+
+    /** 播客那一族没有正文这一格：读回来是**空串**，界面上据此不开跟读，不是报错、也不是崩溃。 */
+    @Test
+    fun anEpisodeWithNoTextReadsAsEmptyNotMissing() {
+        val dir = book(Triple(0, "第一集", listOf("https://c/a.mp3")))
+        assertEquals("", AudioBook(dir).text(0))
+        assertEquals("没有这一集也回空串，别抛", "", AudioBook(dir).text(9))
     }
 
     /** 段数为 0 的那一行不算"这一集有"：它只该在灰着的那几百行里。 */

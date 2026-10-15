@@ -15,7 +15,13 @@ import java.net.URI
 private const val FORMAT_XML = "xml"
 internal const val FORMAT_JSON = "json"
 
-/** [pick] 的多值那一份：同一个写法选出**每一个**匹配，顺序就是页面上的顺序。 */
+/** [pick] 的多值那一份：同一个写法选出**每一个**匹配，顺序就是页面上的顺序。
+ *
+ * 属性名那一格后面还可以再挂一个函数后缀，目前一个：`@href@url` = 从取回来的那串里抠出第一个
+ * `http(s)://…` 地址。要它是因为有一族站把音频地址写在 `href="javascript:Play(9801,'id','https://x/a.mp3',…)"`
+ * 的参数串里 —— 整串不是地址，可它又确确实实摆在 HTML 里，不用跑 JS，正则一下就出来。
+ * 没有 `http` 子串时回空串（调用方按"这一章没抓到"处理，不交半条假地址）。
+ */
 fun pickAll(root: Element, spec: String): List<String> {
     val t = spec.trim()
     if (t.isEmpty()) return emptyList()
@@ -23,15 +29,22 @@ fun pickAll(root: Element, spec: String): List<String> {
     val sel = (if (at < 0) t else t.substring(0, at)).trim()
     val attr = if (at < 0) null else t.substring(at + 1).trim().ifEmpty { null }
     if (sel.isEmpty()) return listOf(pick(root, t))
+    val fn = attr?.substringAfter('@', "")?.takeIf { it.isNotEmpty() }
+    val name = attr?.substringBefore('@')?.ifEmpty { null }
     return root.select(sel).mapNotNull { e ->
         when {
-            attr == null -> (e.ownText().ifBlank { e.text() }).trim().ifEmpty { null }
-            attr == "text" -> e.ownText().trim().ifEmpty { null }
-            attr == "href" || attr == "src" -> e.attr("abs:$attr").trim().ifEmpty { null }
-            else -> e.attr(attr).trim().ifEmpty { null }
-        }
+            name == null -> (e.ownText().ifBlank { e.text() }).trim().ifEmpty { null }
+            name == "text" -> e.ownText().trim().ifEmpty { null }
+            name == "href" || name == "src" -> e.attr("abs:$name").trim().ifEmpty { null }
+            else -> e.attr(name).trim().ifEmpty { null }
+        }?.let { if (fn == "url") firstUrl(it) else it }?.ifEmpty { null }
     }
 }
+
+/** 从一整串里抠出第一个 http(s) 地址（到引号、空格、尖括号为界）。 */
+private val URL_IN_TEXT = Regex("https?://[^\"'<>\\s)]+")
+
+private fun firstUrl(v: String): String = URL_IN_TEXT.find(v)?.value ?: ""
 
 /** 一章漫画 = 一排图：这一章页面上 [ChapterRule.image] 选中的那些地址，按页面顺序。 */
 fun chapterImages(rule: Rule, body: String, at: String): List<String> {

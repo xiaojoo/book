@@ -20,11 +20,15 @@ class ShippedRulesTest {
 
     @Test
     fun everyShippedRuleLoadsAndItsIdMatchesItsFileName() {
-        val shipped = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss")
+        val shipped = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss", "gushiwen-audio")
         val all = shipped.map { RuleLoader.load(text(it), it) }
         println("[随包] " + all.map { it.id + "=" + it.kind })
         assertEquals("文件名和 id 必须一一对上", shipped, all.map { it.id })
-        assertTrue("每一条都得能搜（随包源没有 search 就是装上也是一条灰的）", all.all { it.canSearch })
+        // 古文岛那一条**故意没有 search**（站内搜索 302 到登录页），它走「精选」的 hot 入口，
+        // 所以这一条判据不能写成"每一条都得能搜"——那会把一个真源判成坏的
+        assertTrue("除古文岛外每条都得能搜", all.filter { it.id != "gushiwen-audio" }.all { it.canSearch })
+        assertTrue("没有搜索口的那条必须有 hot，否则它在界面上根本没有入口",
+            all.filter { !it.canSearch }.all { it.hot != null })
     }
 
     /**

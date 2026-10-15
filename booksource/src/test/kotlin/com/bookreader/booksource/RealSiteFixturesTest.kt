@@ -366,6 +366,31 @@ class RealSiteFixturesTest {
         }
     }
 
+    /**
+     * 古文岛那一页（真站抓回来的，`live/` 里那份是红楼梦第一回）：**音频地址和整回正文在同一页上**。
+     *
+     * 量过的数：正文容器 `div.contson` 里 67 段、非空白 7768 格（汉字 6617），
+     * 同一页的 `PlayBookv(...)` 参数串里那支 mp3 是 36,357,164 字节、ffprobe 读出 2272.3 秒
+     * ⇒ 0.2925 秒/格。跟读那一屏"按字数把整集时长摊给每一句"用的就是这一页的这两样，
+     * 所以这一条同时是那张表的**字数口径**的锚：容器一换、段一掉，摊出来的时刻整本都错。
+     */
+    @Test
+    fun gushiwenChapterGivesItsTextAndItsAudioUrlFromTheSamePage() {
+        val (html, base) = live("gushiwen-chapter.html", "https://www.gushiwen.cn/guwen/bookv_b630af160f65.aspx")
+        val r = rule("gushiwen-audio")
+        val text = chapterText(r, html, base)
+        val audio = chapterAudio(r, html, base)
+        val lines = text.split('\n').filter { it.isNotEmpty() }
+        println("[古文岛] 段=${lines.size} 格=${text.count { !it.isWhitespace() }} 音频=${audio.size} 首段=${lines.first().take(18)}")
+        assertEquals("一回一支整回音频", 1, audio.size)
+        assertTrue("地址是那台 OSS 上的 mp3：" + audio.single(), audio.single().startsWith("https://oss.guwendao.net/"))
+        assertEquals("67 段（这一回真数是 67）", 67, lines.size)
+        assertTrue("整回正文 7763 格这个量级不能掉：" + text.count { !it.isWhitespace() }, text.count { !it.isWhitespace() } > 7000)
+        assertTrue("首段是正文那句、不是站点那串按钮", lines.first().startsWith("此开卷第一回也"))
+        assertTrue("段首那个全角空格要清掉（阅读器自己缩进）", lines.all { it == it.trim() })
+        assertTrue("注释/翻译那两盒不在正文容器里", !text.contains("内容简介") && !text.contains("赏析"))
+    }
+
     private fun fixtureHtml(name: String): String = String(res("/live/$name"), Charsets.UTF_8)
 
     @Test

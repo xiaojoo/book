@@ -246,7 +246,7 @@ fun AiSettingsScreen(prefs: ReaderPrefs, section: AiSection, onBack: () -> Unit)
                     )
                     AiVoiceCache.fileFor(context, vKind, prefs.aiVoiceModel, prefs.aiVoiceId, line)
                         // 和听书页同一条：wav 头里的长度要写成真实字节数，不然时长报 745:39、进度条钉在 0
-                        .apply { writeBytes(AiSpeech.wavSizesFixed(bytes)) }
+                        .apply { writeBytes(AiSpeech.storedAudio(bytes)) }
                 }
             }
             vBusy = false

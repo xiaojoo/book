@@ -213,7 +213,7 @@ object AiVoiceCache {
      */
     fun heal(file: File) {
         val raw = file.readBytes()
-        val fixed = AiSpeech.wavSizesFixed(raw)
+        val fixed = AiSpeech.storedAudio(raw)
         if (fixed !== raw) file.writeBytes(fixed)
     }
 

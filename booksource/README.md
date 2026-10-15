@@ -34,13 +34,18 @@
 }
 ```
 
-取值字段只有三种写法：
+取值字段只有四种写法：
 
 | 写法 | 意思 |
 | --- | --- |
 | `"css"` | 第一个匹配元素的文字（先取元素自己那截，空了才取整棵子树，免得"书名+作者"整行都成了书名） |
 | `"css@href"` | 第一个匹配元素的属性；`href`/`src` 自动按这一页的地址补成绝对链接 |
+| `"css@href@url"` | 属性后面再挂一档 `@url`：从取回来那**一整串**里抠出第一个 `http(s)://…` 地址 |
 | `""` | 这一项不取 |
+
+`@url` 那一档只为一种站：地址不写在 `href` 本身，而埋在 `href="javascript:PlayBookv(9801,'id','https://x/a.mp3',…)"`
+的参数串里。它**不跑 JS**，正则一下就出来；串里没有 `http` 就回空串，调用方按"这一处没抓到"处理，
+不交半条假地址下去（判据 `AudioTest.urlSuffixPullsTheAddressOutOfAJavaScriptParameterString`）。
 
 `toc.nextPage` 指向的是那种"第 1/2/3 页"的下拉框（`select#indexselect > option`），
 每个 option 的 `value` 填进 `toc.url` 的 `%s`；没有下拉框就留空，只抓当前这一页。
@@ -79,6 +84,8 @@
 ### `kind` = audio：一章（一集）= 一段音频
 
 `chapter.content` 可以不写，改写 **`chapter.audio`** —— 和 `chapter.image` 同一套（`pickAll`，顺序就是页面顺序）：
+（**也可以两格都写**：音频和正文在同一页的那一族，抓一集时那一页已经在手上了，顺手把正文一起抽走，
+落在同一集目录里的 `text.txt`。抽不到正文**不影响**这一集算成功 —— 见 `AudioTest.anEpisodeWithNoTextIsStillAWholeEpisode`。）：
 
 ```json5
 "kind": "audio",
@@ -102,8 +109,10 @@
 
 落盘的形状在 `:app` 那半边：`filesDir/books/<id>/audio/<集地址 sha1>/parts.tsv` + 按地址 sha1 命名的那些段。
 
-**随包的有声源：一条**，是喜马拉雅**公开分发**的播客 RSS（形状见下一节）。
-另一条走"自己家 CDN + 签名"的路径（恋听网 ting55）探明了**不能用**，证据链写在主 README 的「有声书」那一节，别再来问第二遍。
+**随包的有声源：两条**。一条是喜马拉雅**公开分发**的播客 RSS（形状见下一节）；
+另一条是古文岛（`gushiwen-audio`）那种**同一页既给整回正文、又给整回朗读 mp3** 的古籍有声（形状见再下面那节）——
+它是界面上"文字跟着读"那一屏唯一的来源。
+还有一条走"自己家 CDN + 签名"的路径（恋听网 ting55）探明了**不能用**，证据链写在主 README 的「有声书」那一节，别再来问第二遍。
 
 ### `toc.format` 和 `toc.href`：书页不是 HTML 的那一族
 
@@ -144,6 +153,38 @@ Referer 改发书页那一页。判据 `selfAudioDownloadsTheLinkItselfAndNeverA
 
 **为什么这一条能通而 ting55 不通**：RSS 是播客行业的分发契约 —— Apple 的抓取器就是同款纯 HTTP 客户端，
 站点必须让裸请求拿到字节，否则别人的播放器放不了。这一族不是"找到了不设防的站"，是**找到了按协议必须设防不了的地方**。
+
+### 音频和正文在同一页的那一族（`gushiwen-audio`）
+
+上面那一族没有"集页"这一层（`@self`），这一族正相反：**一回的音频地址和整回正文就在同一页上**，
+所以 `chapter` 两格都写，抓一集时一次请求两样都拿走：
+
+```json5
+{
+  "id": "gushiwen-audio", "name": "古文岛·古籍有声", "homeUrl": "https://www.gushiwen.cn/", "kind": "audio",
+  "hot": { "url": "https://www.gushiwen.cn/guwen/Default.aspx?p=1&type=%E5%B0%8F%E8%AF%B4%E5%AE%B6%E7%B1%BB",
+           "group": "div.sonspic", "item": "div.cont", "bookName": "b",
+           "author": "div.book-tag span", "bookUrl": "a[href^\"/guwen/book_\"] @href" },
+  "toc": { "item": "a[href^\"/guwen/bookv_\"]" },
+  "chapter": { "content": "div.contson",
+               "audio": "a[href^=\"javascript:PlayBookv\"] @href@url" },
+  "crawl": { "concurrency": 1, "minIntervalMs": 500, "maxIntervalMs": 1500, "maxAttempts": 2 }
+}
+```
+
+三个不寻常的地方：
+
+- **没有 `search`**：站内搜索 302 到登录页。这一条的入口是「精选 → 有声」（`hot` 指向分类页，实测 10 本）。
+  随包那条判据因此不是"每条源都得能搜"，改成"**没有 `search` 的那条必须有 `hot`**" ——
+  否则一个真源会被判成坏的（`ShippedRulesTest.everyShippedRuleLoadsAndItsIdMatchesItsFileName`）。
+- **地址在 JS 参数串里**：`@href@url` 那一档（见上面取值表）。
+- **`content` + `audio` 同时写**：正文和音频一起落盘，落在同一集目录里的 `text.txt`；
+  抽不到正文时这一集**仍算成功**（音频才是这本书的主体，缺文字只等于"这一集没得跟读"）。
+
+真站复验的数（2026-10-15）：精选 10 本 → 红楼页目录 **120 回一页给全** → 第一回 **36,357,164 字节**、
+开头 `49 44 33 04` = ID3 → 同一页正文 **67 段 / 非空白 7768 格**（`RealSiteFixturesTest.gushiwenChapterGivesItsTextAndItsAudioUrlFromTheSamePage`）。
+那一页的 mp3 用 ffprobe 读出 **2272.3 秒** ⇒ 0.2925 秒/格 —— 界面上"文字跟着读"按这一比例摊时刻，
+量法与漂移上限写在 `:app` 的 `FollowAlign` 顶上。
 
 ### `kind` = paper：一篇 = 一支 PDF
 

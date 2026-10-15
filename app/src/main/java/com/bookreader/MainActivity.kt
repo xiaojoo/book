@@ -233,7 +233,10 @@ private fun Root(
         } else if (meta.kind == BookMeta.COMIC) {
             ComicReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
         } else if (meta.kind == BookMeta.AUDIO) {
-            AudioReaderScreen(bookId = id, title = meta.title, library = library, prefs = prefs, onBack = { openBook = null })
+            AudioReaderScreen(
+                bookId = id, title = meta.title, author = meta.author,
+                library = library, prefs = prefs, onBack = { openBook = null },
+            )
         } else {
             ReaderScreen(bookId = id, library = library, prefs = prefs, startChapter = openChapter, onBack = { openBook = null })
         }

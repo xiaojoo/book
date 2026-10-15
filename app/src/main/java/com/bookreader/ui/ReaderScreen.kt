@@ -607,7 +607,7 @@ fun ReaderScreen(
                     // 合成 + 落盘。存之前先把 wav 的两个长度字段写成真实字节数（阿里回的是 0x7FFFFFFF）
                     val synth: (String) -> File = { voice ->
                         AiVoiceCache.fileFor(context, kind, prefs.aiVoiceModel, voice, spoken).apply {
-                            writeBytes(AiSpeech.wavSizesFixed(AiVoiceClient.synthesize(
+                            writeBytes(AiSpeech.storedAudio(AiVoiceClient.synthesize(
                                 prefs.aiVoiceBaseUrl, plain ?: "", kind, prefs.aiVoiceModel, voice, spoken,
                             )))
                             // 只有真发过请求才记一笔：缓存命中不重复记，否则「缓存历史」会被"重听"灌满。
@@ -748,7 +748,7 @@ fun ReaderScreen(
                         } else {
                             try {
                                 withContext(Dispatchers.IO) {
-                                    f.writeBytes(AiSpeech.wavSizesFixed(AiVoiceClient.synthesize(
+                                    f.writeBytes(AiSpeech.storedAudio(AiVoiceClient.synthesize(
                                         prefs.aiVoiceBaseUrl, plain, kind, prefs.aiVoiceModel, voice, spoken,
                                     )))
                                     AiVoiceCache.remember(context, f, bookId, range.first, text.length)
@@ -794,7 +794,8 @@ fun ReaderScreen(
     val percent = (engine.progress() * 1000).roundToInt() / 10f
 
     // 「我的 → 皮肤管理」上传的那张图：铺在正文底下，上面压一层当前那档纸色（浓淡由那一屏的滑块定）。
-    // 只有小说这一屏铺 —— pdf/pptx 要保留原件版面、漫画整屏是图（他点的口径）
+    // 小说正文和它的**听书页**两屏铺（同一份 `PaperBackground`，2026-10-15 他点名"听书页面也实现图片背景那套"）；
+    // pdf/pptx 不铺要保留原件版面、漫画整屏是图（他点的口径）
     val bgFile = themeFile(context, prefs.bgImageFile)
     val bgBmp = scaledImage(bgFile, viewport.width)
     // 有图的时候正文那一层要透，否则 PageView / ScrollReader 自己那张纸就把图盖住了
@@ -843,31 +844,11 @@ fun ReaderScreen(
         // 栏收时走冻住的那一份，两个数不等，一收一放正文就整块跳一下（他报的"屏幕晃动"）。
         Box(Modifier.fillMaxSize().background(theme.pageColor)) {
         if (bgBmp != null) {
-            // 图**永远铺满整块窗口**：它的高度不跟着藏栏变，所以收放菜单那几下它一个像素都不挪
-            // （原来这一层自己让开系统栏，栏一收它整块跳上去 84px —— 那就是他看到的闪烁）
-            Image(
-                bitmap = bgBmp,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-            // 压的就是当前那档纸色：换纸色这一层跟着换，正文底下不会露出两张不同的底
-            Box(Modifier.fillMaxSize().background(theme.pageColor.copy(alpha = prefs.bgDim)))
-            // 菜单亮着的时候，状态栏 / 导航条那两条用实心纸色**盖住**图 —— 盖，不改任何一层的高度。
-            // 高度取"藏了栏也不变"那一份（systemBarHeights），所以这一对在切换时不抖、也不会把图挤回去
-            if (chrome.value > 0f) {
-                val barInset = systemBarHeights()
-                Box(
-                    Modifier.align(Alignment.TopCenter).fillMaxWidth()
-                        .height(barInset.calculateTopPadding())
-                        .background(theme.pageColor.copy(alpha = chrome.value))
-                )
-                Box(
-                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                        .height(barInset.calculateBottomPadding())
-                        .background(theme.pageColor.copy(alpha = chrome.value))
-                )
-            }
+            // 图 + 压那一层纸：和听书屏共用同一份实现（见 `PaperBackground`）
+            PaperBackground(theme, bgBmp, prefs.bgDim)
+            // 菜单亮着的时候那两条实心纸（盖住图、不改任何一层的高度）：和有声书屏共用一份 `BarPaper`，
+            // 这一屏传的是淡出值 chrome.value，那一屏传的是 0/1
+            BarPaper(theme, chrome.value)
         }
         // 让开系统栏的那一层：正文和我们自己那两条栏都在这格里面（背景图在外面，才铺得满）
         Box(Modifier.fillMaxSize().fixedBarsPadding()) {
@@ -1138,167 +1119,15 @@ fun ReaderScreen(
                     )
                 }
 
-                val lr = listening
-                if (lr != null && listenPage) {
-                    // 上一段/下一段只在"有没有"上判，跳过去还要重新合成 —— 这两颗按字符计费，
-                    // 所以不做"自动连念"，一次一下是他点出来的
-                    val hasPrev = remember(lr) { engine.prevParagraph(lr) != null }
-                    val hasNext = remember(lr) { engine.nextParagraph(lr) != null }
-                    ListenScreen(
-                        theme = theme,
-                        chapterTitle = "第 ${engine.currentChapterIndex + 1} 章 " +
-                            engine.book.chapters[engine.currentChapterIndex].title,
-                        bookTitle = engine.book.meta.title,
-                        meta = engine.book.meta,
-                        paragraph = engine.book.cache.slice(lr.first, (lr.last - lr.first + 1).toInt()),
-                        busy = listenBusy,
-                        playing = aiPlaying,
-                        hasPrev = hasPrev,
-                        hasNext = hasNext,
-                        player = aiVoice,
-                        rate = listenRate,
-                        sleepEndsAt = sleepEndsAt,
-                        onCollapse = { listenPage = false },
-                        onToggle = { aiPlaying = aiVoice.toggle() },
-                        onStop = { stopListening() },
-                        onPrev = { engine.prevParagraph(lr)?.let { speakParagraph(it) } },
-                        onNext = { engine.nextParagraph(lr)?.let { speakParagraph(it) } },
-                        onRate = { r ->
-                            // 本地变速：音频已经在手里，不重新合成、不再花一次钱。
-                            // 暂停的时候 setRate 只记下值，不会把播放顶起来（那是平台行为，播放器里挡掉了）
-                            listenRate = r
-                            aiVoice.rate = r
-                            aiVoice.applyRate()
-                        },
-                        // 「原文」= 收起这一屏，把正文翻到正在念的那一段
-                        onOriginal = {
-                            listenPage = false
-                            page = engine.jumpToOffset(lr.first)
-                            jumpToken++
-                        },
-                        onSleep = { minutes ->
-                            sleepEndsAt = if (minutes <= 0) 0L else System.currentTimeMillis() + minutes * 60_000L
-                        },
-                        onResynth = { speakParagraph(lr, force = true) },
-                        voiceId = voiceNow,
-                        // 可选那一列按服务商各存一份：OpenAI 的 alloy 不是阿里的音色名，混着列出来选了必 400
-                        // 他自己抄的那一列排前面，内置的常见音色补后面（第一屏不是一排空的）
-                        voices = AiSpeech.voiceOptions(
-                            AiSpeech.voices(prefs.aiVoiceChoices(prefs.aiVoiceKind)),
-                            AiSpeech.commonVoices(
-                                runCatching { AiSpeech.Kind.valueOf(prefs.aiVoiceKind) }
-                                    .getOrDefault(AiSpeech.Kind.OpenAi),
-                                prefs.aiVoiceModel,
-                            ),
-                        ),
-                        autoNext = autoNext,
-                        autoNextChapter = autoNextChapter,
-                        shareFocus = shareFocus,
-                        onVoice = { v ->
-                            prefs.aiVoiceId = v
-                            voiceNow = v
-                        },
-                        onAutoNext = { v ->
-                            autoNext = v
-                            prefs.listenAutoNext = v
-                        },
-                        onAutoNextChapter = { v ->
-                            autoNextChapter = v
-                            prefs.listenAutoNextChapter = v
-                        },
-                        onShareFocus = { v ->
-                            shareFocus = v
-                            prefs.listenShareFocus = v
-                            // 下一段新建播放器时套上去；手里这段已经开播了，改焦点属性要重开，不为了它打断
-                            aiVoice.shareFocus = v
-                        },
-                        onHistory = {
-                            voiceHistory = AiVoiceCache.history(context).filter { it.bookId == bookId }
-                            historyPage = true
-                        },
-                        onFixes = { fixesPage = true },
-                        onToc = { tocPage = true },
-                        onPaper = { picked ->
-                            // 和快捷面板那排色块同一个主人：改的就是 themeIndex，回阅读页也是这一档
-                            theme = picked
-                            prefs.themeIndex = picked.ordinal
-                        },
-                    )
-                }
-
-                if (historyPage) {
-                    ListenHistoryPage(
-                        theme = theme,
-                        entries = voiceHistory,
-                        preview = { off, n -> engine.book.cache.slice(off, n).replace('\n', ' ') },
-                        totalBytes = voiceHistory.sumOf { it.bytes },
-                        onBack = { historyPage = false },
-                        onReplay = { e ->
-                            historyPage = false
-                            // 按偏移找回那一段（记的是原文偏移，所以表改过也能对上），再走同一条缓存路
-                            val r = engine.paragraphRange(e.offset)
-                            speakParagraph(r)
-                            page = engine.jumpToOffset(r.first)
-                            jumpToken++
-                        },
-                    )
-                }
-
-                if (fixesPage) {
-                    ListenFixesPage(
-                        theme = theme,
-                        table = prefs.aiFixes,
-                        hits = voiceHistory.size,
-                        onBack = { fixesPage = false },
-                        onSave = { prefs.aiFixes = it },
-                    )
-                }
-
-                if (tocPage) {
-                    ListenTocPage(
-                        theme = theme,
-                        chapters = engine.book.chapters.chapters,
-                        current = engine.currentChapterIndex,
-                        cached = tocCached,
-                        batch = voiceBatch,
-                        scope = tocScope,
-                        auto = tocAuto,
-                        onScope = {
-                            tocScope = it
-                            prefs.listenCacheScope = it
-                        },
-                        onAuto = { v ->
-                            tocAuto = v
-                            prefs.listenCacheAuto = v
-                            // 开关拨到开：这一档当场就跑起来，不用再点「立即缓存」
-                            if (v && tocScope != 0) {
-                                lastAutoChapter = engine.currentChapterIndex
-                                cacheChapters(cacheRange(tocScope, engine.currentChapterIndex, engine.chapterCount))
-                            }
-                        },
-                        onBack = { tocPage = false },
-                        onPick = { ci ->
-                            // 跳章 = 落到那一章的第一个字，然后从那里开始听（这一段该花钱由你点这一行决定）
-                            val r = engine.paragraphRange(engine.book.chapters[ci].startOffset)
-                            tocPage = false
-                            listenPage = true
-                            page = engine.jumpToOffset(r.first)
-                            jumpToken++
-                            speakParagraph(r)
-                        },
-                        onCacheChapter = { ci -> cacheChapters(listOf(ci)) },
-                        onCacheRange = { list -> cacheChapters(list) },
-                        onBatchStop = { voiceBatch.stop = true },
-                    )
-                }
 
                 if (eyeCare) {
                     Box(Modifier.fillMaxSize().background(Color(0x26FF9A3C)))
                 }
             }
 
-            // 顶/底栏画在听书页**之后**（同一层 Box 的后面），所以听书页开着时它俩会压在人家上面 ——
-            // 收起听书页也不该顺手把菜单叫出来：`bars` 保持原值，只是这一会儿不画
+            // 整屏页（听书页 + 它开的三页）已经搬到**铺满窗口那一层**、画在这一层之后，所以它们开着时
+            // 这两条本来就被盖住。下面那道闸门仍然留着，理由不是层序而是状态：收起听书页不该顺手把
+            // 菜单叫出来 —— `bars` 保持原值，只是这一会儿不画
             if ((bars || chrome.value > 0f) && !listenPage && !historyPage && !fixesPage && !tocPage) {
                 Row(
                     modifier = Modifier
@@ -1460,6 +1289,166 @@ fun ReaderScreen(
 
                     Panel.None -> Unit
                 }
+            }
+        }
+
+        // 四张整屏页住在**铺满窗口**那一层（让安全区那一层之外）：AI 听书页的背景图要撑到状态栏和
+        // 导航条底下，图压在它们后面才叫"撑满"。内容各自让开安全区 —— 听书页自己内部有一份，
+        // 另外三页（缓存历史 / 听书纠错 / 目录）外面套一份，几何和搬之前逐位相同。
+        val lr = listening
+        if (lr != null && listenPage) {
+            // 上一段/下一段只在"有没有"上判，跳过去还要重新合成 —— 这两颗按字符计费，
+            // 所以不做"自动连念"，一次一下是他点出来的
+            val hasPrev = remember(lr) { engine.prevParagraph(lr) != null }
+            val hasNext = remember(lr) { engine.nextParagraph(lr) != null }
+            ListenScreen(
+                theme = theme,
+                bgBmp = bgBmp,
+                bgDim = prefs.bgDim,
+                chapterTitle = "第 ${engine.currentChapterIndex + 1} 章 " +
+                    engine.book.chapters[engine.currentChapterIndex].title,
+                bookTitle = engine.book.meta.title,
+                meta = engine.book.meta,
+                paragraph = engine.book.cache.slice(lr.first, (lr.last - lr.first + 1).toInt()),
+                busy = listenBusy,
+                playing = aiPlaying,
+                hasPrev = hasPrev,
+                hasNext = hasNext,
+                player = aiVoice,
+                rate = listenRate,
+                sleepEndsAt = sleepEndsAt,
+                onCollapse = { listenPage = false },
+                onToggle = { aiPlaying = aiVoice.toggle() },
+                onStop = { stopListening() },
+                onPrev = { engine.prevParagraph(lr)?.let { speakParagraph(it) } },
+                onNext = { engine.nextParagraph(lr)?.let { speakParagraph(it) } },
+                onRate = { r ->
+                    // 本地变速：音频已经在手里，不重新合成、不再花一次钱。
+                    // 暂停的时候 setRate 只记下值，不会把播放顶起来（那是平台行为，播放器里挡掉了）
+                    listenRate = r
+                    aiVoice.rate = r
+                    aiVoice.applyRate()
+                },
+                // 「原文」= 收起这一屏，把正文翻到正在念的那一段
+                onOriginal = {
+                    listenPage = false
+                    page = engine.jumpToOffset(lr.first)
+                    jumpToken++
+                },
+                onSleep = { minutes ->
+                    sleepEndsAt = if (minutes <= 0) 0L else System.currentTimeMillis() + minutes * 60_000L
+                },
+                onResynth = { speakParagraph(lr, force = true) },
+                voiceId = voiceNow,
+                // 可选那一列按服务商各存一份：OpenAI 的 alloy 不是阿里的音色名，混着列出来选了必 400
+                // 他自己抄的那一列排前面，内置的常见音色补后面（第一屏不是一排空的）
+                voices = AiSpeech.voiceOptions(
+                    AiSpeech.voices(prefs.aiVoiceChoices(prefs.aiVoiceKind)),
+                    AiSpeech.commonVoices(
+                        runCatching { AiSpeech.Kind.valueOf(prefs.aiVoiceKind) }
+                            .getOrDefault(AiSpeech.Kind.OpenAi),
+                        prefs.aiVoiceModel,
+                    ),
+                ),
+                autoNext = autoNext,
+                autoNextChapter = autoNextChapter,
+                shareFocus = shareFocus,
+                onVoice = { v ->
+                    prefs.aiVoiceId = v
+                    voiceNow = v
+                },
+                onAutoNext = { v ->
+                    autoNext = v
+                    prefs.listenAutoNext = v
+                },
+                onAutoNextChapter = { v ->
+                    autoNextChapter = v
+                    prefs.listenAutoNextChapter = v
+                },
+                onShareFocus = { v ->
+                    shareFocus = v
+                    prefs.listenShareFocus = v
+                    // 下一段新建播放器时套上去；手里这段已经开播了，改焦点属性要重开，不为了它打断
+                    aiVoice.shareFocus = v
+                },
+                onHistory = {
+                    voiceHistory = AiVoiceCache.history(context).filter { it.bookId == bookId }
+                    historyPage = true
+                },
+                onFixes = { fixesPage = true },
+                onToc = { tocPage = true },
+                onPaper = { picked ->
+                    // 和快捷面板那排色块同一个主人：改的就是 themeIndex，回阅读页也是这一档
+                    theme = picked
+                    prefs.themeIndex = picked.ordinal
+                },
+            )
+        }
+        Box(Modifier.fillMaxSize().fixedBarsPadding()) {
+            if (historyPage) {
+                ListenHistoryPage(
+                    theme = theme,
+                    entries = voiceHistory,
+                    preview = { off, n -> engine.book.cache.slice(off, n).replace('\n', ' ') },
+                    totalBytes = voiceHistory.sumOf { it.bytes },
+                    onBack = { historyPage = false },
+                    onReplay = { e ->
+                        historyPage = false
+                        // 按偏移找回那一段（记的是原文偏移，所以表改过也能对上），再走同一条缓存路
+                        val r = engine.paragraphRange(e.offset)
+                        speakParagraph(r)
+                        page = engine.jumpToOffset(r.first)
+                        jumpToken++
+                    },
+                )
+            }
+
+            if (fixesPage) {
+                ListenFixesPage(
+                    theme = theme,
+                    table = prefs.aiFixes,
+                    hits = voiceHistory.size,
+                    onBack = { fixesPage = false },
+                    onSave = { prefs.aiFixes = it },
+                )
+            }
+
+            if (tocPage) {
+                ListenTocPage(
+                    theme = theme,
+                    chapters = engine.book.chapters.chapters,
+                    current = engine.currentChapterIndex,
+                    cached = tocCached,
+                    batch = voiceBatch,
+                    scope = tocScope,
+                    auto = tocAuto,
+                    onScope = {
+                        tocScope = it
+                        prefs.listenCacheScope = it
+                    },
+                    onAuto = { v ->
+                        tocAuto = v
+                        prefs.listenCacheAuto = v
+                        // 开关拨到开：这一档当场就跑起来，不用再点「立即缓存」
+                        if (v && tocScope != 0) {
+                            lastAutoChapter = engine.currentChapterIndex
+                            cacheChapters(cacheRange(tocScope, engine.currentChapterIndex, engine.chapterCount))
+                        }
+                    },
+                    onBack = { tocPage = false },
+                    onPick = { ci ->
+                        // 跳章 = 落到那一章的第一个字，然后从那里开始听（这一段该花钱由你点这一行决定）
+                        val r = engine.paragraphRange(engine.book.chapters[ci].startOffset)
+                        tocPage = false
+                        listenPage = true
+                        page = engine.jumpToOffset(r.first)
+                        jumpToken++
+                        speakParagraph(r)
+                    },
+                    onCacheChapter = { ci -> cacheChapters(listOf(ci)) },
+                    onCacheRange = { list -> cacheChapters(list) },
+                    onBatchStop = { voiceBatch.stop = true },
+                )
             }
         }
         }

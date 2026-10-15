@@ -164,7 +164,20 @@ class BookSourceStore(private val context: Context) {
          * `shuhaige` = 书海阁小说网：第一台**一章切好几页**的源（剑来 第52章 = 十页），所以它是
          * `chapter.nextPage` 的第一家真用户；那一条的判据也在 `RealSiteFixturesTest` 里。
          */
-        val BUILTIN = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss")
+        val BUILTIN = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss", "gushiwen-audio")
+
+        /**
+         * `gushiwen-audio` 是第一条"**同一页同时给正文和朗读音频**"的源（古文岛）：
+         * 章回小说和史部，一回一条目录、一回一支整回 mp3（红楼梦第一回实测 36,357,164 字节、ID3 开头、
+         * 无签名无 cookie）。它**没有 `search` 那一段** —— 站内搜索 302 到登录页，所以入口走「精选 → 有声」
+         * 那一档（`hot` 指向分类页 `Default.aspx?type=小说家类`，实测 10 本）。
+         * 音频地址埋在 `href="javascript:PlayBookv(…,'https://….mp3',…)"` 的参数串里，
+         * 用 `chapter.audio` 的 `@href@url` 那一档抠出来（不跑 JS，正则取第一个 http 地址）。
+         *
+         * 它也是**唯一有"文字跟着读"那一屏**的一条：`chapter.content=div.contson` 把同一页那整回正文
+         * 一起抓下来（实测 67 段、非空白 7768 格），和音频落在同一集的目录里（`text.txt`）。
+         * 播客那一条没有这一格 —— 站点不给正文，那一屏就还是封面。
+         */
 
         /**
          * `podcast-rss` 是有声那一族的第一条：搜索走 Apple 的 iTunes 播客索引（公开、免登录），

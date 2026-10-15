@@ -210,6 +210,92 @@ class AiSpeechTest {
         return out.toByteArray()
     }
 
+    /** 一支真形状的 PCM wav：`fmt ` 里 audioFormat / 声道 / 采样率 / 位宽都填对（上面那个 `wav` 助手填的是零）。 */
+    private fun pcmWav(rate: Int, channels: Int, bits: Int, samples: IntArray): ByteArray {
+        val bytesPer = bits / 8
+        val payload = ByteArray(samples.size * channels * bytesPer)
+        samples.forEachIndexed { i, v ->
+            when (bytesPer) {
+                2 -> { payload[i * 2] = (v and 0xFF).toByte(); payload[i * 2 + 1] = ((v shr 8) and 0xFF).toByte() }
+                3 -> {
+                    payload[i * 3] = (v and 0xFF).toByte()
+                    payload[i * 3 + 1] = ((v shr 8) and 0xFF).toByte()
+                    payload[i * 3 + 2] = ((v shr 16) and 0xFF).toByte()
+                }
+                else -> payload[i] = v.toByte()
+            }
+        }
+        val fmt = ByteArray(16)
+        fun put(o: ByteArray, at: Int, v: Int, n: Int) {
+            for (i in 0 until n) o[at + i] = ((v shr (8 * i)) and 0xFF).toByte()
+        }
+        put(fmt, 0, 1, 2); put(fmt, 2, channels, 2); put(fmt, 4, rate, 4)
+        put(fmt, 8, rate * channels * bytesPer, 4); put(fmt, 12, channels * bytesPer, 2); put(fmt, 14, bits, 2)
+        val out = java.io.ByteArrayOutputStream()
+        out.write("RIFF".toByteArray()); out.write(le(36 + payload.size)); out.write("WAVE".toByteArray())
+        out.write("fmt ".toByteArray()); out.write(le(16)); out.write(fmt)
+        out.write("data".toByteArray()); out.write(le(payload.size)); out.write(payload)
+        return out.toByteArray()
+    }
+
+    /** 数一支 wav 的 data 有多少帧（帧 = 声道 × 位宽/8 字节）。 */
+    private fun frames(b: ByteArray, channels: Int, bits: Int): Int =
+        (le32(b, 40)) / (channels * bits / 8)
+
+    /**
+     * 听书页"文字比声音快"的根因之一：TTS 回的语音**开头带 0.7~0.9 秒静音**，
+     * 而正文是按 `已过时长 ÷ 总时长` 折算的。剪在存盘之前，`MediaPlayer` 报的时长就是说话的时长。
+     */
+    @Test
+    fun leadingAndTrailingSilenceIsCutBeforeTheClipIsStored() {
+        val rate = 24000
+        val tone = IntArray(rate * 400 / 1000) { if (it % 2 == 0) 8000 else -8000 }     // 0.4 秒的"有声"
+        val s = IntArray(rate * 500 / 1000)                                              // 两头各 0.5 秒静音
+        val clip = pcmWav(rate, 1, 16, s + tone + s)
+        val out = AiSpeech.storedAudio(clip)
+        val kept = frames(out, 1, 16)
+        assertEquals("该剪到只剩那 0.4 秒语音：$kept 帧", rate * 400 / 1000, kept)
+        assertEquals("剪完 RIFF 长度要跟着改", out.size - 8, le32(out, 4))
+        assertEquals("剪完 data 长度要跟着改", kept * 2, le32(out, 40))
+    }
+
+    /** 幂等：这一格在每次播放前都会走一遍（旧缓存靠它补头），剪第二次必须一口都不吃。 */
+    @Test
+    fun trimmingAnAlreadyTrimmedClipChangesNothing() {
+        val rate = 24000
+        val tone = IntArray(rate * 400 / 1000) { if (it % 2 == 0) 8000 else -8000 }
+        val s = IntArray(rate / 2)
+        val once = AiSpeech.storedAudio(pcmWav(rate, 1, 16, s + tone + s))
+        assertSame("剪过一遍的再跑一遍该回同一个数组", once, AiSpeech.storedAudio(once))
+        assertEquals("帧数不该再掉", frames(once, 1, 16), frames(AiSpeech.storedAudio(once), 1, 16))
+    }
+
+    @Test
+    fun aClipWithNoEdgeSilenceOrAnAllSilentClipIsReturnedUntouched() {
+        val rate = 24000
+        val loud = IntArray(rate / 2) { if (it % 2 == 0) 9000 else -9000 }
+        val noSilence = pcmWav(rate, 1, 16, loud)
+        assertSame("本来就没有首尾静音：回同一个数组（调用方靠这个决定要不要回写文件）",
+            noSilence, AiSpeech.storedAudio(noSilence))
+        val allSilent = pcmWav(rate, 1, 16, IntArray(rate / 2))
+        assertSame("整段静音也不许剪成空文件", allSilent, AiSpeech.storedAudio(allSilent))
+    }
+
+    @Test
+    fun anythingThatIsNotPcmWavGoesThroughTheTrimUntouched() {
+        val mp3 = ByteArray(4000) { 0x24 }
+        mp3[0] = 'I'.code.toByte(); mp3[1] = 'D'.code.toByte(); mp3[2] = '3'.code.toByte()
+        assertSame("mp3 不猜容器", mp3, AiSpeech.wavSilenceTrimmed(mp3))
+        val float = pcmWav(24000, 1, 16, IntArray(12000) { if (it % 2 == 0) 8000 else -8000 })
+        float[20] = 3.toByte()      // fmt.audioFormat = 3（IEEE float）：位宽含义变了，不动
+        assertSame("非 PCM 的 wav 不动", float, AiSpeech.wavSilenceTrimmed(float))
+        // 24 位的满量程是 8388607：给 1/8 满量程（≈ −18 dBFS），7000 那种数值在 24 位量纲上就是静音
+        val stereo24 = pcmWav(48000, 2, 24, IntArray(48000) + IntArray(24000) { 1_000_000 } + IntArray(48000))
+        val cut = AiSpeech.wavSilenceTrimmed(stereo24)
+        assertTrue("24 位立体声（他真机那两段的形状）也该剪得动：${frames(cut, 2, 24)} 帧",
+            cut !== stereo24 && frames(cut, 2, 24) < frames(stereo24, 2, 24))
+    }
+
     /**
      * 「缓存范围」那一档到底缓存哪几章。判据钉的是"从正在听这一章**之后**数 N 章"：
      * 当前章不在里面（它正一段一段播着、一段一段进缓存），越界要自己收住，`null` 才是整本。

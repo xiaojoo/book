@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,7 +40,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,7 +53,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,6 +91,8 @@ private val RATES = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 fun AudioReaderScreen(
     bookId: String,
     title: String,
+    /** 书架上那一行"曹雪芹 · 120 章"的同一格：录音开头念回目时**连作者一起念**，跟读的零点要用它。 */
+    author: String,
     library: BookLibrary,
     prefs: ReaderPrefs,
     onBack: () -> Unit,
@@ -134,10 +142,52 @@ fun AudioReaderScreen(
     var positionMs by remember { mutableIntStateOf(0) }
     var durationMs by remember { mutableIntStateOf(0) }
     var rate by remember { mutableFloatStateOf(prefs.audioRate) }
+    /**
+     * 这一集的正文。只有"音频和正文在同一页上"的那一族（古文岛）才有 —— 播客那一族读回来是空串，
+     * 空串就不开跟读那一格（不是报错，那一族本来没正文可跟）。
+     */
+    var text by remember { mutableStateOf("") }
+    /**
+     * 跟读开没开。**有正文那一集默认开着**（他给的那张截图上，中间那一格就是正文占满）。
+     * 每一集换了正文会重新开一次，手动关过这一本就不再自作主张（`followChosen` 记那一笔）。
+     */
+    var follow by remember { mutableStateOf(false) }
+    var followChosen by remember(bookId) { mutableStateOf(false) }
+    /** 自动跟随：人一滚就停下（不然他翻到别处看，一秒又被拽回来），滚回当前那一段那一颗再续上。 */
+    var pinned by remember { mutableStateOf(true) }
 
     val have = remember(episodes) { episodes.associateBy { it.index } }
     val names = if (outline.size >= episodes.size) outline else episodes.map { it.title }
     val total = maxOf(names.size, episodes.size)
+
+    /**
+     * 跟读能不能开：**这一集有正文、而且这一集只有一段音频**。
+     *
+     * 后一半不是保守，是算法：时刻是把字数摊在 `durationMs` 上，而那是**当前那一段**的时长，
+     * 拿它摊一整集的字数会把第二段该念的那些句全算进第一段里 —— 开着一张错表比不开更糟。
+     * （古文岛那一族一回就是一段，所以这一条对它不起作用。）
+     */
+    val canFollow = text.isNotBlank() && parts.size == 1
+    /**
+     * 跟读表用的文本 = **集名 + 作者 + 正文**，不是正文单独。
+     *
+     * 录音开头先把回目连作者念一遍，才念正文。量过（古文岛·红楼梦第 1/3/118 回、三国第 1 回）：
+     * 第一处 ≥0.4 秒的停顿起点 **6.14 / 3.76 / 7.00 / 6.18 秒**，按「(回目＋作者) 字数 × 0.28 秒/字」
+     * 推是 6.16 / 6.16 / 7.00 / 6.16 秒 —— 三回对到 0.1 秒内（第三回那一处落在回目中间）。
+     * 第 118 回 25 字 → 7.00 秒正对上 7.00 秒，是"作者也被念出来"最硬的一条（只算回目会推成 6.2 秒）。
+     *
+     * 这一格值多少，拿真停顿逐句比过：表上**只摆回目**（19 格 = 5.93 秒）时正文第一句真开口在
+     * **6.95 秒**，表早 1.02 秒，整回带号中位 **+0.49 秒**；把作者补进去（22 格 = 6.86 秒）之后
+     * 开头只差 **0.09 秒**，整回带号中位 +0.32 秒、|误差| 中位 1.03 → **0.92 秒**。
+     * 再往上把书名也记进去（25 格 = 7.80 秒）会把头**过冲**成晚 0.85 秒 —— 那是"文字比声音慢"的形状，不做。
+     *
+     * 站点交回来的正文里**没有**这一句（`div.contson` 从正文第一个字就开始），不摆进表就等于整张表
+     * 从第一秒起比声音早一句（句均 21 字 ≈ 6.5 秒）—— 他报的"声音还在上一句，文字变红已经在下一句"。
+     */
+    val announce = listOf(names.getOrNull(episode)?.trim().orEmpty(), author.trim()).joinToString(" ").trim()
+    val followText = if (announce.isEmpty()) text else "$announce\n$text"
+    val map = remember(followText, durationMs) { FollowAlign.align(followText, durationMs.toLong()) }
+    val line = if (canFollow && follow) map.sentenceAt(positionMs.toLong()) else -1
 
     val player = remember { AiVoicePlayer() }
     DisposableEffect(bookId) {
@@ -241,6 +291,9 @@ fun AudioReaderScreen(
         positionMs = 0
         durationMs = 0
         parts = withContext(Dispatchers.IO) { book.parts(episode) }
+        text = withContext(Dispatchers.IO) { book.text(episode) }
+        pinned = true
+        if (text.isNotBlank() && parts.size == 1 && !followChosen) follow = true
         if (parts.isEmpty()) {
             playing = false
             if (have[episode] == null) note = "第 ${episode + 1} 集还没下到本机 —— 到「本书信息」点「下载全书」补齐"
@@ -274,191 +327,339 @@ fun AudioReaderScreen(
 
     ApplySystemBars(darkIcons = !theme.night)
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            // **先铺满整块窗口，再让内容让开安全区** —— 顺序反了底色就只铺到安全区里，
-            // 状态栏和导航条背后露的是窗口默认色，换夜间/换背景看不出变化（ApplySystemBars 上面那条注释
-            // 写的就是这个坑；小说那一屏的外层正是 `fillMaxSize().background(pageColor)`）
-            .background(theme.pageColor)
-            .safeDrawingPadding()
-            // 点屏幕：开着一层就先收那一层；什么都没开，就是收放上下那两条栏（他点名的第二条）
-            .pointerInput(Unit) {
-                detectTapGestures {
-                    if (sheet != AudioSheet.None) sheet = AudioSheet.None else bars = !bars
-                }
-            },
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            // 顶栏：‹ 书名 + 集名（多段的集带上"第几段"）/ 右边这一段的时间。点屏幕收这一条（他点名的）
-            if (bars) Row(
-                Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                BackSlot("返回书架", onBack)
-                Column(Modifier.weight(1f).padding(start = 2.dp)) {
-                    Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, maxLines = 1)
-                    Text(
-                        (names.getOrNull(episode) ?: "第 ${episode + 1} 集") +
-                            (if (parts.size > 1) " · 第 ${partIndex + 1}/${parts.size} 段" else ""),
-                        fontSize = 12.sp,
-                        color = theme.faintColor,
-                        maxLines = 1,
-                    )
-                }
-                Text(
-                    if (durationMs > 0) mmss(positionMs) + " / " + mmss(durationMs) else "--:--",
-                    fontSize = 13.sp,
-                    color = theme.faintColor,
-                )
-            }
-
-            // 中间：封面 + 集名 + 那句回话
-            Column(
-                Modifier.fillMaxWidth().weight(1f),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                AudioCover(library.coverFile(bookId), theme)
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    names.getOrNull(episode)?.ifBlank { "第 ${episode + 1} 集" } ?: "第 ${episode + 1} 集",
-                    fontSize = 17.sp,
-                    color = theme.inkColor,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    modifier = Modifier.padding(horizontal = 32.dp),
-                )
-                if (parts.isEmpty()) {
-                    Text(
-                        "这一集的音频不在本机",
-                        fontSize = 12.sp,
-                        color = theme.faintColor,
-                        modifier = Modifier.padding(top = 10.dp),
-                    )
-                }
-                note?.let {
-                    Text(
-                        it,
-                        fontSize = 12.sp,
-                        color = theme.accentColor,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(top = 10.dp, start = 24.dp, end = 24.dp),
-                    )
-                }
-            }
-
-            // 控制区：进度条 + 时间两个角 + 三颗键（那一排文字按钮已经收进下面的底栏了）
-            Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 14.dp)) {
-                SlideBar(
-                    value = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
-                    enabled = durationMs > 0,
-                    theme = theme,
-                    onChange = { seekTo(it) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                    Text(mmss(positionMs), fontSize = 11.sp, color = theme.faintColor)
-                    Spacer(Modifier.weight(1f))
-                    Text("-" + mmss((durationMs - positionMs).coerceAtLeast(0)), fontSize = 11.sp, color = theme.faintColor)
-                }
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
+    // 「我的 → 皮肤管理」上传的那张背景图，这一屏也要铺（2026-10-15 他点名"这个没有实现上传的图片
+    // 背景显示啊"）。位图按整块窗口的宽解、压的那层纸色仍是皮肤管理那一格的滑块 —— 和阅读屏、
+    // 听书页共用同一份 `PaperBackground`，三屏换纸色 / 换浓淡一起换。
+    val bgBmp = scaledImage(themeFile(context, prefs.bgImageFile), contentSizePx().width)
+    // **先铺满整块窗口，再让内容让开安全区**：图要伸到状态栏和导航条底下，正文和那两条栏要让开。
+    // 顺序反了图就只铺到安全区里，栏背后露的是窗口默认色（`ApplySystemBars` 上面那条注释写的就是这个坑）
+    Box(Modifier.fillMaxSize().background(theme.pageColor)) {
+        PaperBackground(theme, bgBmp, prefs.bgDim)
+        // 上下那两条栏亮着的时候，状态栏 / 导航条那两条盖成实心纸 —— 和阅读屏同一条口径、同一份实现
+        BarPaper(theme, if (bars) 1f else 0f)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+                // 点屏幕：开着一层就先收那一层；什么都没开，就是收放上下那两条栏（他点名的第二条）
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        if (sheet != AudioSheet.None) sheet = AudioSheet.None else bars = !bars
+                    }
+                },
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                // 顶栏：‹ 书名 + 集名（多段的集带上"第几段"）/ 右边这一段的时间。点屏幕收这一条（他点名的）
+                if (bars) Row(
+                    Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    TransportKey(R.drawable.ic_prev_para, "上一集", theme.inkColor) { step(false) }
-                    Spacer(Modifier.width(28.dp))
-                    Box(
-                        Modifier
-                            .size(64.dp)
-                            .clip(CircleShape)
-                            .background(theme.accentColor)
-                            .tap { centerKey() },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            painterResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play),
-                            contentDescription = if (playing) "暂停" else "播放",
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp),
+                    BackSlot("返回书架", onBack)
+                    Column(Modifier.weight(1f).padding(start = 2.dp)) {
+                        Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, maxLines = 1)
+                        Text(
+                            (names.getOrNull(episode) ?: "第 ${episode + 1} 集") +
+                                (if (parts.size > 1) " · 第 ${partIndex + 1}/${parts.size} 段" else ""),
+                            fontSize = 12.sp,
+                            color = theme.faintColor,
+                            maxLines = 1,
                         )
                     }
-                    Spacer(Modifier.width(28.dp))
-                    TransportKey(R.drawable.ic_next_para, "下一集", theme.inkColor) { step(true) }
+                    Text(
+                        if (durationMs > 0) mmss(positionMs) + " / " + mmss(durationMs) else "--:--",
+                        fontSize = 13.sp,
+                        color = theme.faintColor,
+                    )
+                    // 这一集有正文才给这一颗（没正文那一族点了是颗死控件）。名字写的是**按下去会看到什么**
+                    if (canFollow) {
+                        Text(
+                            if (follow) "封面" else "正文",
+                            fontSize = 12.sp,
+                            color = theme.faintColor,
+                            modifier = Modifier
+                                .padding(start = 12.dp)
+                                .tap { follow = !follow; followChosen = true; pinned = true },
+                        )
+                    }
                 }
-            }
 
-            // 底栏：和小说/漫画**同一颗** ReaderBottomBar（图标上、文字下、58dp、顶部一条发丝线）。
-            // 第二颗给的是「语速」而不是「书签」—— 这一族没有"第几页"可记，那一格空着就是颗死控件。
-            // 和顶栏同一条命运：点屏幕收放（栏收着时那句回话还在中间那一格里看得见，不会变成"点了没反应"）
-            if (bars) ReaderBottomBar(
-                theme = theme,
-                onToc = { sheet = if (sheet == AudioSheet.Episodes) AudioSheet.None else AudioSheet.Episodes },
-                onMarks = { sheet = if (sheet == AudioSheet.Rates) AudioSheet.None else AudioSheet.Rates },
-                onToggleNight = { themeIndex = if (theme.night) 0 else ReaderTheme.ALL.lastIndex },
-                onSettings = { sheet = if (sheet == AudioSheet.Settings) AudioSheet.None else AudioSheet.Settings },
-                marksLabel = "语速" + rateLabel(rate),
-                marksIcon = R.drawable.ic_speed,
-            )
-        }
-
-        if (sheet == AudioSheet.Episodes) {
-            EpisodesDrawer(
-                names = names,
-                have = have,
-                current = episode,
-                theme = theme,
-                onPick = { goEpisode(it) },
-                onClose = { sheet = AudioSheet.None },
-            )
-        }
-
-        if (sheet == AudioSheet.Rates) {
-            PanelShell(theme) {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                // 中间那一格：有正文又开着跟读 → 正文占满（当前那句染成强调色）；否则还是封面 + 集名
+                if (canFollow && follow) {
+                    FollowPane(
+                        map = map,
+                        line = line,
+                        theme = theme,
+                        fontSizeSp = prefs.fontSizeSp,
+                        lineHeight = prefs.lineHeightMultiplier,
+                        pinned = pinned,
+                        onUnpin = { pinned = false },
+                        onBackToCurrent = { pinned = true },
+                        note = note,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                } else Column(
+                    Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("语速", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, modifier = Modifier.weight(1f))
-                    Text("关闭", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.tap { sheet = AudioSheet.None })
+                    AudioCover(library.coverFile(bookId), theme)
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        names.getOrNull(episode)?.ifBlank { "第 ${episode + 1} 集" } ?: "第 ${episode + 1} 集",
+                        fontSize = 17.sp,
+                        color = theme.inkColor,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                    )
+                    if (parts.isEmpty()) {
+                        Text(
+                            "这一集的音频不在本机",
+                            fontSize = 12.sp,
+                            color = theme.faintColor,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
+                    }
+                    note?.let {
+                        Text(
+                            it,
+                            fontSize = 12.sp,
+                            color = theme.accentColor,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(top = 10.dp, start = 24.dp, end = 24.dp),
+                        )
+                    }
                 }
-                Text(
-                    "一档 = 原速。选一档立刻套到当前这一段上，换集不换（存在「我的 → 阅读偏好」同一格）。",
-                    fontSize = 12.sp,
-                    color = theme.faintColor,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 22.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    RATES.forEach { v ->
-                        val on = v == rate
+
+                // 控制区：进度条 + 时间两个角 + 三颗键（那一排文字按钮已经收进下面的底栏了）
+                Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 14.dp)) {
+                    SlideBar(
+                        value = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f,
+                        enabled = durationMs > 0,
+                        theme = theme,
+                        onChange = { seekTo(it) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                        Text(mmss(positionMs), fontSize = 11.sp, color = theme.faintColor)
+                        Spacer(Modifier.weight(1f))
+                        Text("-" + mmss((durationMs - positionMs).coerceAtLeast(0)), fontSize = 11.sp, color = theme.faintColor)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TransportKey(R.drawable.ic_prev_para, "上一集", theme.inkColor) { step(false) }
+                        Spacer(Modifier.width(28.dp))
                         Box(
                             Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (on) theme.accentColor else theme.pageColor)
-                                .tap { pickRate(v) },
+                                .size(64.dp)
+                                .clip(CircleShape)
+                                .background(theme.accentColor)
+                                .tap { centerKey() },
                             contentAlignment = Alignment.Center,
                         ) {
-                            Text(rateLabel(v), fontSize = 13.sp, color = if (on) Color.White else theme.inkColor)
+                            Icon(
+                                painterResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play),
+                                contentDescription = if (playing) "暂停" else "播放",
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(28.dp))
+                        TransportKey(R.drawable.ic_next_para, "下一集", theme.inkColor) { step(true) }
+                    }
+                }
+
+                // 底栏：和小说/漫画**同一颗** ReaderBottomBar（图标上、文字下、58dp、顶部一条发丝线）。
+                // 第二颗给的是「语速」而不是「书签」—— 这一族没有"第几页"可记，那一格空着就是颗死控件。
+                // 和顶栏同一条命运：点屏幕收放（栏收着时那句回话还在中间那一格里看得见，不会变成"点了没反应"）
+                if (bars) ReaderBottomBar(
+                    theme = theme,
+                    onToc = { sheet = if (sheet == AudioSheet.Episodes) AudioSheet.None else AudioSheet.Episodes },
+                    onMarks = { sheet = if (sheet == AudioSheet.Rates) AudioSheet.None else AudioSheet.Rates },
+                    onToggleNight = { themeIndex = if (theme.night) 0 else ReaderTheme.ALL.lastIndex },
+                    onSettings = { sheet = if (sheet == AudioSheet.Settings) AudioSheet.None else AudioSheet.Settings },
+                    marksLabel = "语速" + rateLabel(rate),
+                    marksIcon = R.drawable.ic_speed,
+                )
+            }
+
+            if (sheet == AudioSheet.Episodes) {
+                EpisodesDrawer(
+                    names = names,
+                    have = have,
+                    current = episode,
+                    theme = theme,
+                    onPick = { goEpisode(it) },
+                    onClose = { sheet = AudioSheet.None },
+                )
+            }
+
+            if (sheet == AudioSheet.Rates) {
+                PanelShell(theme) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("语速", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, modifier = Modifier.weight(1f))
+                        Text("关闭", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.tap { sheet = AudioSheet.None })
+                    }
+                    Text(
+                        "一档 = 原速。选一档立刻套到当前这一段上，换集不换（存在「我的 → 阅读偏好」同一格）。",
+                        fontSize = 12.sp,
+                        color = theme.faintColor,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 22.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        RATES.forEach { v ->
+                            val on = v == rate
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (on) theme.accentColor else theme.pageColor)
+                                    .tap { pickRate(v) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(rateLabel(v), fontSize = 13.sp, color = if (on) Color.White else theme.inkColor)
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if (sheet == AudioSheet.Settings) {
-            // 和漫画那一屏点「设置」开的同一格（同一份实现，不各写一遍）
-            BrightnessBackgroundPanel(
-                theme = theme,
-                brightness = brightness,
-                onBrightness = { brightness = it; prefs.brightness = it },
-                onFollowSystem = { brightness = -1f; prefs.brightness = -1f },
-                onPickTheme = { themeIndex = ReaderTheme.ALL.indexOf(it) },
+            if (sheet == AudioSheet.Settings) {
+                // 和漫画那一屏点「设置」开的同一格（同一份实现，不各写一遍）
+                BrightnessBackgroundPanel(
+                    theme = theme,
+                    brightness = brightness,
+                    onBrightness = { brightness = it; prefs.brightness = it },
+                    onFollowSystem = { brightness = -1f; prefs.brightness = -1f },
+                    onPickTheme = { themeIndex = ReaderTheme.ALL.indexOf(it) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 跟读那一格：整集正文摆满，当前那一句染成强调色，**只在当前这一句滚出屏幕时**才把它拉回来。
+ *
+ * 两处都是量出来的形态，不是随手定的：
+ *  - **不挂点击**。这一格上的字只是给人读的，点屏幕正中在这屏一贯是"收放上下那两条栏"；
+ *    给它挂一颗跳播之后，实测一次中心点击把播放从 7:45 拽回 7:35（那一段的开头）—— 他点名的"点屏幕中心翻页"。
+ *    要跳有底下那条进度条，不用在正文上再埋一颗看不见的按钮。
+ *  - **跟随按句、但只在看不见时才滚**。一屏装得下二十来句，跟着每一句滚等于每隔几秒整屏跳一下；
+ *    而"跟着段滚"在古文岛这种**一段 700 多字**的正文上更糟：滚到段首之后红字还在屏幕外面。
+ *    所以判据换成"当前这一句还在不在屏上"，在就不动。
+ */
+@Composable
+private fun FollowPane(
+    map: FollowMap,
+    line: Int,
+    theme: ReaderTheme,
+    fontSizeSp: Float,
+    lineHeight: Float,
+    pinned: Boolean,
+    onUnpin: () -> Unit,
+    onBackToCurrent: () -> Unit,
+    note: String?,
+    modifier: Modifier = Modifier,
+) {
+    val state = rememberLazyListState()
+    // 自己那一条滚动动画不算"人滚开了"：`isScrollInProgress` 对我们、对他都亮
+    var auto by remember { mutableStateOf(false) }
+    // 键里必须有 `pinned`：那颗「回到当前」只改这一个值。原来只挂 `line`，
+    // 于是按下去除了药丸自己消失之外屏幕上什么都不动（他报的"没有什么效果"）
+    LaunchedEffect(line, pinned) {
+        if (!pinned || line < 0) return@LaunchedEffect
+        val p = map.paragraphOf(line)
+        val f = map.fractionInParagraph(line)
+        auto = true
+        try {
+            // 最多三轮：第一轮把这一整段滚进屏幕（顺便才量得到它多高），第二轮才把红字摆到上三分之一，
+            // 第三轮确认。原来只滚一次，段不在屏幕上时传的是 0 = 段首 —— 古文岛一段能有 700 多字，
+            // 红字照样在屏幕外面，那是"没有什么效果"的第二半
+            for (round in 0 until 3) {
+                val info = state.layoutInfo
+                val view = info.viewportEndOffset - info.viewportStartOffset
+                val item = info.visibleItemsInfo.firstOrNull { it.index == p }
+                if (item != null) {
+                    // 红字还在屏幕上（上留 40、下留 120 的余量）就一下都不滚
+                    val y = item.offset + (item.size * f).toInt()
+                    if (y in (info.viewportStartOffset + 40)..(info.viewportEndOffset - 120)) break
+                }
+                state.animateScrollToItem(p, followScrollOffset(item?.size ?: 0, f, view))
+                withFrameMillis { }   // 让下一轮读到滚完之后的布局
+            }
+        } finally {
+            auto = false   // 中途被取消（换句了）也要把这个标志放下来，否则跟随再也停不下来
+        }
+    }
+    LaunchedEffect(state) {
+        snapshotFlow { state.isScrollInProgress }.collect { if (it && !auto) onUnpin() }
+    }
+    Box(modifier) {
+        LazyColumn(
+            state = state,
+            // 缝要开在**视口**上，不是开在 contentPadding 上：后者只在滚到顶 / 底那一头生效，
+            // 中途滚动时文字照样贴着栏切一刀（他第二张截图圈的就是这个）。
+            // 视口往里缩 20dp（和左右那条缝同一条数），上下各留一条真空隙；边缘那半行再淡出 8dp
+            // —— 淡出和听书页那个两行窗口共用一份 `edgeFade`
+            modifier = Modifier.fillMaxSize().padding(vertical = 20.dp).edgeFade(8.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp),
+        ) {
+            items(map.paragraphs.size) { pi ->
+                val lines = map.paragraphs[pi]
+                // 整段还是一段话（不是一句一行），只有当前那一句的字换成强调色
+                val local = if (line >= 0 && map.paragraphOf(line) == pi) line - map.paragraphOffsets[pi] else -1
+                val span = buildAnnotatedString {
+                    lines.forEachIndexed { si, l ->
+                        withStyle(SpanStyle(color = if (si == local) theme.accentColor else theme.inkColor)) {
+                            append(l.text)
+                        }
+                    }
+                }
+                Text(
+                    span,
+                    fontSize = fontSizeSp.sp,
+                    lineHeight = (fontSizeSp * lineHeight).sp,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
+                )
+            }
+        }
+        // 人自己滚开以后自动跟随停了：给一颗回得去的，别让"跟着读"变成一条断头路
+        if (!pinned && line >= 0) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = 8.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(theme.accentColor)
+                    .tap(onBackToCurrent),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "回到当前",
+                    fontSize = 12.sp,
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                )
+            }
+        }
+        note?.let {
+            Text(
+                it,
+                fontSize = 12.sp,
+                color = theme.accentColor,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 24.dp, vertical = 8.dp),
             )
         }
     }

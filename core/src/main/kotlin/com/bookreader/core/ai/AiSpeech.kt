@@ -266,6 +266,124 @@ object AiSpeech {
         return out
     }
 
+    /**
+     * 把 PCM wav **开头和结尾的静音剪掉**，精确剪到第一个 / 最后一个有声帧（不留垫 —— 留了就不幂等，
+     * 而这一格在每次播放前都会被走一遍）。
+     *
+     * **为什么要剪**：TTS 回的语音两头带静音。从他机器上那两段真缓存量的（同一把 ffmpeg 判据
+     * `-35dB / d=0.05`）：8.16 秒那段开头空 **0.095 秒**、结尾空 0.244 秒；10.4 秒那段 0.085 / 0.196 秒。
+     * 我们这一格的判据（峰值的 1/16 ≈ 峰值下 24dB，底噪再低也不低于满量程 0.5%）在两段上是
+     * 90 / 84 毫秒 —— 和 ffmpeg 对到 10 毫秒以内，因为那一段头是**数字零**。
+     * 整段剪完 8160.75→7817.67 毫秒、10400.75→10094.46 毫秒。
+     *
+     * 但要把话说清楚：**这不到 0.1 秒的头空解释不了他报的现象**。听书页"念到第几句"是按
+     * `已过时长 ÷ 总时长` 折算的，0.09 秒折进 8 秒里只有 1%，不到半个字。真正咬人的是
+     * 段**内部**那些停顿（这两段的内部停顿合起来占 21%~26% 的时长），那部分见
+     * [com.bookreader.core.layout.sentenceIndexByChars] 的口径讨论。
+     * 剪这一格还是值得做：时长从此是"说话的时长"，播放条、进度、正文折算三条一起对上，
+     * 而且剪在**存盘之前**（和 [wavSizesFixed] 同一道口子），界面上不用补任何魔数。
+     *
+     * 只认 `fmt ` 里 audioFormat=1（PCM）且位宽 8/16/24/32 的 wav；mp3 / m4a / 浮点 / 压过的一律
+     * **原样交回去同一个数组**，不猜。判"有没有声"用相对量：峰值的 1/16，且不低于满量程的 0.5%
+     * —— 底噪高的录音也不会被剪穿。整段都没过线（全静音）时原样返回，不交一个空文件出去。
+     */
+    fun wavSilenceTrimmed(bytes: ByteArray): ByteArray {
+        if (bytes.size < 44) return bytes
+        if (!matches(bytes, 0, "RIFF") || !matches(bytes, 8, "WAVE")) return bytes
+        var at = 12
+        var fmtAt = -1
+        var dataAt = -1
+        var dataLen = 0
+        while (at + 8 <= bytes.size) {
+            val size = le(bytes, at + 4)
+            when {
+                matches(bytes, at, "fmt ") -> fmtAt = at
+                matches(bytes, at, "data") -> {
+                    dataAt = at
+                    dataLen = minOf(size.coerceAtLeast(0), bytes.size - (at + 8))
+                }
+                else -> if (size <= 0) return bytes
+            }
+            if (dataAt >= 0) break
+            if (size <= 0) return bytes
+            at += 8 + size + (size % 2)
+        }
+        if (fmtAt < 0 || dataAt < 0 || dataLen <= 0) return bytes
+        val f = fmtAt + 8
+        if (u16(bytes, f) != 1) return bytes                       // 不是 PCM：不动
+        val channels = u16(bytes, f + 2).coerceAtLeast(1)
+        val rate = le(bytes, f + 4).coerceAtLeast(1)
+        val bits = u16(bytes, f + 14)
+        val bytesPer = bits / 8
+        if (bytesPer != 1 && bytesPer != 2 && bytesPer != 3 && bytesPer != 4) return bytes
+        val frame = channels * bytesPer
+        val frames = dataLen / frame
+        if (frames <= 0) return bytes
+        val base = dataAt + 8
+        val amp = LongArray(frames)
+        var peak = 0L
+        for (i in 0 until frames) {
+            var m = 0L
+            for (c in 0 until channels) {
+                val v = sample(bytes, base + i * frame + c * bytesPer, bytesPer)
+                val a = if (v < 0) -v else v
+                if (a > m) m = a
+            }
+            amp[i] = m
+            if (m > peak) peak = m
+        }
+        val thr = maxOf(peak / 16, 32768L / 200)
+        var first = -1
+        var last = -1
+        for (i in 0 until frames) {
+            if (amp[i] >= thr) {
+                if (first < 0) first = i
+                last = i
+            }
+        }
+        if (first < 0) return bytes                                 // 整段静音：原样交回去
+        // 不预留"垫"：留了就**不幂等** —— heal 每次播放前都会跑一遍，留 30ms 垫等于每播一次
+        // 再削掉 60ms。精确剪到第一个 / 最后一个过线帧，第二次进来 from=0、to=末帧，原样返回。
+        // 门限本身够保守（峰值的 1/16 ≈ 峰值下 24dB），TTS 那段开头又是数字零，削不到字头。
+        val from = first
+        val to = last
+        if (from == 0 && to == frames - 1) return bytes             // 本来就没有首尾静音
+        val keep = (to - from + 1) * frame
+        val out = ByteArray(base + keep)
+        bytes.copyInto(out, 0, 0, base)
+        bytes.copyInto(out, base, base + from * frame, base + (to + 1) * frame)
+        return wavSizesFixed(out)
+    }
+
+    /**
+     * 存盘前对一段合成音频做的两件事：**先剪首尾静音，再把流式 wav 的两个长度字段补成真实值**。
+     *
+     * 顺序不能反：剪完字节数变了，长度字段要按剪之后的重算。四个写入点（缓存、heal、试听、批量缓存）
+     * 都走这一格，免得有一处漏剪、那一处存的音频在听书页上就慢半拍。
+     */
+    fun storedAudio(bytes: ByteArray): ByteArray = wavSizesFixed(wavSilenceTrimmed(bytes))
+
+    private fun u16(b: ByteArray, at: Int): Int =
+        if (at + 2 > b.size) 0 else (b[at].toInt() and 0xFF) or ((b[at + 1].toInt() and 0xFF) shl 8)
+
+    /** 一个整数 PCM 采样，归一到 16 位的量纲（8 位是无符号、24/32 位往下截）。 */
+    private fun sample(b: ByteArray, at: Int, size: Int): Long = when (size) {
+        1 -> if (at in b.indices) ((b[at].toInt() and 0xFF) - 128) * 256L else 0L
+        2 -> if (at + 1 < b.size) {
+            // 只读两个字节，且要按**有符号**解释：写成 le() 会连着读四个字节，把下一帧的高半截
+            // 当成这一帧的符号位 —— 负样本（-9000）读成 3 亿的巨值，峰值跟着虚高，门限就废了。
+            val v = (b[at].toInt() and 0xFF) or ((b[at + 1].toInt() and 0xFF) shl 8)
+            (if (v and 0x8000 != 0) v - 0x10000 else v).toLong()
+        } else 0L
+        3 -> if (at + 2 < b.size) {
+            val v = (b[at].toInt() and 0xFF) or ((b[at + 1].toInt() and 0xFF) shl 8) or
+                ((b[at + 2].toInt() and 0xFF) shl 16)
+            (if (v and 0x800000 != 0) v - 0x1000000 else v) / 256L
+        } else 0L
+        4 -> if (at + 3 < b.size) le(b, at).toLong() / 65536L else 0L
+        else -> 0L
+    }
+
     private fun matches(b: ByteArray, at: Int, tag: String): Boolean {
         if (at + 4 > b.size) return false
         for (i in 0 until 4) if (b[at + i].toInt() != tag[i].code) return false

@@ -1,5 +1,6 @@
 package com.bookreader.data
 
+import com.bookreader.booksource.audioChapterText
 import com.bookreader.booksource.audioPartName
 import com.bookreader.booksource.audioPartOrder
 import java.io.File
@@ -78,6 +79,15 @@ class AudioBook(bookDir: File) {
 
     /** 目录里第几集有没有在本地。 */
     fun has(index: Int): Boolean = rows.any { it.index == index && it.present }
+
+    /**
+     * 这一集的正文（跟读那一屏高亮的就是它）。没有 = 空串：播客那一族集页上压根没正文，
+     * 界面上就不开跟读，不是报错。
+     */
+    fun text(index: Int): String {
+        val ep = rows.firstOrNull { it.index == index } ?: return ""
+        return audioChapterText(File(audio, ep.dir))
+    }
 
     /** 整本目录里那些还没下下来的集的集号（`tocChapters` 减去有的）。目录抽屉要把它们灰着摆出来。 */
     fun missing(tocCount: Int): List<Int> {
