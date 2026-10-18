@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,8 +28,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -79,6 +84,7 @@ import kotlin.math.roundToInt
  *    [BookHit.intro] 一旦有值就自动接管那一格，不用改版式。
  */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun FeaturedHomeScreen(
     sources: BookSourceStore,
     page: String,
@@ -95,7 +101,10 @@ fun FeaturedHomeScreen(
     // 永远 fresh()=false → 键一变就重跑，变成不停打这两家站
     var refresh by remember { mutableIntStateOf(0) }
     LaunchedEffect(refresh) {
-        if (FeaturedCache.fresh()) {
+        // 只有"刚进这一屏那一次"（refresh==0）才允许吃 5 分钟缓存 —— 切 tab 回来不该再打一次站。
+        // 他主动的那两下（点刷新那一行、屏幕下拉）必须真去抓：下拉完发现"数据还是五分钟前那份"
+        // 等于下拉了个寂寞。
+        if (refresh == 0 && FeaturedCache.fresh()) {
             books = FeaturedCache.books; bad = FeaturedCache.failed; stamp = FeaturedCache.at; loading = false
             return@LaunchedEffect
         }
@@ -124,7 +133,7 @@ fun FeaturedHomeScreen(
     if (page.isNotEmpty()) {
         BackHandler { onPage("") }
         if (page == PAGE_BROWSE) {
-            CategoryBrowse(books, onBack = { onPage("") }) { onInfo(infoOf(it)) }
+            CategoryBrowse(books, isRefreshing = loading, onRefresh = { refresh++ }, onBack = { onPage("") }) { onInfo(infoOf(it)) }
         } else {
             CategoryBooks(page, groups[page].orEmpty(), onBack = { onPage("") }) { onInfo(infoOf(it)) }
         }
@@ -136,48 +145,63 @@ fun FeaturedHomeScreen(
     val shown = if (cat.isEmpty()) groups.toList() else listOf(cat to groups[cat].orEmpty())
 
     // 搜索行和类目 tab 钉在顶上，滚动的那一格从它们下面开始（他点名的"固定不动"）。
-    // 底色留在最外层：里面那一格滚的时候不许把顶栏透出页面底色之外的颜色
+    // 底色留在最外层：里面那一格滚的时候不许把顶栏透出页面底色之外的颜色。
+    // 下拉刷新只挂在会滚的那一格上 —— 顶上那两行不参与，拉它不会出那颗圈。
+    val ptr = rememberPullToRefreshState()
     Column(Modifier.fillMaxSize().background(Chrome.page)) {
         SearchRow(onSearch = onSearch, onBrowse = { onPage(PAGE_BROWSE) })
         CatTabs(tabs, cat) { cat = it }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            if (books.isNotEmpty()) Banner(books.take(BANNER_BOOKS)) { onInfo(infoOf(it)) }
-            Notice(books.size, hotSources.size, bad, stamp, loading) { refresh++ }
+        PullToRefreshBox(
+            isRefreshing = loading,
+            onRefresh = { refresh++ },
+            state = ptr,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            indicator = {
+                // 那颗圈本体的色走我们这一页的令牌，不用 M3 默认那套（默认是浅色 surface + 紫 primary，
+                // 夜间会是一枚白卡扣在黑页上）
+                // 全用位置传参：material3 1.4.0 里这颗的第 5 格不叫 contentColor，具名会直接编不过
+                PullToRefreshDefaults.Indicator(ptr, loading, Modifier.align(Alignment.TopCenter), Chrome.card, Chrome.dot)
+            },
+        ) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                if (books.isNotEmpty()) Banner(books.take(BANNER_BOOKS)) { onInfo(infoOf(it)) }
+                Notice(books.size, hotSources.size, bad, stamp, loading) { refresh++ }
 
-            if (hotSources.isEmpty()) {
-                Text(
-                    "还没有哪条源写了「hot」那一格：在「管理书籍源」里把源的 JSON 补上 hot（首页的分类块怎么选），这一页才有东西可列。",
-                    fontSize = 13.sp,
-                    color = Chrome.faint,
-                    lineHeight = 19.sp,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                )
-            }
-            if (loading && books.isEmpty()) {
-                Text("正在读…", fontSize = 13.sp, color = Chrome.faint, modifier = Modifier.padding(16.dp))
-            }
-            shown.forEach { (name, list) ->
-                if (list.isNotEmpty()) {
-                    // 一个类一张卡：参考图那张面板量到 x=30..1049、圆角 9~10dp、标题离卡边 34px=12dp。
-                    // 左右内衬仍走我们全页统一的 16dp（参考是 11dp，书架那轮他点名要过 16dp 这一档）；
-                    // 卡与卡之间参考是 22px=8dp 一道缝，所以这里每格只让 4dp
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Chrome.card)
-                            .padding(12.dp),
-                    ) {
-                        // 「更多」不在这张卡里展开，开一整屏那一类的书单（他点名的形态）
-                        SectionHead(name, list.size) { onPage(name) }
-                        list.take(PER_SECTION).forEach { b ->
-                            HotRow(b) { onInfo(infoOf(b)) }
+                if (hotSources.isEmpty()) {
+                    Text(
+                        "还没有哪条源写了「hot」那一格：在「管理书籍源」里把源的 JSON 补上 hot（首页的分类块怎么选），这一页才有东西可列。",
+                        fontSize = 13.sp,
+                        color = Chrome.faint,
+                        lineHeight = 19.sp,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                }
+                if (loading && books.isEmpty()) {
+                    Text("正在读…", fontSize = 13.sp, color = Chrome.faint, modifier = Modifier.padding(16.dp))
+                }
+                shown.forEach { (name, list) ->
+                    if (list.isNotEmpty()) {
+                        // 一个类一张卡：参考图那张面板量到 x=30..1049、圆角 9~10dp、标题离卡边 34px=12dp。
+                        // 左右内衬仍走我们全页统一的 16dp（参考是 11dp，书架那轮他点名要过 16dp 这一档）；
+                        // 卡与卡之间参考是 22px=8dp 一道缝，所以这里每格只让 4dp
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Chrome.card)
+                                .padding(12.dp),
+                        ) {
+                            // 「更多」不在这张卡里展开，开一整屏那一类的书单（他点名的形态）
+                            SectionHead(name, list.size) { onPage(name) }
+                            list.take(PER_SECTION).forEach { b ->
+                                HotRow(b) { onInfo(infoOf(b)) }
+                            }
                         }
                     }
                 }
+                Spacer(Modifier.height(16.dp))
             }
-            Spacer(Modifier.height(16.dp))
         }
     }
 }
@@ -416,15 +440,8 @@ private fun Notice(books: Int, sources: Int, bad: List<String>, at: Long, loadin
                 .padding(horizontal = 5.dp, vertical = 1.dp),
         ) { Text("刷新", fontSize = 10.sp, color = Color.White) }
         Text(line, fontSize = 12.sp, color = Chrome.faint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp))
-        Spacer(Modifier.weight(1f))
-        // 这一行整行点它就是重抓，所以行尾不该是一颗「还能进去」的 >（它不翻页）。换成刷新那颗。
-        // 右边也要和上面卡片右端那颗 > 站在同一条竖线上：卡片那颗的墨右边缘真机量到 x=989；
-        // 这一颗的格子右边落在药丸内衬 10dp 处 = x=1008.5，而 ic_refresh 的墨在 14dp 格子里只空
-        // 4/24 × 14dp = 6.4px，墨右边缘会到 x=1002 —— 比上面低 13px。往回收 4.8dp 正好压在同一条线。
-        Icon(
-            painterResource(R.drawable.ic_refresh), "重新抓一次",
-            tint = Chrome.faint, modifier = Modifier.padding(end = 4.8.dp).size(14.dp),
-        )
+        // 行尾那颗刷新图标按他的要求撤了：这一行整行点下去就是重抓（`.tap(onRefresh)`），
+        // 左边那颗红药丸也已经写着「刷新」—— 同一件事在一行里说三遍，那颗是重复入口，不是入口。
     }
 }
 
@@ -570,7 +587,14 @@ private fun Chip(text: String, size: TextUnit = 11.sp) {
  * （封面 + 书名 + 作者），点它直接进本书信息 —— 左上角那颗「全部作品」才回精选的分组书单。
  */
 @Composable
-private fun CategoryBrowse(books: List<BookHit>, onBack: () -> Unit, onOpen: (BookHit) -> Unit) {
+@OptIn(ExperimentalMaterial3Api::class)
+private fun CategoryBrowse(
+    books: List<BookHit>,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    onBack: () -> Unit,
+    onOpen: (BookHit) -> Unit,
+) {
     val groups = remember(books) { books.groupBy { featureCat(it.category) } }
     val names = groups.keys.toList()
     var sel by rememberSaveable { mutableStateOf(names.firstOrNull().orEmpty()) }
@@ -583,41 +607,61 @@ private fun CategoryBrowse(books: List<BookHit>, onBack: () -> Unit, onOpen: (Bo
             // 图2 右上角那颗是"不按类目看全部"，在我们这就是回精选那一屏的「全部」分组
             Text("全部作品", fontSize = 11.sp, color = Chrome.dot, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp).tap(onBack))
         }
-        Row(Modifier.fillMaxWidth().weight(1f)) {
-            // 左栏宽度不写死：整栏由最宽那一格撑出来（原先钉 76dp，两字的类目名只占 18.5dp，
-            // 于是"字→分界线"空到 42.5dp、而"屏边→字"只有 14dp，左右一眼就不等价）。
-            // 现在两边都是 14dp。每格自己包内容，不能写 fillMaxWidth —— 在 Row 里那会吃掉整行剩余宽度。
-            Column(Modifier.fillMaxHeight().verticalScroll(rememberScrollState())) {
-                names.forEach { n ->
-                    val on = n == sel
-                    Box(
-                        Modifier
-                            .height(48.dp)
-                            .tap { sel = n },
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (on) Box(Modifier.size(width = 2.dp, height = 16.dp).background(Chrome.dot))
-                        Text(n, fontSize = 13.sp, color = if (on) Chrome.dot else Chrome.faint, modifier = Modifier.padding(start = 14.dp, end = 14.dp))
+        // 下拉刷新挂整行：左边那栏类目、右边那格书墙都算"屏幕下拉"（那颗圈跟在滚起来的那一侧上面）
+        val ptr = rememberPullToRefreshState()
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            state = ptr,
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            indicator = {
+                PullToRefreshDefaults.Indicator(
+                    ptr, isRefreshing, Modifier.align(Alignment.TopCenter), Chrome.card, Chrome.dot
+                )
+            },
+        ) {
+            Row(Modifier.fillMaxSize()) {
+                // 左栏宽度不写死：整栏由最宽那一格撑出来（原先钉 76dp，两字的类目名只占 18.5dp，
+                // 于是"字→分界线"空到 42.5dp、而"屏边→字"只有 14dp，左右一眼就不等价）。
+                // 现在两边都是 14dp。每格自己包内容，不能写 fillMaxWidth —— 在 Row 里那会吃掉整行剩余宽度。
+                // 整栏上移 11dp：右边那行的顶内衬同一步子从 17dp 收到 6dp，两列一起上去，
+                // 上一轮量到的"两行框顶都是 y=274"这个对齐不动（他这次要的是顶部间隙小一点，不是重新错开）。
+                // 用 offset 而不是负 padding —— 负 padding 会让这一栏比 Row 给的空间高出 11dp，底部那一格会被挤出去。
+                Column(Modifier.fillMaxHeight().offset(y = (-11).dp).verticalScroll(rememberScrollState())) {
+                    names.forEach { n ->
+                        val on = n == sel
+                        Box(
+                            Modifier
+                                .height(48.dp)
+                                .tap { sel = n },
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            if (on) Box(Modifier.size(width = 2.dp, height = 16.dp).background(Chrome.dot))
+                            Text(n, fontSize = 13.sp, color = if (on) Chrome.dot else Chrome.faint, modifier = Modifier.padding(start = 14.dp, end = 14.dp))
+                        }
                     }
                 }
-            }
-            // 0.5dp 是这台机能落到的最细的一条：1dp 量到 3 设备px，0.5dp 取整成 1px
-            Box(Modifier.width(0.5.dp).fillMaxHeight().background(Chrome.hairline))
-            Column(Modifier.weight(1f)) {
-                val list = groups[sel].orEmpty()
-                Text("共 ${list.size} 本", fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 4.dp))
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    items(list, key = { it.sourceId + it.bookUrl }) { b ->
-                        Row(Modifier.padding(4.dp).tap { onOpen(b) }) {
-                            BookCover(b.bookName, "", Modifier.size(width = 44.dp, height = 56.dp))
-                            Column(Modifier.padding(start = 8.dp)) {
-                                Text(b.bookName, fontSize = 14.sp, color = Chrome.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (b.author.isNotEmpty()) Text(b.author, fontSize = 11.sp, color = Chrome.faint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+                // 0.5dp 是这台机能落到的最细的一条：1dp 量到 3 设备px，0.5dp 取整成 1px
+                Box(Modifier.width(0.5.dp).fillMaxHeight().background(Chrome.hairline))
+                Column(Modifier.weight(1f)) {
+                    val list = groups[sel].orEmpty()
+                    // 顶内衬 17dp → 6dp，和左栏那 11dp offset 是同一步子。上一轮把这里从 12dp 抬到 17dp
+                    // 是为了和左栏第一格顶部对齐；这次他只要顶部间隙小一点，所以两列一起上移、对齐不动：
+                    // 量到两行框顶都从 y=274 落到 y=244（互相 Δ0），墨迹顶都从 y=279 落到 y=249。
+                    Text("共 ${list.size} 本", fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 4.dp))
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(list, key = { it.sourceId + it.bookUrl }) { b ->
+                            Row(Modifier.padding(4.dp).tap { onOpen(b) }) {
+                                BookCover(b.bookName, "", Modifier.size(width = 44.dp, height = 56.dp))
+                                Column(Modifier.padding(start = 8.dp)) {
+                                    Text(b.bookName, fontSize = 14.sp, color = Chrome.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    if (b.author.isNotEmpty()) Text(b.author, fontSize = 11.sp, color = Chrome.faint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+                                }
                             }
                         }
                     }
