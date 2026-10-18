@@ -13,6 +13,13 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.InteractionSource
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.CompositionLocalProvider
@@ -39,6 +46,8 @@ import com.bookreader.ui.Customize
 import com.bookreader.ui.FontScreen
 import com.bookreader.ui.MenuScreen
 import com.bookreader.ui.SkinScreen
+import com.bookreader.ui.preloadBgImage
+import androidx.compose.ui.platform.LocalContext
 import com.bookreader.ui.hiddenTabsOf
 import com.bookreader.ui.BookSearchScreen
 import com.bookreader.ui.FeaturedHomeScreen
@@ -53,6 +62,7 @@ import com.bookreader.ui.TipHost
 import com.bookreader.ui.MarksScreen
 import com.bookreader.ui.MeScreen
 import com.bookreader.ui.ReaderScreen
+import com.bookreader.ui.contentSizePx
 import com.bookreader.ui.VolumeKeyHost
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -97,6 +107,10 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
     }
 }
 
+/** 换屏溶解的两个人数：新屏淡入 220ms（两头慢），旧屏淡出 160ms（加速离场）。 */
+private const val ENTER_MS = 220
+private const val EXIT_MS = 160
+
 /** 文件管理器"用本应用打开"带过来的 uri，读权限由系统授予。 */
 private fun Intent.viewUri(): Uri? = if (action == Intent.ACTION_VIEW) data else null
 
@@ -130,8 +144,14 @@ private fun Root(
     // 从目录里某一章进来的话，那一章的序号放这里（-1 = 按阅读进度接着读）。不存盘：转个屏就退回列表，
     // 和上面那颗 info 同一族
     var openChapter by remember { mutableIntStateOf(-1) }
-    /** 开一本书的唯一入口：顺手把"从第几章"归零，免得上一本的章序号漏到这一本上。 */
-    val openAt: (String, Int) -> Unit = { id, chapter -> openChapter = chapter; openBook = id }
+    /**
+     * 开一本书的唯一入口：顺手把"从第几章"归零，免得上一本的章序号漏到这一本上。
+     * 溶解由外面那层 `AnimatedContent` 看着 `openBook` 做，这里只写状态。
+     */
+    val openAt: (String, Int) -> Unit = { id, chapter ->
+        openChapter = chapter
+        openBook = id
+    }
 
     LaunchedEffect(incoming) {
         val uri = incoming ?: return@LaunchedEffect
@@ -147,6 +167,16 @@ private fun Root(
         outcome.onSuccess { openAt(it.id, -1) }
             .onFailure { notice = "打不开这个文件：${it.message ?: it.javaClass.simpleName}" }
         Log.d("ReaderPerf", "view-import ok=${outcome.isSuccess} title=$title")
+    }
+
+    // 「皮肤管理」那张背景图**提前解好**放在进程里：不预取的话，第一次进书要在正文那一屏空等一次解码
+    // （真机量到 432ms），那半秒屏上是一整片纯纸色，然后图才啪一下进来 —— 他点的就是这一条。
+    // 宽度必须和正文第一帧要的是同一个数（两边都走 `contentSizePx()`，正文那屏在量到真实宽之前也用这颗种子），
+    // 差一个像素缓存键就对不上，预取白做。
+    val appCtx = LocalContext.current
+    val bgSeedW = contentSizePx().width
+    LaunchedEffect(prefs.bgImageFile, bgSeedW) {
+        preloadBgImage(appCtx, prefs.bgImageFile, bgSeedW)
     }
 
     // 外壳的夜间 = 外壳自己那一格（「我的」页那颗开关写的就是它）。
@@ -188,72 +218,88 @@ private fun Root(
             )
             null -> { }
         }
-    } else if (id == null) {
-        AppScaffold(tab = tab, onTab = { tab = it; featuredPage = "" }, barVisible = searchPage == SearchPage.Search && !(tab == MainTab.Featured && featuredPage.isNotEmpty()), hidden = hiddenTabs) {
-            when (tab) {
-                MainTab.Shelf -> LibraryScreen(
-                    library = library,
-                    prefs = prefs,
-                    onOpen = { openAt(it.id, -1) },
-                    onInfo = { info = it },
-                    notice = notice,
-                )
-
-                MainTab.Search -> BookSearchScreen(
-                    sources = sources,
-                    library = library,
-                    page = searchPage,
-                    onPage = { searchPage = it },
-                    onOpen = { openAt(it, -1) },
-                    onInfo = { info = it },
-                )
-                MainTab.Featured -> FeaturedHomeScreen(
-                    sources = sources,
-                    page = featuredPage,
-                    onPage = { featuredPage = it },
-                    onInfo = { info = it },
-                    onSearch = { tab = MainTab.Search; searchPage = SearchPage.Search },
-                )
-                MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openAt(it, -1) })
-                MainTab.Me -> MeScreen(
-                    library, prefs,
-                    onOpenAi = { aiSection = it },
-                    onEditName = { editName = true },
-                    onSkin = { customize = Customize.Skin },
-                    onFont = { customize = Customize.Font },
-                    onMenu = { customize = Customize.Menu },
-                )
-            }
-        }
     } else {
-        // 整页渲染那一类（pdf / pptx）不进排版引擎，开的是另一条渲染路 —— 路由看的是 kind 而不是"能不能 open"
-        val meta = remember(id) { library.list().firstOrNull { it.id == id } }
-        if (meta == null) {
-            LaunchedEffect(id) { openBook = null }
-        } else {
-            // 每一屏阅读器拿的是**自己那一份**设置（`forReader`）：在这一屏改的纸色 / 字号 / 亮度 / 翻页
-            // 只写进「键.<这一屏>」，不动全局那一份、也不碰别的屏。没改过的格子读到的是全局旧值，
-            // 所以升级完第一眼看到的样子和升级前一样。
-            val rp = when (meta.kind) {
-                BookMeta.PDF -> prefs.forReader(ReaderScope.PDF)
-                BookMeta.PPTX -> prefs.forReader(ReaderScope.PPT)
-                BookMeta.COMIC -> prefs.forReader(ReaderScope.COMIC)
-                BookMeta.AUDIO -> prefs.forReader(ReaderScope.AUDIO)
-                else -> prefs.forReader(ReaderScope.NOVEL)
+        // 换屏 = **两屏真实内容互相溶解**：新屏淡进来、旧屏淡出去，两段同时进行。
+        // 前几版盖的是一张平色布（`screenBaseColor` 算出来的那一档纸色），他打回的原话是
+        // 「当前你改的是一个粉红页面的过渡，能不能改成最后显示界面的溶解，不是别的界面」——
+        // 布再准也是"另一屏"，只有两屏都在画上、互相淡过去才是他要的那个东西。
+        AnimatedContent(
+            targetState = id,
+            transitionSpec = {
+                fadeIn(tween(ENTER_MS, easing = FastOutSlowInEasing)) togetherWith
+                    fadeOut(tween(EXIT_MS, easing = FastOutLinearInEasing))
+            },
+            label = "shell-reader",
+        ) { bookId ->
+            if (bookId == null) {
+            AppScaffold(tab = tab, onTab = { tab = it; featuredPage = "" }, barVisible = searchPage == SearchPage.Search && !(tab == MainTab.Featured && featuredPage.isNotEmpty()), hidden = hiddenTabs) {
+                when (tab) {
+                    MainTab.Shelf -> LibraryScreen(
+                        library = library,
+                        prefs = prefs,
+                        onOpen = { openAt(it.id, -1) },
+                        onInfo = { info = it },
+                        notice = notice,
+                    )
+
+                    MainTab.Search -> BookSearchScreen(
+                        sources = sources,
+                        library = library,
+                        page = searchPage,
+                        onPage = { searchPage = it },
+                        onOpen = { openAt(it, -1) },
+                        onInfo = { info = it },
+                    )
+                    MainTab.Featured -> FeaturedHomeScreen(
+                        sources = sources,
+                        page = featuredPage,
+                        onPage = { featuredPage = it },
+                        onInfo = { info = it },
+                        onSearch = { tab = MainTab.Search; searchPage = SearchPage.Search },
+                    )
+                    MainTab.Marks -> MarksScreen(library, prefs, onOpen = { openAt(it, -1) })
+                    MainTab.Me -> MeScreen(
+                        library, prefs,
+                        onOpenAi = { aiSection = it },
+                        onEditName = { editName = true },
+                        onSkin = { customize = Customize.Skin },
+                        onFont = { customize = Customize.Font },
+                        onMenu = { customize = Customize.Menu },
+                    )
+                }
             }
-            if (meta.kind == BookMeta.PDF) {
-                PdfReaderScreen(bookId = id, title = meta.title, library = library, prefs = rp, onBack = { openBook = null })
-            } else if (meta.kind == BookMeta.PPTX) {
-                PptReaderScreen(bookId = id, title = meta.title, library = library, prefs = rp, onBack = { openBook = null })
-            } else if (meta.kind == BookMeta.COMIC) {
-                ComicReaderScreen(bookId = id, title = meta.title, library = library, prefs = rp, onBack = { openBook = null })
-            } else if (meta.kind == BookMeta.AUDIO) {
-                AudioReaderScreen(
-                    bookId = id, title = meta.title, author = meta.author,
-                    library = library, prefs = rp, onBack = { openBook = null },
-                )
             } else {
-                ReaderScreen(bookId = id, library = library, prefs = rp, startChapter = openChapter, onBack = { openBook = null })
+            val meta = remember(bookId) { library.list().firstOrNull { it.id == id } }
+            if (meta == null) {
+                LaunchedEffect(bookId) { openBook = null }
+            } else {
+                // 每一屏阅读器拿的是**自己那一份**设置（`forReader`）：在这一屏改的纸色 / 字号 / 亮度 / 翻页
+                // 只写进「键.<这一屏>」，不动全局那一份、也不碰别的屏。没改过的格子读到的是全局旧值，
+                // 所以升级完第一眼看到的样子和升级前一样。
+                val rp = when (meta.kind) {
+                    BookMeta.PDF -> prefs.forReader(ReaderScope.PDF)
+                    BookMeta.PPTX -> prefs.forReader(ReaderScope.PPT)
+                    BookMeta.COMIC -> prefs.forReader(ReaderScope.COMIC)
+                    BookMeta.AUDIO -> prefs.forReader(ReaderScope.AUDIO)
+                    else -> prefs.forReader(ReaderScope.NOVEL)
+                }
+                // 回壳子只写那一格状态，溶解由外面那层 `AnimatedContent` 负责（两屏真内容互相淡，不盖布）
+                val backToShell: () -> Unit = { openBook = null }
+                if (meta.kind == BookMeta.PDF) {
+                    PdfReaderScreen(bookId = bookId, title = meta.title, library = library, prefs = rp, onBack = backToShell)
+                } else if (meta.kind == BookMeta.PPTX) {
+                    PptReaderScreen(bookId = bookId, title = meta.title, library = library, prefs = rp, onBack = backToShell)
+                } else if (meta.kind == BookMeta.COMIC) {
+                    ComicReaderScreen(bookId = bookId, title = meta.title, library = library, prefs = rp, onBack = backToShell)
+                } else if (meta.kind == BookMeta.AUDIO) {
+                    AudioReaderScreen(
+                        bookId = bookId, title = meta.title, author = meta.author,
+                        library = library, prefs = rp, onBack = backToShell,
+                    )
+                } else {
+                    ReaderScreen(bookId = bookId, library = library, prefs = rp, startChapter = openChapter, onBack = backToShell)
+                }
+            }
             }
         }
     }

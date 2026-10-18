@@ -23,6 +23,9 @@ enum class ReaderScope(val tag: String) {
  * 读的时候**这一屏存过就读这一屏的，没存过就跟着全局那一份走** —— 不做一次性迁移，
  * 于是第一次翻开任何一屏，看到的还是他今天这一套设置，只有他真在某屏里改过，那一屏才分叉出去。
  * 写的时候永远写带后缀的那一份（不会去动全局，所以改漫画不会把外壳一起改掉）。
+ *
+ * 唯一的例外是 `themeIndex` 那一档的**全局夜间命令** [applyGlobalNight]：它反过来把全局和六屏一次全写，
+ * 因为「我的」页那颗开关要的是"全部生效"，而各屏原来那档浅色另有 [KEY_PAPER] 一格接着，关掉还能还回去。
  */
 class ReaderPrefs internal constructor(private val p: SharedPreferences, private val scope: ReaderScope?) {
 
@@ -80,20 +83,54 @@ class ReaderPrefs internal constructor(private val p: SharedPreferences, private
     val marginHorizontalDp: Float get() = MARGIN_PRESETS[marginPreset]
     val paragraphIndentEm: Float get() = if (paragraphIndent) 2f else 0f
 
-    /** 按屏：纸色六档（含夜间）。外壳那份走 [shellNight]，两边互不影响。 */
+    /**
+     * 纸色六档（含夜间）。某一屏阅读器里改它 = **只改这一屏**（`forReader` 那一份）；
+     * 「我的」页那颗开关改的是全部七层，见 [applyGlobalNight]。
+     */
     var themeIndex: Int
         get() = intOf(KEY_THEME, 0)
         set(v) = putInt(KEY_THEME, v)
 
+    /** 外壳那一份的夜间状态：只有 [applyGlobalNight] 写它，「我的」页那颗开关没有第二条路。 */
+    val shellNight: Boolean get() = p.getBoolean("shellNight", legacyShellNight())
+
     /**
-     * 外壳（书架 / 搜书 / 精选 / 书签 / 我的那四页 + 状态栏）的夜间开关。
+     * 「我的 → 夜间模式」那颗开关：**一条命令打到底**，外壳加六屏阅读器一起换。
      *
-     * 它和阅读器的 [themeIndex] **是两个主人**：「我的」页那颗只管外壳，翻开任何一屏阅读器
-     * 都不改它 —— 以前它写的是同一个 `theme`，所以在漫画里点一下夜间，书架也跟着黑了。
+     * 他点的口径（2026-10-18）：在「我的」里改的要**全部生效**，在某一屏阅读器里改的才只在那一屏生效。
+     * 所以要**逐屏写进各屏自己那一格**，不能只动全局那一份 —— 只动全局的话，凡是他曾经在某一屏里
+     * 自己换过纸色的那一屏（这台机上 `theme.novel=5`、`theme.comic=0`、`theme.audio=0` 三格都存过）
+     * 仍读自己那一格，表现就是「设置里开了夜间，翻开漫画还是白的」。
+     *
+     * 各屏原来那档浅色先存进 [KEY_PAPER] 那一族同名的键，关夜间时逐屏还回去：统一命令不该顺手把
+     * 「漫画=豆绿」抹成「漫画=纸白」。本来就读着夜间的那一屏没有浅色可存，所以已有的那份不动 ——
+     * 连开两次夜间不会把 stash 冲掉；某一屏压根没存过浅色，关夜间就回纸白(0)。
+     *
+     * **先把七层各自的当前值读完再一次写**：这里要的是"命令之前"那一档，不能拿 apply 的时机来赌 ——
+     * 测试里那份内存 prefs 是写一格落一格的，中途再读就会顺着「没存过就回落全局」读到刚被改掉的值。
      */
-    var shellNight: Boolean
-        get() = p.getBoolean("shellNight", legacyShellNight())
-        set(v) = p.edit { putBoolean("shellNight", v) }
+    fun applyGlobalNight(on: Boolean) {
+        // 全局那一层按 `scope = null` 现造，不用 `this`：这一句要是从某一屏那一份上被叫起来，
+        // `this` 带着范围，"全局"那一层就会写成 `theme.漫画`、还会把漫画算两遍。
+        val layers = listOf(ReaderPrefs(p, null)) + ReaderScope.values().map { forReader(it) }
+        val before = layers.map { it.themeIndex }
+        p.edit {
+            putBoolean("shellNight", on)
+            if (on) {
+                layers.zip(before).forEach { (layer, theme) ->
+                    if (theme != NIGHT_THEME_INDEX) putInt(layer.suffixed(KEY_PAPER), theme)
+                    putInt(layer.suffixed(KEY_THEME), NIGHT_THEME_INDEX)
+                }
+            } else {
+                // `edit {}` 里读要走 `p`：editor 的写没 apply 之前，那一族的值还是**上一轮开夜间时存进磁盘的那份**，
+                // 正是这里要还回去的那档浅色。
+                layers.forEach { layer ->
+                    putInt(layer.suffixed(KEY_THEME), p.getInt(layer.suffixed(KEY_PAPER), 0))
+                    remove(layer.suffixed(KEY_PAPER))
+                }
+            }
+        }
+    }
 
     /**
      * 老版本没有 `shellNight` 这一格：第一次读它时拿当时那档全局纸色是不是"夜间"顶上，
@@ -102,6 +139,7 @@ class ReaderPrefs internal constructor(private val p: SharedPreferences, private
      */
     private fun legacyShellNight(): Boolean = p.getInt(KEY_THEME, 0) == NIGHT_THEME_INDEX
 
+    private fun suffixed(name: String): String = if (scope == null) name else "$name.${scope.tag}"
 
     /**
      * 全局字号：只管**外壳那一层**（他点的「各算一档」）。阅读正文仍走上面那档 [fontSizeSp]，
@@ -580,6 +618,9 @@ class ReaderPrefs internal constructor(private val p: SharedPreferences, private
         const val KEY_FONT = "fontSizeSp"
         const val KEY_THEME = "theme"
         const val KEY_KEEP = "keepScreenOn"
+
+        /** 「开全局夜间之前那一档浅色」存在这一族键里（同样按屏分格），关夜间时逐屏还回去。 */
+        const val KEY_PAPER = "paper"
 
         /** `ReaderTheme.ALL` 里「夜间」那一档的序号。:data 不反向依赖 :ui，所以这里写死一个数。 */
         const val NIGHT_THEME_INDEX = 5

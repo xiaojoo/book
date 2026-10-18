@@ -804,7 +804,10 @@ fun ReaderScreen(
     // 小说正文和它的**听书页**两屏铺（同一份 `PaperBackground`，2026-10-15 他点名"听书页面也实现图片背景那套"）；
     // pdf/pptx 不铺要保留原件版面、漫画整屏是图（他点的口径）
     val bgFile = themeFile(context, prefs.bgImageFile)
-    val bgBmp = scaledImage(bgFile, viewport.width)
+    // 宽度不能等布局报回来才给：`viewport` 第一帧是 0，那时键算不出来（`scaledImage` 直接返回 null），
+    // 等布局第二帧报 1080 已经错过一次组合 —— 真机量到这么一来明明缓存命中还是重解了 409ms、图到 +549ms。
+    // 首帧先按 `contentSizePx()` 那颗种子要（和上面排版用的同一个退路），布局报回来再换成实测宽。
+    val bgBmp = scaledImage(bgFile, if (viewport.width > 0) viewport.width else seedSize.width)
     // 有图的时候正文那一层要透，否则 PageView / ScrollReader 自己那张纸就把图盖住了
     val bgPaper = if (bgBmp == null) theme.pageColor else Color.Transparent
 

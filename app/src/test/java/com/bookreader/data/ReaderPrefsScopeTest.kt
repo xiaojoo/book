@@ -196,21 +196,101 @@ class ReaderPrefsScopeTest {
         assertEquals(emptyList<Pair<Int, Int>>(), global.comicBookmarks("b3"))
     }
 
-    /** 「我的」页那颗开关和阅读器的纸色是两个主人：互不写对方的格子。 */
+    /**
+     * 「我的」页那颗是**全局命令**（2026-10-18 他改的口径：系统设置要全部生效）：
+     * 一拨，外壳 + 六屏阅读器一起黑，包括那些自己在屏里存过纸色的屏。
+     */
     @Test
-    fun theShellNightSwitchHasItsOwnKey() {
+    fun theGlobalNightCommandReachesEveryScreen() {
         val (global, novel, comic) = bundle()
-        assertFalse("老版本没这一格 → 拿当时那档全局纸色顶上（当时是纸白）", global.shellNight)
+        global.themeIndex = 4                                  // 全局=米黄
+        comic.themeIndex = 1                                   // 漫画自己在屏里存过豆绿
+        novel.themeIndex = ReaderPrefs.NIGHT_THEME_INDEX
+        assertFalse("开之前外壳是白天", global.shellNight)
+        global.applyGlobalNight(true)
+        assertTrue("外壳跟着黑", global.shellNight)
+        assertEquals("全局那一份也写成夜间", ReaderPrefs.NIGHT_THEME_INDEX, global.themeIndex)
+        assertEquals("存过纸白的漫画这次要跟着黑", ReaderPrefs.NIGHT_THEME_INDEX, comic.themeIndex)
+        assertEquals("小说这一屏", ReaderPrefs.NIGHT_THEME_INDEX, novel.themeIndex)
+        for (s in ReaderScope.values()) {
+            assertEquals("第 ${s.tag} 屏也要跟着黑", ReaderPrefs.NIGHT_THEME_INDEX, global.forReader(s).themeIndex)
+        }
+    }
+
+    /** 关夜间是逐屏**还回自己原来那档浅色**，不是把六屏一律拍成纸白。 */
+    @Test
+    fun turningTheGlobalNightOffGivesEachScreenItsOwnPaperBack() {
+        val (global, novel, comic) = bundle()
+        global.themeIndex = 4
+        comic.themeIndex = 1
+        novel.themeIndex = ReaderPrefs.NIGHT_THEME_INDEX
+        global.applyGlobalNight(true)
+        global.applyGlobalNight(false)
+        assertFalse("外壳回白天", global.shellNight)
+        assertEquals("全局那一份回米黄", 4, global.themeIndex)
+        assertEquals("漫画回自己那档豆绿", 1, comic.themeIndex)
+        assertEquals("小说本来存的就是夜间，没有浅色可还 → 纸白", 0, novel.themeIndex)
+        assertEquals("没在屏里存过纸色的屏，还的是它当时跟着全局读到的那档米黄", 4, global.forReader(ReaderScope.PDF).themeIndex)
+    }
+
+    /** 连开两次夜间不许把第一次记下的浅色冲掉（第二次开时各屏本来已经是夜间）。 */
+    @Test
+    fun flippingNightOnTwiceDoesNotLoseTheStashedPaper() {
+        val (global, _, comic) = bundle()
+        global.themeIndex = 0
+        comic.themeIndex = 1
+        global.applyGlobalNight(true)
+        global.applyGlobalNight(true)
+        global.applyGlobalNight(false)
+        assertEquals(1, comic.themeIndex)
+    }
+
+    /** 命令之后在某一屏里自己换的纸色：仍然只属于那一屏，不漏到别的屏和外壳。 */
+    @Test
+    fun aLocalPaperChoiceAfterTheCommandIsStillLocal() {
+        val (global, novel, comic) = bundle()
+        global.applyGlobalNight(true)
+        comic.themeIndex = 1
+        assertEquals(1, comic.themeIndex)
+        assertEquals("小说那屏不该跟着变豆绿", ReaderPrefs.NIGHT_THEME_INDEX, novel.themeIndex)
+        assertTrue("外壳不该被一屏的纸色带回去", global.shellNight)
+        global.applyGlobalNight(false)
+        assertEquals("下一次动全局，还的是按下命令那一刻记下的那档（不是后来在屏里换的豆绿）", 0, comic.themeIndex)
+    }
+
+    /** 全局夜间命令只动纸色这一族，别把各屏自己那份字号/行距带歪。 */
+    @Test
+    fun theNightCommandOnlyMovesThePaperDial() {
+        val (global, novel, _) = bundle()
+        novel.fontSizeSp = 24f
+        novel.linePreset = 0
+        novel.marginPreset = 2
+        global.applyGlobalNight(true)
+        global.applyGlobalNight(false)
+        assertEquals(24f, novel.fontSizeSp, 0.0001f)
+        assertEquals(0, novel.linePreset)
+        assertEquals(2, novel.marginPreset)
+        assertEquals("全局字号没被带歪", 17f, global.fontSizeSp, 0.0001f)
+    }
+
+    /** 反过来那半边不变：某一屏自己开着夜间，不该把外壳或别的屏一起改掉。 */
+    @Test
+    fun aScreenKeepingItsOwnNightDoesNotMoveTheShell() {
+        val (global, novel, comic) = bundle()
+        global.themeIndex = 0
+        comic.themeIndex = ReaderPrefs.NIGHT_THEME_INDEX
+        assertFalse("漫画自己黑，外壳不该跟着", global.shellNight)
+        assertEquals("小说那屏不该跟着黑", 0, novel.themeIndex)
+        assertEquals("全局那一份也没动", 0, global.themeIndex)
+    }
+
+    /** 老版本升级上来那一下：全局纸色本来是夜间，外壳第一次读就得是夜间。 */
+    @Test
+    fun theShellReadsItsNightStateFromTheGlobalPaperOnFirstRun() {
+        val global = ReaderPrefs(Fake(), null)
         global.themeIndex = ReaderPrefs.NIGHT_THEME_INDEX
         assertTrue("升级前全局就是夜间，外壳第一次读该是夜间", global.shellNight)
         global.themeIndex = 0
-        global.shellNight = true
-        assertEquals("外壳开夜不该改掉任何一屏的纸色", 0, novel.themeIndex)
-        assertEquals(0, comic.themeIndex)
-        comic.themeIndex = ReaderPrefs.NIGHT_THEME_INDEX
-        assertTrue("某一屏开夜也不该反过来改外壳（它自己那份夜间，外壳仍是夜间）", global.shellNight)
-        global.shellNight = false
-        assertFalse(global.shellNight)
-        assertEquals("外壳切回白天也不该把漫画那屏的夜间一起关掉", ReaderPrefs.NIGHT_THEME_INDEX, comic.themeIndex)
+        assertFalse("升级前全局是浅色，外壳第一次读该是白天", global.shellNight)
     }
 }

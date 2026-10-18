@@ -1,6 +1,7 @@
 package com.bookreader.ui
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.net.Uri
@@ -38,6 +39,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.get
+import androidx.core.graphics.scale
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -83,20 +86,53 @@ private fun suffixOf(ctx: Context, uri: Uri): String {
     return if (s in setOf("png", "webp", "gif", "bmp")) s else "jpg"
 }
 
-/** 按目标像素宽缩着解一张图：手机拍的一张图 4000x3000，整张进内存就是 48MB，预览和正文都要不起。
- *  皮肤管理那一屏的预览和阅读正文用的是同一份解码，两边看到的就是同一张图。 */
+/**
+ * 按目标像素宽缩着解一张图：手机拍的一张图 4000x3000，整张进内存就是 48MB，预览和正文都要不起。
+ * 皮肤管理那一屏的预览和阅读正文用的是同一份解码，两边看到的就是同一张图。
+ */
+private fun decodeBg(path: String, widthPx: Int): ImageBitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    var sample = 1
+    while (bounds.outWidth / sample > widthPx * 2) sample *= 2
+    BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+}.getOrNull()
+
+/**
+ * 解好的图留在进程里，按 `路径@宽` 存三格。**没有这一层，每次进书都要重解一遍**——
+ * 真机量到第一次 432ms、第二次 378ms，而正文那一屏在图到位之前只能铺一整片纯纸色，
+ * 半个多秒之后图才啪一下冒出来（他报的「图片背景会显示纯白背景，一会才加载」）。
+ * 三格是因为预览和正文要的宽度不同（正文/听书都是屏宽 1080，预览是卡片宽），
+ * 只留一格的话进一次皮肤管理就会把正文那格挤掉。
+ */
+private val bgCache = object : LinkedHashMap<String, ImageBitmap>(4, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?) = size > 3
+}
+
+/**
+ * 提前在 IO 上把正文那张背景图解好放进缓存 —— `MainActivity` 启动时叫一次。
+ * 少了这一枪，缓存只对"第二次进书"生效：第一次还是要空等那 430ms。
+ */
+suspend fun preloadBgImage(ctx: android.content.Context, name: String, widthPx: Int) {
+    val file = themeFile(ctx, name) ?: return
+    if (widthPx <= 0) return
+    val key = "${file.absolutePath}@$widthPx"
+    if (bgCache.containsKey(key)) return
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        decodeBg(file.absolutePath, widthPx)?.let { bgCache[key] = it }
+    }
+}
+
 @Composable
 internal fun scaledImage(file: File?, widthPx: Int): ImageBitmap? {
     val path = file?.absolutePath
-    val bmp by produceState<ImageBitmap?>(null, path, widthPx) {
-        value = if (path == null || widthPx <= 0) null else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(path, bounds)
-                var sample = 1
-                while (bounds.outWidth / sample > widthPx * 2) sample *= 2
-                BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
-            }.getOrNull()
+    val key = if (path == null || widthPx <= 0) null else "$path@$widthPx"
+    val bmp by produceState<ImageBitmap?>(key?.let { bgCache[it] }, key) {
+        // 第一帧宽度还是 0（键 = null），布局报回来时 `initialValue` 那份已经丢了 —— 这里再问一次缓存。
+        // 真机量到过这个空档：`hit=true` 却仍然重解了一遍 409ms、图到 +549ms 才露出来。
+        key?.let { bgCache[it] }?.let { value = it; return@produceState }
+        value = if (key == null || path == null) null else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            decodeBg(path, widthPx)?.also { bgCache[key] = it }
         }
     }
     return bmp

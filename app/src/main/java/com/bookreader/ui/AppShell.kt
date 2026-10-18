@@ -100,6 +100,7 @@ import com.bookreader.data.BookSourceStore
  * 一套外壳底色（书架/精选/书签/我的）。夜间的墨色和强调色取自 `ReaderTheme.Night` 同一批值，
  * 两处不会各说一套。
  */
+
 class Palette(
     val page: Color,
     val card: Color,
@@ -122,7 +123,8 @@ class Palette(
  */
 object Chrome {
     /**
-     * 外壳的夜间开关。「我的」页那颗写它，回到壳子上时从 `prefs.shellNight` 同步（`MainActivity`）。
+     * 外壳的夜间开关。「我的」页那颗经 `ReaderPrefs.applyGlobalNight` 写它（同一枪也打到六屏阅读器），
+     * 回到壳子上时从 `prefs.shellNight` 同步（`MainActivity`）。
      *
      * 某一屏阅读器开着的时候也会把它写成自己那档纸色的明暗（pdf / ppt 整屏用的是这套色板），
      * 退出那一屏就按 `shellNight` 还回来 —— **阅读模式里改的东西不该留在外壳上**。
@@ -734,8 +736,9 @@ fun MeScreen(
 ) {
     val context = LocalContext.current
     var books by remember { mutableStateOf(library.list()) }
-    // 外壳的夜间。它和每一屏阅读器那档纸色**是两个主人**：这颗开关只动外壳那四页 + 状态栏，
-    // 不再顺手把小说/漫画/pdf 的纸色一起改掉（那些现在是各屏一份，见 ReaderPrefs.forReader）。
+    // 外壳的夜间。这颗开关是**全局命令**：一拨，外壳四页 + 状态栏 + 六屏阅读器一起换
+    // （`ReaderPrefs.applyGlobalNight` 逐屏写各屏那一格；各屏原来的浅色先存起来，关掉时逐屏还回来）。
+    // 阅读器里那颗夜间/那排色块仍是各屏自己一份，不漏到别的屏。
     var night by remember { mutableStateOf(prefs.shellNight) }
     var confirmClean by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
@@ -814,13 +817,13 @@ fun MeScreen(
                             on = night,
                             onToggle = {
                                 night = it
-                                prefs.shellNight = it
+                                prefs.applyGlobalNight(it)
                                 // 当场换外壳这四页 + 状态栏，不然开关按下去没反应、看着是假的
                                 Chrome.night = it
                                 note = if (it) {
-                                    "已切到夜间：只改外壳这四页；翻开书那一屏在它自己的设置里换"
+                                    "已切到夜间：外壳这四页和六屏阅读器一起黑（各屏原来那档纸色先记着）"
                                 } else {
-                                    "已切回白天（外壳）；某一屏阅读器要是自己开着夜间，进去还是夜间"
+                                    "已切回白天：每一屏回到它自己原来那档纸色"
                                 }
                             },
                         )
