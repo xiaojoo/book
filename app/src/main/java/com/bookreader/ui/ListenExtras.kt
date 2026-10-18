@@ -67,7 +67,7 @@ fun ListenHistoryPage(
     onBack: () -> Unit,
     onReplay: (AiVoiceCache.Entry) -> Unit,
 ) {
-    ApplySystemBars(darkIcons = !theme.night)
+    ApplySystemBars(darkIcons = !theme.night, bgArgb = theme.page)
     BackHandler(onBack = onBack)
     val stamp = remember { SimpleDateFormat("MM-dd HH:mm", Locale.CHINA) }
     Column(
@@ -147,7 +147,7 @@ fun ListenFixesPage(
     onBack: () -> Unit,
     onSave: (String) -> Unit,
 ) {
-    ApplySystemBars(darkIcons = !theme.night)
+    ApplySystemBars(darkIcons = !theme.night, bgArgb = theme.page)
     BackHandler(onBack = onBack)
     var text by remember { mutableStateOf(table) }
     Column(
@@ -271,7 +271,7 @@ fun ListenTocPage(
     onBatchStop: () -> Unit,
 ) {
     var settings by remember { mutableStateOf(false) }
-    ApplySystemBars(darkIcons = !theme.night)
+    ApplySystemBars(darkIcons = !theme.night, bgArgb = theme.page)
     BackHandler(onBack = if (settings) { { settings = false } } else onBack)
     Box(Modifier.fillMaxSize().background(theme.pageColor)) {
         Column(

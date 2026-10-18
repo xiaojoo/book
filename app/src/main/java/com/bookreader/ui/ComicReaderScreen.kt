@@ -172,7 +172,7 @@ fun ComicReaderScreen(
         onTurn = { up -> step(!up) },
     )
 
-    ApplySystemBars(darkIcons = !theme.night)
+    ApplySystemBars(darkIcons = !theme.night, bgArgb = theme.page)
 
     Box(
         Modifier

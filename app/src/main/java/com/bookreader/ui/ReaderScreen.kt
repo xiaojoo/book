@@ -818,7 +818,7 @@ fun ReaderScreen(
     val immersive = prefs.fullScreen && bgFile != null && !bars && !restPrompt &&
         panel == Panel.None && selection == null && !listenPage && !tocPage && !historyPage && !fixesPage &&
         listening == null
-    ApplySystemBars(darkIcons = !theme.night, immersive = immersive)
+    ApplySystemBars(darkIcons = !theme.night, immersive = immersive, bgArgb = theme.page)
     // 我们这一层菜单（两条栏 + 背后那两段纸）和系统栏那两条**在同一条淡出里走**，
     // 判据是"什么时候**结束**"，不是"什么时候开始"：
     //  · 还回来：我们 tween(275)，平台报 311ms —— 两个几乎同刻结束 → 他认这一向"一样了"

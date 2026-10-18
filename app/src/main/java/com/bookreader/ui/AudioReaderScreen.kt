@@ -325,7 +325,7 @@ fun AudioReaderScreen(
         }
     }
 
-    ApplySystemBars(darkIcons = !theme.night)
+    ApplySystemBars(darkIcons = !theme.night, bgArgb = theme.page)
 
     // 「我的 → 皮肤管理」上传的那张背景图，这一屏也要铺（2026-10-15 他点名"这个没有实现上传的图片
     // 背景显示啊"）。位图按整块窗口的宽解、压的那层纸色仍是皮肤管理那一格的滑块 —— 和阅读屏、

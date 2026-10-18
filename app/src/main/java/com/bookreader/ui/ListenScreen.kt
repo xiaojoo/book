@@ -138,7 +138,7 @@ fun ListenScreen(
     onToc: () -> Unit,
 ) {
     // 那两条留着，但底色必须和这一屏同一个色（不涂的话回到阅读页那一侧，它们是平台灰）
-    ApplySystemBars(darkIcons = !theme.night)
+    ApplySystemBars(darkIcons = !theme.night, bgArgb = theme.page)
 
     // 进度靠轮询：MediaPlayer 没有可观察状态
     var pos by remember { mutableIntStateOf(0) }

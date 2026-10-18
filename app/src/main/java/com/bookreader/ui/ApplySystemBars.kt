@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.core.graphics.drawable.toDrawable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -49,8 +50,16 @@ import androidx.core.view.WindowInsetsControllerCompat
  * `darkIcons` 沿用调用方的叫法，含义是平台那个 flag 的名字："栏背景是浅的"（= 图标要画成深色）。
  */
 @Composable
-fun ApplySystemBars(darkIcons: Boolean, immersive: Boolean = false) {
+fun ApplySystemBars(darkIcons: Boolean, immersive: Boolean = false, bgArgb: Int = Chrome.pageArgb) {
     val view = LocalView.current
+    // **窗口底色跟着这一屏铺的纸色走**。平台 `Theme.Material.Light` 的 `windowBackground` 是 #FAFAFA：
+    // 系统栏弹回来那一下窗口要重排，露出的那一条就是它 —— 白天和纸色同色看不出来，夜间一眼可见
+    // （他报的「夜间模式返回会闪一下白边」）。逐帧量到过：中心均值冲到 63.2，而两端是 39.0 和 17.9，
+    // 溶解是两端之间的凸组合，不可能超出端点 —— 那一下亮不是我们的过渡，是窗口底色透出来。
+    val window = (view.context as? Activity)?.window
+    SideEffect {
+        window?.setBackgroundDrawable(bgArgb.toDrawable())
+    }
     // 只在**真的换了档**那一刻动系统栏：SideEffect 每次重组都会跑，无条件 hide()/show()
     // 本身就是叠在一起的动画请求（他看到的"闪烁"有一半是这个）
     var applied by remember { mutableStateOf<Boolean?>(null) }
