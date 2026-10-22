@@ -1,11 +1,30 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// 发布签名读根目录的 keystore.properties；没有就退回 debug 签名，
+// 这样仓库里不带密钥也能构建出可安装的 release 包（只是不能覆盖升级）。
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.bookreader"
     compileSdk = 37
+
+    signingConfigs {
+        create("release") {
+            storeFile = keystoreProps["storeFile"]
+                ?.let { file(it as String) }
+            storePassword = keystoreProps["storePassword"] as String?
+            keyAlias = keystoreProps["keyAlias"] as String?
+            keyPassword = keystoreProps["keyPassword"] as String?
+        }
+    }
 
     defaultConfig {
         applicationId = "com.bookreader"
@@ -27,6 +46,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+
+            signingConfig = if (keystoreProps.isEmpty())
+                signingConfigs.getByName("debug")
+            else signingConfigs.getByName("release")
         }
     }
 }
