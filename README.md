@@ -61,7 +61,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 自建中转 / 内网 Ollama 那类地址支持 `http://` 明文（清单里的 `usesCleartextTraffic`），代价是密钥和正文都明文走网，
   所以界面在填 http 地址时必须把这件事标出来。AI 相关的密钥只存本机，不上传、不进仓库。
 - 界面**不内置任何书籍封面图**：早期从别人给的参考截图里裁出来的那批占位封面（`cover_feat1..6.png`、`cover_jianlai.png`）
-  已在提交 `3ac9d8a` 全部删掉，`app/src/main/res` 下现在一张位图都没有。封面两档：源站抓回来的 `cover.jpg`
+  已在提交 `6508e69` 全部删掉，`app/src/main/res` 下现在一张位图都没有。封面两档：源站抓回来的 `cover.jpg`
   （`BookLibrary.COVER_FILE`，落在应用自己的目录里），或自绘的默认封面 —— 底色按书名稳定哈希取（`coverSwatch`），
   上面把书名整个横排（最多 4 行、超出截尾），左边一条 4dp 的书脊。
 
