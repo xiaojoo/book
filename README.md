@@ -64,7 +64,19 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   已在提交 `3ac9d8a` 全部删掉，`app/src/main/res` 下现在一张位图都没有。封面两档：源站抓回来的 `cover.jpg`
   （`BookLibrary.COVER_FILE`，落在应用自己的目录里），或自绘的默认封面 —— 底色按书名稳定哈希取（`coverSwatch`），
   上面把书名整个横排（最多 4 行、超出截尾），左边一条 4dp 的书脊。
-- 本仓库**目前没有 LICENSE 文件**，也未声明任何开源许可证；在此之前默认保留所有权利，不代表可以被自由使用或分发。
+
+## 许可证
+
+本项目自写的代码与文档以 **CC0 1.0 Universal** 释出到公共领域：全文见 [`LICENSE`](LICENSE)，SPDX 标识符 `CC0-1.0`。
+复制、修改、分发、商用都可以，不需要署名、不需要另外取得许可。
+
+两条边界写清楚，免得这条声明被理解成超出它能力的承诺：
+
+- CC0 只处分我们自己写出来的东西。**第三方依赖各自带着原许可证，不跟着进公共领域**：`jsoup` 1.22.2 (Apache-2.0)、
+  Kotlin 2.4.20 与 `kotlinx-coroutines` 1.9.0 (Apache-2.0)、AndroidX / Compose (Apache-2.0)、JUnit 4.13.2 (EPL-1.0)；
+  Android SDK、Gradle / AGP 是构建期工具，同样不在 CC0 里。系统字体和厂商 ROM 的行为也不受这条声明影响。
+- `booksource/src/main/resources/booksource/` 里那 9 条书源规则本身是我们写的（进 CC0），但它们指向的站点页面、
+  以及用户导入或抓回来的正文 / 分页图 / 音频**都不是本项目的作品，不在 CC0 覆盖范围内** —— 归属见上面「声明」第一、三条。
 
 ## 文档
 
