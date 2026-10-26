@@ -32,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.BookSourceStore
+import com.bookreader.data.CreationStore
 import com.bookreader.data.ReaderPrefs
 import com.bookreader.data.ReaderScope
 import com.bookreader.core.model.BookMeta
@@ -42,6 +43,11 @@ import com.bookreader.ui.BookInfoPage
 import com.bookreader.ui.NicknameScreen
 import com.bookreader.ui.AiSection
 import com.bookreader.ui.AiSettingsScreen
+import com.bookreader.ui.CreationBookScreen
+import com.bookreader.ui.CreationCardsScreen
+import com.bookreader.ui.CreationChapterScreen
+import com.bookreader.ui.CreationListScreen
+import com.bookreader.ui.CreationRoute
 import com.bookreader.ui.Customize
 import com.bookreader.ui.FontScreen
 import com.bookreader.ui.MenuScreen
@@ -136,6 +142,9 @@ private fun Root(
     var editName by rememberSaveable { mutableStateOf(false) }
     // 「我的」页那张新卡的三屏：皮肤 / 字体 / 菜单，各是一整屏（和 AI 设置、昵称同一族）
     var customize by rememberSaveable { mutableStateOf<Customize?>(null) }
+    // 「小说创作」那一族四屏（篇列表 / 章列表 / 正文 / 卡片整屏页）：一条字符串当路由，
+    // 空 = 不在创作里。存 saveable 是因为写稿的人最不该遇见"转个屏回去字没了"
+    var creation by rememberSaveable { mutableStateOf("") }
     // 底栏藏掉哪几格（「菜单管理」写的）：启动读一次 prefs，之后那一屏每改一下当场送进来
     var hiddenTabs by remember { mutableStateOf(hiddenTabsOf(prefs)) }
     // 「本书信息」也是盖在壳上的一整屏（和 AI 设置同一族）。不存盘：它是从某一本书点进去的，
@@ -218,6 +227,36 @@ private fun Root(
             )
             null -> { }
         }
+    } else if (creation.isNotEmpty()) {
+        // 创作那一族四屏盖在壳上面（和 AI 设置、昵称同一路）：底栏本来就不画，不需要谁让位
+        val cStore = remember { CreationStore(appCtx) }
+        val cid = CreationRoute.idOf(creation)
+        when {
+            CreationRoute.isBook(creation) -> CreationBookScreen(
+                cid, cStore,
+                onBack = { creation = CreationRoute.LIST },
+                onOpenChapter = { i -> creation = CreationRoute.chapter(cid, i) },
+                onOpenCards = { creation = CreationRoute.cards(cid, -1) },
+            )
+            CreationRoute.isChapter(creation) -> CreationChapterScreen(
+                cid, CreationRoute.indexOf(creation), cStore, prefs,
+                onBack = { creation = CreationRoute.book(cid) },
+                onOpenCards = { creation = CreationRoute.cards(cid, CreationRoute.indexOf(creation)) },
+            )
+            CreationRoute.isCards(creation) -> {
+                // 「更多」那一屏是从哪一屏进来的，返回就回哪一屏（-1 = 章列表那屏进来的）
+                val from = CreationRoute.indexOf(creation)
+                CreationCardsScreen(
+                    cid, cStore,
+                    onBack = { creation = if (from >= 0) CreationRoute.chapter(cid, from) else CreationRoute.book(cid) },
+                )
+            }
+            else -> CreationListScreen(
+                cStore,
+                onBack = { creation = "" },
+                onOpen = { id -> creation = CreationRoute.book(id) },
+            )
+        }
     } else {
         // 换屏 = **两屏真实内容互相溶解**：新屏淡进来、旧屏淡出去，两段同时进行。
         // 前几版盖的是一张平色布（`screenBaseColor` 算出来的那一档纸色），他打回的原话是
@@ -265,6 +304,7 @@ private fun Root(
                         onSkin = { customize = Customize.Skin },
                         onFont = { customize = Customize.Font },
                         onMenu = { customize = Customize.Menu },
+                        onCreation = { creation = CreationRoute.LIST },
                     )
                 }
             }

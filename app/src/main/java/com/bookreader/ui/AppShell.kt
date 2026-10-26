@@ -730,6 +730,7 @@ fun MeScreen(
     prefs: ReaderPrefs,
     onOpenAi: (AiSection) -> Unit,
     onEditName: () -> Unit,
+    onCreation: () -> Unit,
     onSkin: () -> Unit,
     onFont: () -> Unit,
     onMenu: () -> Unit,
@@ -867,6 +868,13 @@ fun MeScreen(
                         sub = "长按选段 → 念出来；地址 / 模型 / 音色在这里配",
                         trailing = if (prefs.aiVoiceBaseUrl.isBlank() && prefs.aiVoiceKeyCipher.isBlank()) "未配置" else "已配置",
                         on = { onOpenAi(AiSection.Speech) },
+                    )
+                    Hairline()
+                    // 和 AI 翻译同一档配置，所以摆在同一张卡里：那一档没配，「提取」当场会说去哪填
+                    Line(
+                        "小说创作",
+                        sub = "写稿、记字数；「提取」用上面那档 AI 抽时间线 / 人物 / 技能",
+                        on = onCreation,
                     )
                 }
             }

@@ -76,8 +76,11 @@ fun sentenceIndexByChars(text: String, starts: List<Int>, frac: Float): Int {
 /**
  * 这一段区间里"要念出来的"占多少格：汉字 / 字母 / 数字一格，标点**半格**，空白不算。
  * 半格先按 2 倍记整数、最后除回去，免得这里到处飘 Float（`(x+1)/2` 是往上取整）。
+ *
+ * 这一条是全应用**唯一**的字数口径：创作那一族实时报的"多少字"也用它，
+ * 不再各数各的（`FollowAlign` 里那份是同一规则的副本，两处口径必须一致）。
  */
-private fun spokenChars(text: String, from: Int, to: Int): Int {
+fun spokenChars(text: String, from: Int, to: Int): Int {
     var half = 0
     for (i in from until to) {
         val c = text[i]
@@ -86,3 +89,6 @@ private fun spokenChars(text: String, from: Int, to: Int): Int {
     }
     return (half + 1) / 2
 }
+
+/** 整段的字数（同一条口径，给"这一章多少字"那种全量问句用）。 */
+fun spokenChars(text: String): Int = spokenChars(text, 0, text.length)
