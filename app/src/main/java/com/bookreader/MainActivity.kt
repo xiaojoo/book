@@ -8,6 +8,7 @@ import android.view.KeyEvent
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.IndicationNodeFactory
@@ -86,6 +87,8 @@ class MainActivity : ComponentActivity(), VolumeKeyHost {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 启动层要在 super.onCreate **之前**装：这一层是系统画的，晚了就来不及换图标
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         // 官方推荐的 edge-to-edge：两条系统栏透明，底色由各屏自己铺到栏后面（见 ApplySystemBars 的注释）。
         // 两条都给全透明 —— 导航栏那一档默认带一层 scrim，会把我们铺好的页面底色盖灰

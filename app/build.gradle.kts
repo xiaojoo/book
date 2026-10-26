@@ -59,6 +59,8 @@ dependencies {
     // 搜书/下载那一层（纯 JVM，可拔掉）：界面只认它的 Rule 和 DownloadOutcome
     implementation(project(":booksource"))
     implementation("androidx.core:core-ktx:1.19.1")
+    // 启动层：Android 12 以上系统自己画，以下这个库补画同一套（logo 见 themes.xml）
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.ui:ui")

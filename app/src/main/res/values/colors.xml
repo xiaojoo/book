@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动层那一屏的底色：和外壳白天那一档同一个数（AppShell 的 Chrome.day.page = 0xFFF6F7F9）。
+         两边对不上的话，启动层收掉的那一帧整屏会跳一次色。 -->
+    <color name="splash_bg">#FFF6F7F9</color>
+</resources>

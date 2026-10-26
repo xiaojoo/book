@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 应用真正那一层。原来是直接写在清单里的平台常量，现在拆出来给启动层指回去。 -->
+    <style name="Theme.BookReader" parent="@android:style/Theme.Material.Light.NoActionBar" />
+
+    <!--
+      启动层：Android 12 以上由系统画，12 以下由 androidx.core:core-splashscreen 补画同一套。
+      量过的现状是冷启动 1105ms 里屏幕上是一整片空白浅灰（ResumedActivity 之前那格 starting window），
+      所以这一层要的就是"那一片空白中央有颗 logo"。
+
+      底色跟着外壳白天那一档（见 colors.xml 的注释）。**应用自己那颗夜间开关挡不住这一层**：
+      启动层是系统画的，读不到 prefs —— 开着夜间进应用，会先看见浅底 logo 再淡到黑底。
+      要连那一秒也跟上夜间，只能换成应用内自绘一整屏（另一条路，没选）。
+    -->
+    <style name="Theme.BookReader.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.BookReader</item>
+    </style>
+</resources>

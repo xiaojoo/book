@@ -22,7 +22,7 @@
         android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="33"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.BookReader.Splash">
         <!-- enableOnBackInvokedCallback：targetSdk 37 下官方要求的声明。不写它系统每次都要在我们进程里
              打一条 `W OnBackInvokedCallback: ... is not enabled for the application.`，
              而且预测式返回只能走旧的回退路径。全应用的返回都走 Compose 的 BackHandler，
