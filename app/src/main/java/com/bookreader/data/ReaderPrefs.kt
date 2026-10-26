@@ -265,7 +265,7 @@ class ReaderPrefs internal constructor(private val p: SharedPreferences, private
 
     /** 昵称：只存在这台机上，没有账号体系。 */
     var nickname: String
-        get() = p.getString("nickname", "2015XIAO") ?: "2015XIAO"
+        get() = p.getString("nickname", "未命名用户") ?: "未命名用户"
         set(v) = p.edit { putString("nickname", v.take(12)) }
 
     var fontLabel: String
