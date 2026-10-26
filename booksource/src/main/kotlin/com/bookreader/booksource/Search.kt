@@ -82,8 +82,37 @@ fun searchResults(rule: Rule, html: String, base: String): List<BookHit> {
             lastUpdateTime = pick(e, s.lastUpdateTime),
             wordCount = pick(e, s.wordCount),
             intro = pick(e, s.intro),
+            coverUrl = coverOf(e, s.cover, base, rule, url),
         )
     }
+}
+
+/**
+ * 列表页（搜索结果 / 精选榜单）那一行的封面地址。
+ *
+ * 三件事要在这里一起办掉：
+ * - 这一格没写、或这一行根本没有图 → 退回 [Rule.coverFrom] 那个从书页地址推的模板（笔趣阁那一族
+ *   列表页是纯文字书单，封面地址却推得出来，实测 12/12 和书页上写着的一致）；模板也没有才交回空串；
+ * - 取到了但是相对地址 → 按**这一页自己**补全，`absolutize` 对空串会补成这一页的地址，所以先判空；
+ * - 懒加载的站把真地址挂在 `data-original` 上，那种写法 `pick` 不会自动补全（它只对 href/src 做），
+ *   所以补全这一格不能指望 pick。
+ */
+private fun coverOf(item: Element, spec: String, base: String, rule: Rule, bookUrl: String): String {
+    if (spec.isNotBlank()) {
+        val v = pick(item, spec)
+        if (v.isNotEmpty()) return absolutize(base, v)
+    }
+    return coverFromUrl(rule, bookUrl)
+}
+
+/** 按 `{g}`（分组号）/ `{b}`（书本号）填模板：两段都从书页地址的尾巴上取，`171_171392` 取 `_` 后面那截。 */
+internal fun coverFromUrl(rule: Rule, bookUrl: String): String {
+    val t = rule.coverFrom
+    if (t.isBlank() || bookUrl.isBlank()) return ""
+    val path = bookUrl.removeSuffix("/").removePrefix(rule.homeUrl.trimEnd('/'))
+    val parts = path.split('_', '/').filter { it.isNotEmpty() }
+    if (parts.size < 2) return ""
+    return absolutize(rule.homeUrl, t.replace("{g}", parts[parts.size - 2]).replace("{b}", parts.last()))
 }
 
 /** 书页 → 那段内容简介。规则没写这一格、或者页上选不中 → 空串（简介没有就不显示，不编）。 */
@@ -114,6 +143,7 @@ fun hotBooks(rule: Rule, html: String, base: String): List<BookHit> {
                 author = pick(e, h.author),
                 bookUrl = url,
                 category = category,
+                coverUrl = coverOf(e, h.cover, base, rule, url),
             )
         }
     }

@@ -9,10 +9,11 @@
   "intro": ".mobile-comic-desc",
   "hot": {
     "url": "https://www.guazimanhua.com/category.php",
-    "group": "article.card",
-    "item": "h3 a",
+    "group": "section.grid",
+    "item": "article.card",
     "bookName": "h3 a",
-    "bookUrl": "h3 a @href"
+    "bookUrl": "h3 a @href",
+    "cover": "img.cover @src"
   },
   "search": {
     "url": "https://www.guazimanhua.com/category.php?keyword=%s",

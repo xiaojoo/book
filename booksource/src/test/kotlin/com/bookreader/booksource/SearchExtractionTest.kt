@@ -37,6 +37,117 @@ class SearchExtractionTest {
         return r to Recording(mapOf(*pages))
     }
 
+    /**
+     * 列表页（搜索结果那一行）上的封面地址。
+     *
+     * 两件事要一起判住：站点把真地址挂在 `data-original` 上（懒加载，`src` 是空的或一张占位灰图），
+     * 而 `pick` 只对 href/src 自动补全 —— 所以补全这一格得自己来，不然界面拿一个 `/cover/11.jpg`
+     * 去请求，表现是"这一条源每张封面都裂"。
+     */
+    @Test
+    fun theListPageCoverComesOutAndALazyRelativeAddressIsAbsolutized() {
+        val r = RuleLoader.load(
+            fixtureText("/rules/xhytd.json")
+                .replace(
+                    "    \"item\": \"#main > div.novelslist2 > ul > li\",",
+                    "    \"item\": \"#main > div.novelslist2 > ul > li\",\n    \"cover\": \"img @data-original\",",
+                ),
+            "带列表封面的夹具",
+        )
+        val f = Recording(
+            mapOf(
+                page(
+                    "http://www.example-xhytd.com/search.html?name=%E5%89%91",
+                    """
+                    <html><body><div id="main"><div class="novelslist2"><ul>
+                    <li><span class="s2 wid"><img data-original="/cover/11.jpg" alt="剑影孤行"><a href="/xiaoshuo/11/">剑影孤行</a></span>
+                    <span class="s4 wid"><a href="/author/laozhou/">老周</a></span></li>
+                    <li><span class="s2 wid"><a href="/xiaoshuo/12/">第二个</a></span><span class="s4 wid"><a href="/a/">某人</a></span></li>
+                    </ul></div></div></body></html>
+                    """.trimIndent(),
+                ),
+            ),
+        )
+        val hits = SearchEngine(r, f).search("剑")
+        assertEquals("两行都该算一条（封面缺不算缺）", 2, hits.size)
+        assertEquals("懒加载的相对地址要按这一页自己补全", "http://www.example-xhytd.com/cover/11.jpg", hits[0].coverUrl)
+        assertEquals("这一行没有图就是空串，界面自己退回默认封面", "", hits[1].coverUrl)
+    }
+
+    /** 精选榜单那一屏：封面挂在每一行的 a 里面，取值写法和搜索页同一套，但是另一段配置。 */
+    @Test
+    fun theFeaturedListCarriesItsOwnCoverAddress() {
+        val r = RuleLoader.load(
+            fixtureText("/rules/xhytd.json").replace(
+                "  \"search\": {",
+                "  \"hot\": {\n" +
+                    "    \"url\": \"http://www.example-xhytd.com/top/\",\n" +
+                    "    \"group\": \"div.blk\",\n" +
+                    "    \"item\": \"a.book\",\n" +
+                    "    \"bookName\": \"a.book @title\",\n" +
+                    "    \"bookUrl\": \"a.book @href\",\n" +
+                    "    \"cover\": \"img @src\"\n" +
+                    "  },\n  \"search\": {",
+            ),
+            "带榜单封面的夹具",
+        )
+        val f = Recording(
+            mapOf(
+                page(
+                    "http://www.example-xhytd.com/top/",
+                    """
+                    <html><body>
+                    <div class="blk"><a class="book" href="/xiaoshuo/22/" title="第二本"><img src="/cover/22.jpg">第二本</a></div>
+                    <div class="blk"><a class="book" href="/xiaoshuo/23/" title="第三本">第三本</a></div>
+                    </body></html>
+                    """.trimIndent(),
+                ),
+            ),
+        )
+        val hits = SearchEngine(r, f).hot()
+        assertEquals(2, hits.size)
+        assertEquals("http://www.example-xhytd.com/cover/22.jpg", hits[0].coverUrl)
+        assertEquals("这一块没图 → 空串", "", hits[1].coverUrl)
+    }
+
+    /**
+     * 列表页没图的笔趣阁那一族：封面**从书页地址推**（`{g}`/`{b}` 两段），一本只多一个图片请求。
+     *
+     * 两件事一起判：推出来的地址要补成绝对的；而**列表页自己给了图就不许被模板盖掉**
+     * —— 模板是退路，不是首选。真站对照过 12/12（两家站各 6 本，推的与书页上写着的一字不差）。
+     */
+    @Test
+    fun theCoverTemplateFillsOnlyWhenTheRowHasNoImage() {
+        val r = RuleLoader.load(
+            fixtureText("/rules/xhytd.json")
+                .replace("  \"charset\": \"\",", "  \"charset\": \"\",\n  \"coverFrom\": \"/files/article/image/{g}/{b}/{b}s.jpg\",")
+                .replace("    \"bookUrl\": \"span.s2.wid > a@href\"", "    \"bookUrl\": \"span.s2.wid > a@href\",\n    \"cover\": \"img @src\""),
+            "带封面模板的夹具",
+        )
+        val f = Recording(
+            mapOf(
+                page(
+                    "http://www.example-xhytd.com/search.html?name=%E5%89%91",
+                    """
+                    <html><body><div id="main"><div class="novelslist2"><ul>
+                    <li><span class="s2 wid"><a href="/171_171392/">剑影孤行</a></span></li>
+                    <li><span class="s2 wid"><a href="/136/136835/">第二本</a><img src="/cover/real.jpg"></span></li>
+                    <li><span class="s2 wid"><a href="/only-one-segment/">第三本</a></span></li>
+                    </ul></div></div></body></html>
+                    """.trimIndent(),
+                ),
+            ),
+        )
+        val hits = SearchEngine(r, f).search("剑")
+        assertEquals(3, hits.size)
+        assertEquals(
+            "书页地址尾上取两段填模板，再按站点首页补成绝对地址",
+            "http://www.example-xhytd.com/files/article/image/171/171392/171392s.jpg", hits[0].coverUrl,
+        )
+        assertEquals("列表页给了图就用站点那张，模板不许盖", "http://www.example-xhytd.com/cover/real.jpg", hits[1].coverUrl)
+        assertEquals("地址里凑不出两段就交回空串，不编一个地址出来", "", hits[2].coverUrl)
+    }
+
     @Test
     fun searchRowFieldsComeOutExactlyAndALinklessRowIsDropped() {
         val (r, f) = engine(

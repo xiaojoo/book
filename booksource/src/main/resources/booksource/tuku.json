@@ -12,7 +12,8 @@
     "group": ".top-card",
     "item": "a[href*=\"/manga-\"]",
     "bookName": "a[href*=\"/manga-\"] @title",
-    "bookUrl": "a[href*=\"/manga-\"] @href"
+    "bookUrl": "a[href*=\"/manga-\"] @href",
+    "cover": "img @data-original"
   },
   "search": {
     "url": "https://www.tuku.cc/search?title=%s",

@@ -209,7 +209,7 @@ fun FeaturedHomeScreen(
 private fun infoOf(b: BookHit) = BookInfo(
     title = b.bookName, author = b.author, category = b.category,
     latestChapter = b.latestChapter, wordCount = b.wordCount, intro = b.intro,
-    bookUrl = b.bookUrl, sourceId = b.sourceId,
+    bookUrl = b.bookUrl, sourceId = b.sourceId, coverUrl = b.coverUrl,
 )
 
 /**
@@ -381,7 +381,7 @@ private fun Banner(books: List<BookHit>, onOpen: (BookHit) -> Unit) {
                             .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        BookCover(b.bookName, "", Modifier.size(width = 52.dp, height = 68.dp))
+                        BookCover(b.bookName, "", Modifier.size(width = 52.dp, height = 68.dp), remote = b.coverUrl)
                         Column(Modifier.padding(start = 10.dp)) {
                             Text("热门推荐", fontSize = 11.sp, color = Chrome.dot)
                             Text(b.bookName, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = Chrome.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
@@ -485,7 +485,7 @@ private fun HotRow(b: BookHit, onClick: () -> Unit) {
             .tap(onClick)
             .padding(vertical = 7.dp),
     ) {
-        BookCover(b.bookName, "", Modifier.size(width = 62.dp, height = 76.dp))
+        BookCover(b.bookName, "", Modifier.size(width = 62.dp, height = 76.dp), remote = b.coverUrl)
         Column(Modifier.padding(start = 10.dp).fillMaxWidth()) {
             Text(b.bookName, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = Chrome.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             // 站点首页清单里没有简介，这一格先放作者；BookHit.intro 有值就自动换成简介，版式不动。
@@ -546,7 +546,7 @@ private fun CategoryBooks(name: String, books: List<BookHit>, onBack: () -> Unit
                         .tap { onOpen(b) }
                         .padding(vertical = 7.dp),
                 ) {
-                    BookCover(b.bookName, "", Modifier.size(width = 66.dp, height = 82.dp))
+                    BookCover(b.bookName, "", Modifier.size(width = 66.dp, height = 82.dp), remote = b.coverUrl)
                     Column(Modifier.padding(start = 6.dp).fillMaxWidth()) {
                         Text(b.bookName, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Chrome.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val blurb = b.intro.ifEmpty { b.author }
@@ -657,7 +657,7 @@ private fun CategoryBrowse(
                     ) {
                         items(list, key = { it.sourceId + it.bookUrl }) { b ->
                             Row(Modifier.padding(4.dp).tap { onOpen(b) }) {
-                                BookCover(b.bookName, "", Modifier.size(width = 44.dp, height = 56.dp))
+                                BookCover(b.bookName, "", Modifier.size(width = 44.dp, height = 56.dp), remote = b.coverUrl)
                                 Column(Modifier.padding(start = 8.dp)) {
                                     Text(b.bookName, fontSize = 14.sp, color = Chrome.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     if (b.author.isNotEmpty()) Text(b.author, fontSize = 11.sp, color = Chrome.faint, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))

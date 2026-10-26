@@ -117,6 +117,7 @@ private fun infoOf(hit: BookHit) = BookInfo(
     intro = hit.intro,
     bookUrl = hit.bookUrl,
     sourceId = hit.sourceId,
+    coverUrl = hit.coverUrl,
 )
 
 /**
@@ -445,22 +446,32 @@ private fun SearchResultRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             // 左边那一整块就是「看看这本是什么」的命中区：书名/作者/最新章本来就摆在一起，
             // 再单独画一颗「详情」就是把同一件事说两遍
-            Column(Modifier.weight(1f).tap { onInfo(infoOf(hit)) }) {
-                Text(hit.bookName, fontSize = 15.sp, color = Chrome.ink, maxLines = 1)
-                Text(
-                    (if (sub.isEmpty()) "" else sub + " · ") + hit.sourceName,
-                    fontSize = 12.sp,
-                    color = Chrome.faint,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-                if (hit.latestChapter.isNotEmpty()) {
+            // 左边那一整块就是「看看这本是什么」的命中区：封面/书名/作者/最新章本来就摆在一起，
+            // 再单独画一颗「详情」就是把同一件事说两遍
+            Row(
+                Modifier.weight(1f).tap { onInfo(infoOf(hit)) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 44x56dp：和精选那一格"一行一本"的网格同一档（FeaturedHome 里最小那颗），
+                // 高度也刚好接住右边三行字（15sp 书名 + 12sp 两行）的墨顶墨底
+                BookCover(hit.bookName, "", Modifier.size(width = 44.dp, height = 56.dp), remote = hit.coverUrl)
+                Column(Modifier.padding(start = 10.dp)) {
+                    Text(hit.bookName, fontSize = 15.sp, color = Chrome.ink, maxLines = 1)
                     Text(
-                        "最新：" + hit.latestChapter,
+                        (if (sub.isEmpty()) "" else sub + " · ") + hit.sourceName,
                         fontSize = 12.sp,
                         color = Chrome.faint,
-                        maxLines = 1,
                         modifier = Modifier.padding(top = 2.dp),
                     )
+                    if (hit.latestChapter.isNotEmpty()) {
+                        Text(
+                            "最新：" + hit.latestChapter,
+                            fontSize = 12.sp,
+                            color = Chrome.faint,
+                            maxLines = 1,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
                 }
             }
             Spacer(Modifier.width(10.dp))

@@ -36,7 +36,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,6 +52,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +64,7 @@ import com.bookreader.R
 import com.bookreader.core.model.BookMeta
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.BookProvenance
+import com.bookreader.data.CoverImages
 import com.bookreader.data.ReaderPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -550,8 +554,13 @@ private val COVER_NIGHT = intArrayOf(
 )
 
 /**
- * 一本书的封面，两档：**源站抓回来的 `cover.jpg`** → **按书名哈希的默认封面**。
+ * 一本书的封面，三档：**源站抓回来的 `cover.jpg`** → **列表页那张远程封面（[remote]）** →
+ * **按书名哈希的默认封面**。
  * 传 (书名, 书架 id) 而不是 BookMeta：「本书信息」那一页在书还没进书架时也要画同一颗封面。
+ *
+ * [remote] 只有列表那两屏用得上（搜书结果、精选榜单）：那时这本书还没进书架，磁盘上那一份还不存在，
+ * 而站点在**列表页**就给了一张小图。两档的取法不同不冲突 —— 已经下载的那一本一定用磁盘上的
+ * （那是书页上的原图，比列表缩略图清楚），所以 [remote] 只在本地那份不在时才起作用。
  *
  * 原先中间还夹一档"样例图"（书名含「剑来」就换一张仓库里的美术图）—— 精选改成真抓的书单之后
  * 它就是假的：抓到的是站点那本《剑来》，配的却是随手摆的样例封面，所以整档删掉，那张图也跟着删。
@@ -561,37 +570,56 @@ private val COVER_NIGHT = intArrayOf(
  * 色板分日/夜两列（日间浅底深字、夜间深底浅字），字都读 `Chrome.ink`；左边那条竖的是书脊。
  */
 @Composable
-internal fun BookCover(title: String, bookId: String, modifier: Modifier = Modifier, radius: Dp = 4.dp, titleOn: Boolean = true) {
+internal fun BookCover(
+    title: String,
+    bookId: String,
+    modifier: Modifier = Modifier,
+    radius: Dp = 4.dp,
+    titleOn: Boolean = true,
+    remote: String = "",
+) {
     val ctx = LocalContext.current
     val file = remember(bookId) { BookLibrary(ctx).coverFile(bookId) }
-    val bmp = remember(bookId, file.lastModified()) {
+    val local = remember(bookId, file.lastModified()) {
         if (file.isFile) BitmapFactory.decodeFile(file.absolutePath) else null
     }
-    when {
-        bmp != null -> Image(
-            bitmap = bmp.asImageBitmap(),
-            contentDescription = title,
-            contentScale = ContentScale.Crop,
-            modifier = modifier.clip(RoundedCornerShape(radius)),
-        )
-        else -> Box(
-            modifier.background(
-                Color(coverSwatch(title, if (Chrome.night) COVER_NIGHT else COVER_DAY)),
-                RoundedCornerShape(radius),
-            ),
-        ) {
-            Box(Modifier.fillMaxHeight().width(4.dp).background(Color(0x33000000)))
-            if (titleOn) {
-                Text(
-                    title,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Chrome.ink,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxSize().padding(start = 10.dp, end = 6.dp, top = 8.dp, bottom = 6.dp),
-                )
+    // 格子有多大要等量过才知道，而取样倍数按它算：解一张比格子宽三倍的图进来只是白占内存
+    var boxPx by remember { mutableIntStateOf(0) }
+    var net by remember(remote) { mutableStateOf(if (remote.isEmpty()) null else CoverImages.peek(remote)) }
+    LaunchedEffect(remote, boxPx, local) {
+        if (local == null && remote.isNotEmpty() && boxPx > 0 && net == null) net = CoverImages.load(remote, boxPx)
+    }
+    Box(modifier.onSizeChanged { boxPx = maxOf(it.width, it.height) }) {
+        val shape = RoundedCornerShape(radius)
+        val bmp = local ?: net
+        when {
+            bmp != null -> Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize().clip(shape),
+            )
+            else -> Box(
+                Modifier
+                    .matchParentSize()
+                    .background(
+                        Color(coverSwatch(title, if (Chrome.night) COVER_NIGHT else COVER_DAY)),
+                        shape,
+                    ),
+            ) {
+                Box(Modifier.fillMaxHeight().width(4.dp).background(Color(0x33000000)))
+                if (titleOn) {
+                    Text(
+                        title,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Chrome.ink,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxSize().padding(start = 10.dp, end = 6.dp, top = 8.dp, bottom = 6.dp),
+                    )
+                }
             }
         }
     }

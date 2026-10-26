@@ -81,6 +81,8 @@ data class BookInfo(
     val sourceId: String = "",
     /** 已经进书架的那一本的 id；空 = 还没下过。 */
     val bookId: String = "",
+    /** 列表页（搜书结果 / 精选榜单）那张封面的地址：这本书还没进书架时靠它画同一颗封面。 */
+    val coverUrl: String = "",
 ) {
     /** 目录都读不全就别去现抓：本地导入的那一本根本没有书页。 */
     val hasSource get() = bookUrl.isNotEmpty() && sourceId.isNotEmpty()
@@ -184,7 +186,7 @@ fun BookInfoPage(
             BackSlot("返回", onBack)
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-            BookCover(shown.title, shown.bookId, Modifier.size(width = 78.dp, height = 116.dp))
+            BookCover(shown.title, shown.bookId, Modifier.size(width = 78.dp, height = 116.dp), remote = shown.coverUrl)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(shown.title, fontSize = 19.sp, fontWeight = FontWeight.Medium, color = Chrome.ink, maxLines = 2)

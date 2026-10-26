@@ -125,6 +125,31 @@ class RuleLoaderTest {
         assertEquals("#fmimg img @src", ok.cover)
     }
 
+    /**
+     * 列表页那两格封面的判据要**按那一页的取值写法分岔**：
+     * html/xml 上不带 `@` 就是"取回元素的文字"（alt 那种），必须拒；
+     * JSON 那一条路的写法本来就是点号路径（iTunes 的 `artworkUrl100` 一个 @ 都没有），不该被同一条判据打死。
+     * 这一条是踩出来的：判据刚写下来时把 podcast-rss 那条源整个拒了，表现是"随包源装不上"。
+     */
+    @Test
+    fun aListPageCoverNeedsAnAttributeOnlyWhenThatPageIsHtml() {
+        val base = fixtureText("/rules/xhytd.json")
+        val noAt = runCatching {
+            RuleLoader.load(base.replace("    \"item\": \"#main", "    \"cover\": \"img\",\n    \"item\": \"#main"), "html没@")
+        }.exceptionOrNull()
+        assertTrue("实际：" + noAt?.message, noAt is RuleException && noAt.message!!.contains("search.cover"))
+
+        val asJson = base.replace("  \"search\": {", "  \"search\": {\n    \"format\": \"json\",\n    \"cover\": \"artworkUrl100\",")
+        assertEquals("JSON 那一档点号路径原样收下", "artworkUrl100", RuleLoader.load(asJson, "json封面").search!!.cover)
+
+        val hotNoAt = base.replace(
+            "  \"search\": {",
+            "  \"hot\": { \"url\": \"http://x/\", \"group\": \"g\", \"item\": \"a\", \"bookName\": \"a\", \"bookUrl\": \"a\", \"cover\": \"img\" },\n  \"search\": {",
+        )
+        val hotErr = runCatching { RuleLoader.load(hotNoAt, "榜单没@") }.exceptionOrNull()
+        assertTrue("实际：" + hotErr?.message, hotErr is RuleException && hotErr.message!!.contains("hot.cover"))
+    }
+
     @Test
     fun unsupportedHttpMethodIsRefused() {
         val bad = text("/rules/tianxi.json").replace("\"method\": \"POST\"", "\"method\": \"PUT\"")

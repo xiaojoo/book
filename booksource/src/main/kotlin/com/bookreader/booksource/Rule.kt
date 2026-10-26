@@ -24,6 +24,15 @@ data class Rule(
     val search: SearchRule?,
     /** 书页上那张封面图的 pick 写法（`#fmimg img @src`）。空 = 这条源不取封面，书架上走默认封面。 */
     val cover: String,
+    /**
+     * 从**书页地址**推封面地址的模板，给列表页没有图的那一族用。
+     *
+     * 写法里 `{g}` = 书页地址倒数第二段（分组号），`{b}` = 最后一段（书本号，`171_171392` 这种取 `_` 后面那截）。
+     * 例：`/files/article/image/{g}/{b}/{b}s.jpg` 配 `http://…/171_171392/` 推出 `…/files/article/image/171/171392/171392s.jpg`。
+     * 笔趣阁那一族两家站实测 12/12 推得和书页上真写着的一模一样（2026-10-26，判据 `CoverTemplateTest`）。
+     * 空 = 不推。这一格只在列表页那一格取不到图时才起作用，永远不会盖掉站点列表页给的真地址。
+     */
+    val coverFrom: String,
     /** 书页上"内容简介"那一格的 pick 写法（`#intro`）。空 = 这本书没有简介可取。 */
     val intro: String,
     /** 首页/榜单页上那些分类块。空 = 这条源没有热门可抓，精选那一页就不列它。 */
@@ -71,6 +80,8 @@ data class HotRule(
     val author: String,
     val category: String,
     val bookUrl: String,
+    /** 榜单每一行上那张封面图的 pick 写法（`dt img @src`）。空 = 这一页不给封面，走默认封面。 */
+    val cover: String,
 )
 
 /**
@@ -96,6 +107,8 @@ data class SearchRule(
     val wordCount: String,
     val intro: String,
     val bookUrl: String,
+    /** 搜索结果每一行上那张封面图的 pick 写法（`.cover img @src`）。空 = 这一页不给封面。 */
+    val cover: String,
 )
 
 /**
@@ -189,17 +202,24 @@ data class BookHit(
     val lastUpdateTime: String = "",
     val wordCount: String = "",
     val intro: String = "",
+    /**
+     * 列表页（搜索结果 / 精选榜单）上那张封面图的地址，已经补成绝对地址。
+     *
+     * 和"下载进书架时抓的那份 `cover.jpg`"是两个来源：这一格只够在列表上摆一张图，
+     * 空 = 这一条源在列表页根本不给封面（一大半小说站的搜索页就是这样），界面退回按书名哈希的默认封面。
+     */
+    val coverUrl: String = "",
 )
 
 object RuleLoader {
 
-    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "kind", "cover", "intro", "hot", "search", "toc", "chapter", "crawl")
+    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "kind", "cover", "coverFrom", "intro", "hot", "search", "toc", "chapter", "crawl")
     private val SEARCH = setOf(
         "url", "method", "data", "cookies", "format", "item", "bookName", "author", "category",
-        "latestChapter", "lastUpdateTime", "wordCount", "intro", "bookUrl",
+        "latestChapter", "lastUpdateTime", "wordCount", "intro", "bookUrl", "cover",
     )
     private val TOC = setOf("url", "item", "nextPage", "name", "href", "format", "reverse")
-    private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl")
+    private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl", "cover")
     private val CHAPTER = setOf("content", "filter", "nextPage", "image", "audio")
     private val CRAWL = setOf("concurrency", "minIntervalMs", "maxIntervalMs", "maxAttempts")
 
@@ -229,6 +249,7 @@ object RuleLoader {
                 wordCount = str(m, "wordCount", "$where.search"),
                 intro = str(m, "intro", "$where.search"),
                 bookUrl = str(m, "bookUrl", "$where.search", required = true),
+                cover = str(m, "cover", "$where.search"),
             )
         }
         // 文献源没有"章"这一说（一篇就是一支 PDF），那两段整个可以不写；
@@ -247,6 +268,7 @@ object RuleLoader {
             charset = str(o, "charset", where),
             kind = kind,
             cover = str(o, "cover", where),
+            coverFrom = str(o, "coverFrom", where),
             intro = str(o, "intro", where),
             hot = o["hot"]?.let { h ->
                 val m = Json.obj(h)
@@ -259,6 +281,7 @@ object RuleLoader {
                     author = str(m, "author", "$where.hot"),
                     category = str(m, "category", "$where.hot"),
                     bookUrl = str(m, "bookUrl", "$where.hot", required = true),
+                    cover = str(m, "cover", "$where.hot"),
                 )
             },
             search = search,
@@ -295,6 +318,18 @@ object RuleLoader {
             // 于是"取封面"变成拿 alt 属性当图片地址去请求 —— 不报错，就是永远存不下封面
             if (it.cover.isNotEmpty() && !it.cover.contains('@')) {
                 throw RuleException("$where.cover：得写成「选择器 @src」这种取值写法（例：#fmimg img @src），现在只会取到元素的文字")
+            }
+            // 列表页那两格（搜索结果 / 精选榜单）同一族错法。
+            // **JSON 那一档不要求 @**：它的取值写法本来就是点号路径（iTunes 的 `artworkUrl100`），
+            // 只有 html/xml 上"不带 @"才会退化成取回元素的文字
+            val searchCover = it.search?.cover ?: ""
+            val searchIsJson = it.search?.format == FORMAT_JSON
+            val listCovers = listOfNotNull(
+                if (searchCover.isNotEmpty() && !searchIsJson) "search.cover" to searchCover else null,
+                it.hot?.cover?.takeIf { c -> c.isNotEmpty() }?.let { c -> "hot.cover" to c },
+            )
+            listCovers.filter { (_, spec) -> !spec.contains('@') }.forEach { (key, _) ->
+                throw RuleException("$where.$key：得写成「选择器 @src」这种取值写法（例：dt img @src），现在只会取到元素的文字")
             }
             // 同一族错法在漫画那一格上：图的地址一定挂在属性上（src / data-original / data-src），
             // 不带 @ 取回来的就是那张图的 alt 文字，表现是"每一章都抓到了，一张图也没有"

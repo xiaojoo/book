@@ -120,6 +120,10 @@ internal fun jsonResults(rule: Rule, body: String): List<BookHit> {
             lastUpdateTime = jsonPick(row, s.lastUpdateTime),
             wordCount = jsonPick(row, s.wordCount),
             intro = jsonPick(row, s.intro),
+            // 接口回的一般就是绝对地址（iTunes 给 artworkUrl、OpenAlex 没有图），所以这里不补全：
+            // 这一族的封面本来就可选，取不到才退回按书页地址推的模板
+            coverUrl = (if (s.cover.isBlank()) "" else jsonPick(row, s.cover))
+                .ifBlank { coverFromUrl(rule, absolutize(rule.homeUrl, url)) },
         )
     }
 }

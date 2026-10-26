@@ -11,7 +11,8 @@
     "bookName": "collectionName",
     "author": "artistName",
     "category": "genres",
-    "bookUrl": "feedUrl"
+    "bookUrl": "feedUrl",
+    "cover": "artworkUrl100"
   },
   "toc": {
     "item": "item",
