@@ -37,7 +37,10 @@ fun expand(template: String, keyword: String, page: Int = 1, charset: String = "
     template.replace("%s", enc(keyword, charset)).replace("%n", page.toString())
 
 private fun enc(v: String, charset: String): String =
-    URLEncoder.encode(v, runCatching { Charset.forName(charset) }.getOrDefault(Charsets.UTF_8))
+    // 只能用 (String, String) 那一档：(String, Charset) 是 Android API 33 才有的，而这条链路的
+    // 最低一档跟着 minSdk 26 —— 用错重载在本机测试里全绿（JDK 有这个方法），真机上 Android 13
+    // 以下每一次搜索都在这里抛 NoSuchMethodError，表现就是"搜书不能用"。
+    URLEncoder.encode(v, runCatching { Charset.forName(charset) }.getOrDefault(Charsets.UTF_8).name())
 
 /**
  * 书源里 `data` 那段的写法是 `{k1: v1, k2: v2}`，发出去必须是 `k1=v1&k2=v2`。
