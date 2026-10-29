@@ -60,15 +60,18 @@ class FeatureCatTest {
     }
 
     @Test
-    fun takingPerCategoryKeepsEveryCategoryOnThePage() {
+    fun everyCategoryKeepsAllItsBooksInThePool() {
         // 站点首页的真实排法：一块 12 本、六块连着排。整条取前 20 本就只剩头两个类目，
-        // 那一排类目 tab 会静默少掉四颗 —— 这条判据在"取前 20 本"的写法下是红的
+        // 那一排类目 tab 会静默少掉四颗 —— 所以池子按类目整份留着，谁也不截断
+        //（以前每类卡 6 本，「更多」那一屏就少一半：两家站的 24 本被砍成 12 本）
         val site = FEATURE_CATS.flatMap { c -> List(12) { i -> hit("$c-书名$i", c) } }
-        val kept = site.perCategory(6)
-        assertEquals("每个类目该留 6 本：${kept.groupBy { it.category }.mapValues { it.value.size }}",
-            6, kept.groupBy { it.category }.values.first().size)
-        assertEquals("六个类目都该还在", FEATURE_CATS.toSet(), kept.map { featureCat(it.category) }.toSet())
-        assertEquals("整条取前 20 本只会剩两个类目", 2, site.take(20).map { featureCat(it.category) }.distinct().size)
+        val groups = site.groupBy { featureCat(it.category) }
+        assertEquals("七个类目一颗都不能少", FEATURE_CATS.toSet(), groups.keys)
+        assertEquals("每一类 12 本全留着", 12, groups[FEATURE_CATS.first()]?.size)
+        assertEquals("八类 × 12 本，一本都没被截掉", 96, groups.values.sumOf { it.size })
+        assertEquals("类目表本身是八颗（六类小说 + 漫画 + 有声）", 8, FEATURE_CATS.size)
+        assertEquals("整条取前 20 本只会剩两个类目 —— 那种写法正是这条判据要挡的",
+            2, site.take(20).map { featureCat(it.category) }.distinct().size)
     }
 
     private fun hit(name: String, category: String) = BookHit(
