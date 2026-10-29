@@ -1,5 +1,6 @@
 package com.bookreader.booksource
 
+import com.bookreader.core.ingest.ImageBookFile
 import java.io.File
 import java.security.MessageDigest
 import java.util.Collections
@@ -58,7 +59,7 @@ class ComicDownloader(
         val total = chapters.size
         onProgress(0, total)
         val done = AtomicInteger(0)
-        val failed = Collections.synchronizedList(ArrayList<String>())
+        val failed = Collections.synchronizedList(ArrayList<Pair<Int, String>>())
         val got = Collections.synchronizedList(ArrayList<ComicChapter>())
         val pool = Executors.newFixedThreadPool(min(total, max(1, rule.crawl.concurrency)))
         val lock = Any()
@@ -81,7 +82,7 @@ class ComicDownloader(
                     val one = runCatching { fetchChapter(url, shouldStop, gate) }
                         .onFailure { if (shouldStop()) return@Runnable }
                         .getOrNull()
-                    if (one == null || one.pages == 0) failed += name else {
+                    if (one == null || one.pages == 0) failed += i to name else {
                         val c = ComicChapter(i, name, one.dir, one.pages)
                         // 落地就报，不等整本：抓一半被杀/按暂停时那一半在章表里已经是真的
                         got += c
@@ -102,7 +103,9 @@ class ComicDownloader(
             author = hit.author,
             chapters = total,
             images = store.images(),
-            failed = failed.toList(),
+            // 几条线程同时往里写，收下的顺序是"谁先失败"；界面上那句"这几章没抓到"要按目录念，
+            // 所以按章号排一遍再交出去
+            failed = failed.sortedBy { it.first }.map { it.second },
             outline = all.map { it.first },
             intro = head.intro,
             // 按目录顺序交出去：写 chapters.tsv 的那一头要的是"第几章"，不是"哪一条线程先跑完"
@@ -117,6 +120,7 @@ class ComicDownloader(
      * 缺的是哪几张。反过来（先取图再写表）会留下一堆没人认领的文件。
      */
     private fun fetchChapter(chapterUrl: String, shouldStop: () -> Boolean, gate: () -> Unit): One {
+        rule.chapter.file?.let { return fetchFileChapter(chapterUrl, it, gate) }
         val page = fetch.fetch(PageRequest(chapterUrl))
         val urls = chapterImages(rule, page.text(rule.charset), page.finalUrl)
         if (urls.isEmpty()) return One("", 0)
@@ -130,6 +134,37 @@ class ComicDownloader(
         }
         return One(dir, urls.size)
     }
+
+    /**
+     * 一章 = 一整个包（Kindle 漫画那一族）：POST 取址 → 下整本 → 解成一排页落进同一个仓。
+     *
+     * 落盘走 [unpackComicChapter]，和"本地导入一个 .cbz"共用同一格 —— 形状只定义一次。
+     * 取址回包里读不到 [FileRule.path] 那一格时把**回包原文**带进那句错：这种站不给内容时回的是
+     * `{"code":4001002,"message":"請先登錄"}`，只说"没找到地址"等于让人去查网络。
+     */
+    private fun fetchFileChapter(chapterUrl: String, f: FileRule, gate: () -> Unit): One {
+        val body = f.body.replace("{num}", numberKey(chapterUrl)).replace("{url}", chapterUrl)
+        val reply = fetch.fetch(PageRequest(f.locate, method = "POST", body = body, referer = chapterUrl))
+        val text = reply.text(rule.charset)
+        val fileUrl = Json.path(text, f.path)
+        if (fileUrl.isEmpty()) {
+            error("「$chapterUrl」这一章的取址口没回文件地址。回包：" + text.replace('\n', ' ').take(160))
+        }
+        gate()
+        val bytes = fetch.fetch(PageRequest(absolutize(f.locate, fileUrl), referer = chapterUrl)).bytes
+        val book = ImageBookFile.open(bytes) ?: error(
+            "那一包解不出页：" + absolutize(f.locate, fileUrl) + " 回了 " + bytes.size + " 字节，" +
+                "开头是「" + String(bytes.take(24).toByteArray(), Charsets.ISO_8859_1).trim() + "」—— 要么它不是图片本，要么这一条要先登录",
+        )
+        return book.use {
+            val one = unpackComicChapter(it, store, chapterUrl)
+            One(one.dir, one.pages)
+        }
+    }
+
+    /** `{num}` 用的那一串：章地址最后一段**开头**那串数字（`…/comic/1176462` → `1176462`）。 */
+    private fun numberKey(chapterUrl: String): String =
+        chapterUrl.trimEnd('/').substringAfterLast('/').takeWhile { it.isDigit() }
 
     /** 一章抓到的一点结果：仓里的目录名 + 该有几张。 */
     private data class One(val dir: String, val pages: Int)
@@ -186,6 +221,39 @@ data class ComicOutcome(
 
 /** 一章在磁盘上的样子：第几章、章名、仓里那个目录名、该有几张图。 */
 data class ComicChapter(val index: Int, val title: String, val dir: String, val pages: Int)
+
+/**
+ * 把一个「图片本」（一整包的页）铺成一章：一次解一张、解出来就落盘。
+ *
+ * 导入那一头（本地一个 .cbz / 图片 epub）和抓站那一头（一站把一话打成一个包）共用这一格：
+ * 交出去的形状和 [ComicDownloader.fetchChapter] 一模一样 —— `pages.tsv` 一行一页、文件名走
+ * [comicImageName] 同一个算法。形状只在这一处定义，免得两条路各写一遍、改了其中一条而另一条还在
+ * 往架上留读不了的件。
+ *
+ * `key` 是这一章的"地址"：抓站时它真是章页 URL，导入时是 `file://<件名>` —— 只拿来算目录名，
+ * 不需要能打开。返回**真落盘的张数**（解不出字节的那几页不算，界面上那句"共几页"读它）。
+ */
+fun unpackComicChapter(
+    book: ImageBookFile,
+    store: ComicStore,
+    key: String,
+    onEach: (done: Int, total: Int) -> Unit = { _, _ -> },
+): UnpackedChapter {
+    val urls = (0 until book.pageCount).map { "$key#p$it" }
+    val box = store.putPages(key, urls)
+    var got = 0
+    urls.indices.forEach { i ->
+        val bytes = book.bytes(i) ?: return@forEach
+        store.put(box, urls[i], bytes)
+        got++
+        onEach(got, urls.size)
+    }
+    // 章目录名跟着结果一起交出去：那是 `putPages` 里算的一次散列，调用方再算一遍就是"两头各记一套"
+    return UnpackedChapter(box, got)
+}
+
+/** 展开一章的回报：仓里那个目录名 + 真落盘的张数（写 `chapters.tsv` 用的就是这两个数）。 */
+data class UnpackedChapter(val dir: String, val pages: Int)
 
 /**
  * 图片仓。`:app` 给的是落在书目录里的那一份，判据给的是内存里的那一份。

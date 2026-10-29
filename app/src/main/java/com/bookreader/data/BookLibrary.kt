@@ -4,7 +4,10 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import com.bookreader.booksource.FileComicStore
+import com.bookreader.booksource.unpackComicChapter
 import com.bookreader.core.ingest.EbookText
+import com.bookreader.core.ingest.ImageBookFile
 import com.bookreader.core.ingest.MarkdownText
 import com.bookreader.core.ingest.MobiText
 import com.bookreader.core.ingest.PptxDoc
@@ -225,6 +228,11 @@ class BookLibrary(private val context: Context) {
             val meta = when {
                 ext.lowercase() == "pdf" -> importPdf(staged, dir, id, title)
                 ext.lowercase() == "pptx" -> importPptx(staged, dir, id, title)
+                // 图片本：一排扫描页装在一个 zip 里（.cbz，和 Kindle 那一族把整话图装进 .epub 的那些）。
+                // .cbz/.zip 没有"文字"这一条路，直接按页读；.epub 要先**证明它抽不出字**才轮得到这一档 ——
+                // 网文 epub 里挂几张插图是常态，认成图片本会把一本有字的书变成一串图片。
+                ext.lowercase() in CBZ_EXTENSIONS || (ebook.supports(staged) && imageOnlyEbook(staged)) ->
+                    importImageBook(staged, dir, id, title, onProgress)
                 ebook.supports(staged) -> importMarkup(staged, dir, id, title, onProgress) { s, d -> ebook.extractToText(s, d) }
                 mobi.supports(staged) -> importMarkup(staged, dir, id, title, onProgress) { s, d -> mobi.extractToText(s, d) }
                 // md 只按扩展名认：内容嗅探会把"正文里恰好有三个星号"的小说当 markdown 拆，
@@ -248,6 +256,43 @@ class BookLibrary(private val context: Context) {
         } finally {
             staged.delete()
         }
+    }
+
+    /**
+     * 这一本 epub 是不是"只有图、没有字"：先把 spine 那些 XHTML 抽一遍看字数 —— 那一步只读字、
+     * 不碰图（一卷 38MB 的漫画包在这儿只花几十 KB），所以拿它当分岔不贵。
+     * 一个字都抽不出、又确实解得出一排图，才算图片本。
+     */
+    private fun imageOnlyEbook(staged: File): Boolean {
+        if (staged.extension.lowercase() != "epub") return false
+        val probe = File(staging, "probe-${System.currentTimeMillis()}.txt")
+        val chars = runCatching {
+            EbookText().extractToText(staged, probe)
+            if (probe.isFile) probe.length() else 0L
+        }.getOrDefault(0L)
+        probe.delete()
+        return chars == 0L && runCatching { ImageBookFile.open(staged)?.use { it.pageCount } ?: 0 }.getOrDefault(0) > 0
+    }
+
+    /**
+     * 图片本入库：**一个件 = 一章**（站子就是一话/一卷打一个包），页落进和抓站同一套的
+     * `comic/<章目录>/` —— 于是漫画屏、目录抽屉、翻页、未读进度那一整族一个字都不用改。
+     *
+     * 页的"地址"是合成的（`file://<件名>#p<序号>`）：那张 `pages.tsv` 要的是一个能认出这一页的键，
+     * 网络地址只是抓站那一族恰好拿得到的键；文件名仍走 [comicImageName] 同一个算法，两头不用各记一套。
+     */
+    private fun importImageBook(staged: File, dir: File, id: String, title: String, onProgress: (Double) -> Unit): BookMeta {
+        val book = ImageBookFile.open(staged)
+            ?: error("这一包里一张图都没有：它不是 cbz / 图片 epub，或者 spine 没指到图")
+        val got = book.use { ib ->
+            val store = FileComicStore(File(dir, ComicBook.DIR))
+            val key = "file://" + staged.name
+            val one = unpackComicChapter(ib, store, key) { done, total -> onProgress(done.toDouble() / total) }
+            if (one.pages == 0) error("这一包里的 ${ib.pageCount} 张都解不出字节")
+            ComicBook(dir).record(0, title, one.dir, one.pages)
+            one.pages
+        }
+        return writeComicMeta(id, title, "", 1, got)
     }
 
     /**
@@ -358,6 +403,9 @@ class BookLibrary(private val context: Context) {
 
         /** 这些扩展名一律该走抽正文那条路；认不出壳就报错，不当纯文本吞。 */
         val BOOK_EXTENSIONS = setOf("epub", "docx", "mobi", "azw", "azw3", "prc", "pptx")
+
+        /** 图片本：只有"一排图"这一种读法，没有文字那条路，所以扩展名一认就走 [importImageBook]。 */
+        val CBZ_EXTENSIONS = setOf("cbz", "zip")
         val MD_EXTENSIONS = setOf("md", "markdown", "mdown")
         const val PDF_FILE = "document.pdf"
         const val PPTX_FILE = "deck.pptx"

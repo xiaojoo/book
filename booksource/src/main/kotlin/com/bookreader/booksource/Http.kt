@@ -29,6 +29,15 @@ class HttpFetcher(
      */
     private val jar = HashMap<String, MutableMap<String, String>>()
 
+    /**
+     * 这一台站上已经有会话 cookie 了 —— 登录成没成问这一格，不去猜各家回包长什么样。
+     *
+     * 199mh 的取址口在未登录时回的是 `{"code":4001002,"message":"請先登錄"}`，而 **HTTP 还是 200**：
+     * 状态码判不出来，回包格式各家又都不一样，能确定的只有"登录口发过之后罐子里有没有东西"。
+     */
+    fun hasCookie(url: String): Boolean =
+        runCatching { jar[URI(url).host.orEmpty()]?.isNotEmpty() == true }.getOrDefault(false)
+
     override fun fetch(req: PageRequest): Page {
         // 走 URI 而不是 URL(String)：后者在 JDK 20 起废弃。顺带的结果是地址必须是合法 URI，
         // 竖线、空格、花括号那种写歪的模板在这里就报，不会变成"发出去一个被站点改写的地址"

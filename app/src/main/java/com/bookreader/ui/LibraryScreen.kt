@@ -130,7 +130,9 @@ fun LibraryScreen(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) startImport(uri)
     }
-    // octet-stream 也在列里：MIUI 的文件源给 epub/mobi 报的就是它，只列精确 mime 会在选择器里看不见
+    // octet-stream 也在列里：MIUI 的文件源给 epub/mobi 报的就是它，只列精确 mime 会在选择器里看不见。
+    // 图片本那一族各家的报法不统一（zip / x-cbz / comicbook+zip 都见过），三条都列上，
+    // 少一条就是那个件在选择器里灰着点不动
     fun pick() = picker.launch(
         arrayOf(
             "text/*",
@@ -140,6 +142,9 @@ fun LibraryScreen(
             "application/x-mobipocket-ebook",
             "application/vnd.amazon.ebook",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/zip",
+            "application/x-cbz",
+            "application/vnd.comicbook+zip",
             "application/octet-stream",
         ),
     )

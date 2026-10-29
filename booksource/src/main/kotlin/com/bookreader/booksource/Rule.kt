@@ -41,6 +41,20 @@ data class Rule(
     val toc: TocRule,
     val chapter: ChapterRule,
     val crawl: CrawlRule,
+    /**
+     * 要先登录才有内容的那一族（199mh：取址口裸打回 `{"code":4001002,"message":"請先登錄"}`）。
+     *
+     * 这一格只声明**登录口在哪、那两个字段叫什么**，不装账号密码 —— 凭据存在应用那一侧
+     * （和 AI 秘钥同一只 `SecretStore`，AndroidKeyStore 加密），由应用先发这一枪、再把带着会话
+     * cookie 的同一个 fetcher 交给抓取。规则文件是要能原样导给别人的，里面不该躺着一个人的密码。
+     */
+    val login: LoginRule? = null,
+    /**
+     * 站点自己的那一套**真实类目**（漫画/有声那几家：瓜子的"恋爱·校园·总裁"、199mh 的 40 多类、
+     * 图库的 21 个 tag、古文岛的四库分类）。我们的 `featureCat` 那张表只有八档，
+     * 而"这是漫画/有声"是**种类**，不是站点给分类的人想说的话 —— 这一格把后者还回来。
+     */
+    val cats: CatsRule? = null,
 ) {
     val canSearch: Boolean get() = search != null
 
@@ -82,7 +96,21 @@ data class HotRule(
     val bookUrl: String,
     /** 榜单每一行上那张封面图的 pick 写法（`dt img @src`）。空 = 这一页不给封面，走默认封面。 */
     val cover: String,
-)
+    /**
+     * 下一页的地址模板，`%n` 换成页号。**第 1 页永远走 [url]**，这一格只从第 2 页起用 ——
+     * 因为很多站的首页地址和翻页地址不是一个形状（`/` 对 `/m/list-0-0-0-0-0-0-2`）。
+     *
+     * 空 = 这一条源的榜单只有首页那一份，「更多」那一屏翻一页就到头了（会照实说一句，不会空转）。
+     */
+    val page: String = "",
+) {
+    /** 第 [n] 页该打哪个地址；这一条源没有下一页可翻时回空串（调用方据此停下，不发那一枪）。 */
+    fun pageUrl(n: Int): String = when {
+        n <= 1 -> url
+        page.isBlank() -> ""
+        else -> expand(page, "", n)
+    }
+}
 
 /**
  * 搜索：url 里的 %s 换成关键词（自动按 URL 编码）；各取值字段见 [pick]。
@@ -169,12 +197,64 @@ data class ChapterRule(
     val nextPage: String,
     val image: String,
     val audio: String,
+    /** 一章 = **一个文件**（图片本）而不是"一页里的一排图"。空 = 这一章还是点开出图的那种页。 */
+    val file: FileRule? = null,
 ) {
     companion object {
         /** `chapter.audio` 的这一档不是选择器，是一句声明：集地址就是文件本身，别再打一次集页。 */
         const val SELF = "@self"
     }
 }
+
+/**
+ * 一章交回来的是一整个包（`.epub` / `.cbz`），拆开才是一排页 —— 199mh 那一族 Kindle 漫画站就是这种：
+ * 书页上每一条 `vol-item` 是一话/一卷，`onclick="fileDownload(1176462)"` 里那个号才是入口，
+ * 文件地址要 POST 一次、从回包的 JSON 里读。
+ *
+ * 三格：[locate] 取址口；[body] 发出去的表单串，`{num}` 换成**章地址最后一段开头那串数字**
+ * （就是上面那个号），`{url}` 换成整条章地址；[path] 回包里那条文件地址在哪一格，
+ * JSON 点号路径、数组用下标（`result.0.url`）。
+ *
+ * 拿到地址之后那一段下载和抓图同一套走限速、重试；解包交给 `:core` 的 ImageBook，一次只解一张。
+ */
+data class FileRule(val locate: String, val body: String, val path: String)
+
+/**
+ * 类目表：从某一页上把"这家站自己怎么分类"摘出来，每一颗给一个列表页地址。
+ *
+ * 字段：[at] 哪一页上有这张表（空 = 用 homeUrl）；[item] 每一颗类目的选择器；
+ * [name] 类目名的取值写法（空 = 那颗元素的文字）；[link] 这一类列表页地址的取值写法（空 = `@href`）；
+ * [max] 最多取几颗（199mh 首页一次给 65 颗，全摆出来没人点得完）；
+ * [page] 这一类的第 N 页怎么拼：`%u` = 类目地址、`%U` = 类目地址去掉末尾那串数字、`%n` = 页号，
+ * 留空 = 这一站的类目页翻不动（实测图库 `?p=2` 回同样 24 条、古文岛 `p=2` 回同样 64 条，新 0 条）；
+ * [list] 类目页的版式和榜单页不一样的那一家（图库：榜单是 `.top-card`，类目页是 `swiper-card-item`），
+ * 这一套取值就换用它 —— `url` 那一格在这里没有意义，忽略。
+ */
+data class CatsRule(
+    val at: String,
+    val item: String,
+    val name: String,
+    val link: String,
+    val max: Int,
+    val page: String,
+    val list: HotRule?,
+) {
+    /** 这一类第 [n] 页的地址；第 1 页就是类目地址本身，没写模板就没有第 2 页。 */
+    fun pageUrl(catUrl: String, n: Int): String = when {
+        n <= 1 -> catUrl
+        page.isBlank() -> ""
+        else -> page.replace("%u", catUrl)
+            .replace("%U", catUrl.trimEnd().dropLastWhile { it.isDigit() })
+            .replace("%n", n.toString())
+    }
+}
+
+/**
+ * 登录口。[user] / [pass] 是**表单字段名**，不是值：实测那一家站报的是 `name="email"`、
+ * `name="password"`，值由应用从 `SecretStore` 取来填 —— 规则文件是要能原样导给别人的，
+ * 里面不该躺着一个人的密码。
+ */
+data class LoginRule(val url: String, val user: String, val pass: String)
 
 /**
  * 抓取节奏。区间和重试次数不是"调快点省时间"的参数：
@@ -213,14 +293,17 @@ data class BookHit(
 
 object RuleLoader {
 
-    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "kind", "cover", "coverFrom", "intro", "hot", "search", "toc", "chapter", "crawl")
+    private val TOP = setOf("id", "name", "homeUrl", "note", "charset", "kind", "cover", "coverFrom", "intro", "hot", "search", "toc", "chapter", "crawl", "login", "cats")
     private val SEARCH = setOf(
         "url", "method", "data", "cookies", "format", "item", "bookName", "author", "category",
         "latestChapter", "lastUpdateTime", "wordCount", "intro", "bookUrl", "cover",
     )
     private val TOC = setOf("url", "item", "nextPage", "name", "href", "format", "reverse")
-    private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl", "cover")
-    private val CHAPTER = setOf("content", "filter", "nextPage", "image", "audio")
+    private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl", "cover", "page")
+    private val CHAPTER = setOf("content", "filter", "nextPage", "image", "audio", "file")
+    private val LOGIN = setOf("url", "user", "pass")
+    private val CATS = setOf("at", "item", "name", "link", "max", "page", "list")
+    private val FILE = setOf("locate", "body", "path")
     private val CRAWL = setOf("concurrency", "minIntervalMs", "maxIntervalMs", "maxAttempts")
 
     /** 一頁回來的东西长什么样：决定了用哪一套取值写法。文献接口回 JSON，arXiv 回 Atom。 */
@@ -282,6 +365,7 @@ object RuleLoader {
                     category = str(m, "category", "$where.hot"),
                     bookUrl = str(m, "bookUrl", "$where.hot", required = true),
                     cover = str(m, "cover", "$where.hot"),
+                    page = str(m, "page", "$where.hot"),
                 )
             },
             search = search,
@@ -303,6 +387,15 @@ object RuleLoader {
                 nextPage = str(chapter, "nextPage", "$where.chapter"),
                 image = str(chapter, "image", "$where.chapter"),
                 audio = str(chapter, "audio", "$where.chapter"),
+                file = chapter["file"]?.let { fl ->
+                    val m = Json.obj(fl)
+                    unknown(m, FILE, "$where.chapter.file")
+                    FileRule(
+                        locate = str(m, "locate", "$where.chapter.file", required = true).also { legalUrl(it, "$where.chapter.file.locate") },
+                        body = str(m, "body", "$where.chapter.file"),
+                        path = str(m, "path", "$where.chapter.file", required = true),
+                    )
+                },
             ),
             crawl = CrawlRule(
                 concurrency = intAt(crawl, "concurrency", "$where.crawl", 4, 1, 16),
@@ -310,7 +403,55 @@ object RuleLoader {
                 maxIntervalMs = longAt(crawl, "maxIntervalMs", "$where.crawl", 1200L, 0L, 120_000L),
                 maxAttempts = intAt(crawl, "maxAttempts", "$where.crawl", 3, 1, 10),
             ),
+            login = o["login"]?.let { lg ->
+                val m = Json.obj(lg)
+                unknown(m, LOGIN, "$where.login")
+                LoginRule(
+                    url = str(m, "url", "$where.login", required = true).also { legalUrl(it, "$where.login.url") },
+                    user = str(m, "user", "$where.login", required = true),
+                    pass = str(m, "pass", "$where.login", required = true),
+                )
+            },
+            cats = o["cats"]?.let { cs ->
+                val m = Json.obj(cs)
+                unknown(m, CATS, "$where.cats")
+                CatsRule(
+                    at = str(m, "at", "$where.cats").also { legalUrl(it, "$where.cats.at") },
+                    item = str(m, "item", "$where.cats", required = true),
+                    name = str(m, "name", "$where.cats"),
+                    link = str(m, "link", "$where.cats"),
+                    max = intAt(m, "max", "$where.cats", 24, 2, 80),
+                    page = str(m, "page", "$where.cats"),
+                    list = m["list"]?.let { l ->
+                        val lm = Json.obj(l)
+                        unknown(lm, HOT, "$where.cats.list")
+                        HotRule(
+                            url = "", group = str(lm, "group", "$where.cats.list"),
+                            item = str(lm, "item", "$where.cats.list", required = true),
+                            bookName = str(lm, "bookName", "$where.cats.list", required = true),
+                            author = str(lm, "author", "$where.cats.list"),
+                            category = str(lm, "category", "$where.cats.list"),
+                            bookUrl = str(lm, "bookUrl", "$where.cats.list", required = true),
+                            cover = str(lm, "cover", "$where.cats.list"),
+                        )
+                    },
+                )
+            },
         ).also {
+            // 一章是一个文件（图片本）这一档只有漫画那一族阅读器读得懂：配在小说/有声/文献上不会报错，
+            // 只会"下载完成、点开是空的"—— 那种静默失效比装不上难查十倍
+            // 写了 cats.page 却没带 %n：每一页都打同一个地址，"加载更多"会一直拿到见过的那几本
+            it.cats?.page?.takeIf { t -> t.isNotBlank() && !t.contains("%n") }?.let { _ ->
+                throw RuleException("$where.cats.page：这一格是类目页的翻页模板，必须带 %n（页号）")
+            }
+            if (it.cats != null && it.hot == null && it.cats.list == null) {
+                throw RuleException("$where.cats：类目页要用哪套取值没写 —— 既没有 hot 那一段可以复用，也没写 cats.list")
+            }
+            if (it.chapter.file != null && it.kind != Rule.COMIC) {
+                throw RuleException(
+                    "$where.chapter.file：「一章是一个文件」只有 kind 写成 comic 才有人去解包，这条源的 kind 是「${it.kind}」",
+                )
+            }
             if (it.crawl.maxIntervalMs < it.crawl.minIntervalMs) {
                 throw RuleException("$where.crawl：maxIntervalMs 比 minIntervalMs 还小，这样取到的区间是空的")
             }
@@ -331,13 +472,24 @@ object RuleLoader {
             listCovers.filter { (_, spec) -> !spec.contains('@') }.forEach { (key, _) ->
                 throw RuleException("$where.$key：得写成「选择器 @src」这种取值写法（例：dt img @src），现在只会取到元素的文字")
             }
+            // 写了 `hot.page` 却没带 %n：每一页都会打同一个地址 —— 「加载更多」滚到底拿回来的
+            // 全是已经有过的那几本，界面上就是"点了没反应"。这种写法在装的时候就该拒
+            it.hot?.page?.takeIf { t -> t.isNotBlank() && !t.contains("%n") }?.let { t ->
+                throw RuleException("$where.hot.page：这一格是下一页的地址模板，必须带 %n（页号），现在写的是「$t」")
+            }
             // 同一族错法在漫画那一格上：图的地址一定挂在属性上（src / data-original / data-src），
             // 不带 @ 取回来的就是那张图的 alt 文字，表现是"每一章都抓到了，一张图也没有"
             if (it.isComic) {
-                if (it.chapter.image.isBlank()) {
-                    throw RuleException("$where.chapter.image：这是一条漫画源（\"kind\": \"comic\"），得指出每一页那张图在哪一格")
-                }
-                if (!it.chapter.image.contains('@')) {
+                if (it.chapter.file != null) {
+                    // 「一章是一个包」那一族（199mh）没有图片地址可指：页在包里面，由 ImageBook 拆
+                    if (it.chapter.image.isNotBlank()) {
+                        throw RuleException(
+                            "$where.chapter.image：这一条同时写了「一排图」和「一个文件」两种章，引擎不知道该信哪一种 —— 留一种",
+                        )
+                    }
+                } else if (it.chapter.image.isBlank()) {
+                    throw RuleException("$where.chapter.image：这是一条漫画源（\"kind\": \"comic\"），得指出每一页那张图在哪一格，或者写 chapter.file 那一档")
+                } else if (!it.chapter.image.contains('@')) {
                     throw RuleException("$where.chapter.image：得写成「选择器 @属性」，例：#images img @data-original")
                 }
             }

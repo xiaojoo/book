@@ -35,6 +35,30 @@ object Json {
     fun arr(v: Any?): List<Any?> = v as? List<Any?>
         ?: throw RuleException("这里要的是一个数组，实际读到的是 " + (v?.javaClass?.simpleName ?: "null"))
 
+    /**
+     * 点号路径取一格：`result.0.url` —— 中间那段数字是数组下标。取不到回**空串**。
+     *
+     * 给 `chapter.file.path` 那一格用（取址口回的那种小 JSON）。不是通用 JSON 查询语言：
+     * 通配、过滤器、负下标都没有，写不出来就在规则里换一条路径，别在这里加语法。
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun path(text: String, dotted: String): String {
+        var v: Any? = runCatching { parse(text) }.getOrNull()
+        for (seg in dotted.split('.').filter { it.isNotEmpty() }) {
+            val cur = v
+            v = when (cur) {
+                is Map<*, *> -> (cur as? Map<String, Any?>)?.get(seg)
+                is List<*> -> seg.toIntOrNull()?.let { (cur as? List<Any?>)?.getOrNull(it) }
+                else -> null
+            } ?: return ""
+        }
+        return when (v) {
+            is String -> v
+            is Number -> v.toString()
+            else -> ""
+        }
+    }
+
     private class Cursor(private val s: String) {
         private var i = 0
         var line = 1

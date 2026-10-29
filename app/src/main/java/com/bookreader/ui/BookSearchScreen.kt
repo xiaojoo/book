@@ -63,6 +63,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -81,6 +84,7 @@ import com.bookreader.data.BookSourceStore
 import com.bookreader.data.DownloadRecord
 import com.bookreader.data.Downloads
 import com.bookreader.data.StoredSource
+import com.bookreader.data.SourceAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -542,6 +546,13 @@ private fun SourceManagerPage(modifier: Modifier, sources: BookSourceStore, onCh
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
     var done by remember { mutableStateOf<String?>(null) }
+    val ctx = LocalContext.current
+    // 要账号的那一族源（`login` 那一段）：账号就地摊在这一行下面改，不开新的一扇窗
+    var accountFor by remember { mutableStateOf<String?>(null) }
+    var accUser by remember { mutableStateOf("") }
+    var accPass by remember { mutableStateOf("") }
+    var accNote by remember { mutableStateOf<String?>(null) }
+    var accOk by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -656,6 +667,7 @@ private fun SourceManagerPage(modifier: Modifier, sources: BookSourceStore, onCh
             Text("还没有书籍源", fontSize = 13.sp, color = Chrome.faint, modifier = Modifier.padding(16.dp))
         }
         all.forEach { s ->
+                val rule = s.rule
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -670,6 +682,17 @@ private fun SourceManagerPage(modifier: Modifier, sources: BookSourceStore, onCh
                             maxLines = 2,
                         )
                     }
+                    // 规则里写了 `login` 才有这一颗：账号就地填，不在这页说第二遍去哪填
+                    if (rule != null && SourceAuth.needs(rule)) {
+                        Box(
+                            Modifier.widthIn(min = 44.dp).heightIn(min = 44.dp).tap {
+                                val (u, p) = SourceAuth.account(ctx, rule)
+                                accUser = u; accPass = p; accNote = null; accOk = false
+                                accountFor = if (accountFor == s.id) null else s.id
+                            },
+                            contentAlignment = Alignment.Center,
+                        ) { Text(if (accountFor == s.id) "收起" else "账号", fontSize = 13.sp, color = Chrome.accent) }
+                    }
                     if (s.usable) {
                         RedSwitch(sources.enabled(s.id)) {
                             sources.setEnabled(s.id, it)
@@ -680,9 +703,64 @@ private fun SourceManagerPage(modifier: Modifier, sources: BookSourceStore, onCh
                         Icon(painterResource(R.drawable.ic_close), "删掉这条源", tint = Chrome.faint, modifier = Modifier.size(17.dp))
                     }
                 }
+                if (accountFor == s.id && rule != null) {
+                    Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+                        AccountField("邮箱", accUser, ImeAction.Next, false) { v -> accUser = v; accNote = null }
+                        AccountField("密码", accPass, ImeAction.Done, true) { v -> accPass = v; accNote = null }
+                        Text(
+                            "存在这台机上（密码走 AndroidKeyStore 加密）。规则文件里不带这两个值，导给别人也不会连带你的账号。",
+                            fontSize = 11.sp, color = Chrome.faint, lineHeight = 16.sp,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.widthIn(min = 44.dp).heightIn(min = 40.dp).tap {
+                                    accNote = SourceAuth.save(ctx, rule, accUser, accPass)
+                                    accOk = accNote == null
+                                    if (accOk) accNote = "存下了"
+                                },
+                                contentAlignment = Alignment.CenterStart,
+                            ) { Text("保存", fontSize = 13.sp, color = Chrome.accent) }
+                            accNote?.let {
+                                Text(it, fontSize = 11.sp, color = if (accOk) Chrome.faint else Chrome.danger,
+                                    modifier = Modifier.padding(start = 10.dp))
+                            }
+                        }
+                    }
+                }
                 SearchHairline()
             }
     }
+}
+
+/**
+ * 账号那一格：和「装一条源」那格同一套写法（BasicTextField + 占位字 + 光标走强调色），
+ * 密码那一档遮字 —— 有人站在旁边时不该把密码念出来。
+ */
+@Composable
+private fun AccountField(label: String, value: String, action: ImeAction, password: Boolean, onValue: (String) -> Unit) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValue,
+        singleLine = true,
+        textStyle = TextStyle(fontSize = 13.sp, color = Chrome.ink),
+        cursorBrush = SolidColor(Chrome.accent),
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(
+            imeAction = action,
+            keyboardType = if (password) KeyboardType.Password else KeyboardType.Email,
+        ),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+        decorationBox = { inner ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label, fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.width(44.dp))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) Text("填这一格", fontSize = 13.sp, color = Chrome.faint)
+                    inner()
+                }
+            }
+        },
+    )
 }
 
 /**

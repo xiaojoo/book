@@ -4,7 +4,7 @@
   "homeUrl": "https://www.tuku.cc/",
   "kind": "comic",
   "charset": "utf-8",
-  "note": "2026-10-13 从这台机实测：搜「魔法」21 行、书页一次给全 435 章、章页 28 张图（懒加载，真地址在 data-original）。图床查防盗链：不带 Referer 回 403，带章页自己回 200 的一张 JPEG —— 抓图那一头按这一格发，见 ComicDownloader.fetchImage。聚合站、不是版权方，和随包那两条小说源同一性质",
+  "note": "2026-10-13 从这台机实测：搜「魔法」21 行、书页一次给全 435 章、章页 28 张图（懒加载，真地址在 data-original）。图床查防盗链：不带 Referer 回 403，带章页自己回 200 的一张 JPEG —— 抓图那一头按这一格发，见 ComicDownloader.fetchImage。聚合站、不是版权方，和随包那两条小说源同一性质；2026-10-29 量类目：首页 21 个 /comics-tagN/（热血/搞笑/百合/后宫/冒险…）。类目页不是榜单那套 .top-card，是 swiper-card-item 那一套，所以另写了 cats.list；`?p=2` 实测回同样 24 条（新 0）→ 不写 cats.page",
   "cover": "img[src*=\"cover\"] @src",
   "intro": ".manga-desc",
   "hot": {
@@ -37,5 +37,18 @@
     "minIntervalMs": 300,
     "maxIntervalMs": 900,
     "maxAttempts": 3
+  },
+  "cats": {
+    "at": "https://www.tuku.cc/",
+    "item": "a[href^=\"/comics-tag\"]",
+    "link": "@href",
+    "max": 24,
+    "list": {
+      "group": "div.swiper-card-item",
+      "item": "a[href^=\"/manga-\"]",
+      "bookName": "a @title",
+      "bookUrl": "a @href",
+      "cover": "img @data-original"
+    }
   }
 }

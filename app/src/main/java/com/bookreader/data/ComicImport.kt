@@ -44,7 +44,11 @@ object ComicImport {
         val book = ComicBook(library.dir(id))
         library.writeComicMeta(id, hit.bookName, hit.author, 0, 0)
         BookProvenance(library.dir(id)).save(rule.id, hit.bookUrl, "", emptyList())
-        val out = ComicDownloader(rule, HttpFetcher(), store)
+        // 要先登录的那一族：这一枪在这里打，会话跟着这个 fetcher 进下载。
+        // 没登录上就不开那几百枪 —— 每一章的取址口都会回一句「請先登錄」，界面上看到的还是"这本书没图"
+        val (fetch, why) = SourceAuth.fetcher(ctx, rule)
+        if (why != null) error(why)
+        val out = ComicDownloader(rule, fetch, store)
             .download(hit, shouldStop, head, onChapter = { book.record(it.index, it.title, it.dir, it.pages) }, onProgress = onProgress)
         // 「先拉开头」抓两章也算一次入库：一张图都没有就别在书架上留一本点开是空的漫画
         if (out.got.isEmpty() && book.chapters().isEmpty()) {

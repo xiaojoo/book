@@ -22,6 +22,41 @@ class StoredSource(val file: File, val rule: Rule?, val error: String?) {
 }
 
 /**
+ * 随包那一条源在手机上的一份对账结果。只用三个数就能判：手上那份的哈希、包里那份的哈希、
+ * 上次往手机上写的时候记下的"当时包里那版"的哈希 —— 不碰文件不碰网，所以抽成 [decideBuiltin] 单独测。
+ */
+internal enum class BuiltinSync {
+    /** 手机上没这个文件，而 `seeded.` 记着它种过 ⇒ 他删掉的：不该自己回来。 */
+    SKIP,
+
+    /** 手机上没这个文件，也没种过：种下去。 */
+    SEED,
+
+    /** 手上这份和账上那版一字不差 ⇒ 是我们写下去的、他没动过，而包里已经换版 ⇒ 跟着包走。 */
+    UPDATE,
+
+    /** 手上这份就是包里那一版：不用写，把账记齐（老装法的机器靠这一档第一次上账）。 */
+    CURRENT,
+
+    /** 三个哈希对不上 ⇒ 要么他手改过一条同名的，要么是这套账落地之前装的老机器：都不许自动覆盖。 */
+    KEEP,
+}
+
+/**
+ * 三个哈希的对账。`fileHash` 为 null = 手机上没这个文件。
+ *
+ * 只有"账上记着的那一版"才敢自动覆盖 —— 那份 bytes 是我们自己写下去的，改没改一比就知道。
+ * 这套账是后加的，老机器上没记过账，那一档走 [KEEP]：不猜。**他按一次「恢复随包」就把账上齐了**
+ * （按完文件就是包里那一版，落进 [CURRENT]），从下一个版本起这一条自己跟着包走。
+ */
+internal fun decideBuiltin(fileHash: String?, recorded: String?, packaged: String, everSeeded: Boolean): BuiltinSync = when {
+    fileHash == null -> if (everSeeded) BuiltinSync.SKIP else BuiltinSync.SEED
+    fileHash == packaged -> BuiltinSync.CURRENT
+    recorded != null && fileHash == recorded -> BuiltinSync.UPDATE
+    else -> BuiltinSync.KEEP
+}
+
+/**
  * 书籍源 = `filesDir/booksource/<名字>.json`，一个文件一条源：导入就是拷进来、卸载就是删掉，
  * 和"下载的书存在自己那格里"同一套。prefs 里只留"哪几条开着"。
  *
@@ -35,10 +70,10 @@ class BookSourceStore(private val context: Context) {
     private val p = context.getSharedPreferences("reader", Context.MODE_PRIVATE)
 
     /**
-     * 随包的默认源：第一次用到时从 jar 资源里拷进 filesDir，之后就是普通文件 —— 能关、能删。
+     * 随包的默认源：手机上没有的种下去，**种过而包里换了版、且他没改过的跟着包换**。
      *
-     * 每个名字只种一次（`seeded.<名字>` 记在 prefs 里）：删掉一条默认源之后不该被"自愈"回来，
-     * 那样那颗删除就是假的。要恢复得走「导入」重新拿一次。
+     * 换不换只按 [decideBuiltin] 那三个哈希对账。`seeded.<名字>` 那条老规矩留着 —— 删掉的默认源
+     * 不该被"自愈"回来，那样那颗删除就是假的；要拿回来走「恢复随包」或「导入」。
      */
     fun seed() {
         // 先从包里摘掉的名单清一遍。`seeded.` 只管"不再种"，**不管把已经种下的那份删掉** ——
@@ -50,27 +85,47 @@ class BookSourceStore(private val context: Context) {
             remove(name)
         }
         BUILTIN.forEach { name ->
-            if (p.getBoolean("seeded.$name", false)) return@forEach
-            p.edit { putBoolean("seeded.$name", true) }
-            if (File(root, "$name.json").isFile) return@forEach
-            restore(name)
+            val packaged = bundledBytes(name) ?: return@forEach
+            val ph = sha256(packaged)
+            val file = File(root, "$name.json")
+            val fh = if (file.isFile) runCatching { sha256(file.readBytes()) }.getOrNull() else null
+            val recorded = p.getString("builtin.$name", null)
+            when (decideBuiltin(fh, recorded, ph, p.getBoolean("seeded.$name", false))) {
+                BuiltinSync.SKIP, BuiltinSync.KEEP -> {}
+                BuiltinSync.CURRENT -> p.edit { putString("builtin.$name", ph) }
+                BuiltinSync.SEED, BuiltinSync.UPDATE -> if (writeBundled(name, packaged)) {
+                    p.edit {
+                        putBoolean("seeded.$name", true)
+                        putString("builtin.$name", ph)
+                    }
+                }
+            }
         }
     }
 
     /**
      * 把随包那几条从 APK 里再拷一次出来，同名那条按包里那份覆盖。返回真拷出来几条。
      *
-     * 为什么要有这颗：`seeded.<名字>` 让删掉的默认源不会自愈（那才是真的删除），代价是
-     * **包里改了规则也到不了已经种过一次的手机** —— 没有这个入口，随包源一旦装上一次就永远停在第一版。
-     * 覆盖而不是"只补缺"是有意的：一个人拿旧版的人才会点这颗，他要的就是换掉。
+     * 自动换版讲条件（`KEEP` 那一档不碰），这颗不讲：他要的就是连自己改过的一起换掉。
+     * 按完把账记齐，之后包里再换版就轮到 `seed()` 自己跟着走。
      */
-    fun restoreBuiltin(): Int = BUILTIN.count { restore(it) }
+    fun restoreBuiltin(): Int = BUILTIN.count { name ->
+        val bytes = bundledBytes(name) ?: return@count false
+        if (!writeBundled(name, bytes)) return@count false
+        p.edit {
+            putBoolean("seeded.$name", true)
+            putString("builtin.$name", sha256(bytes))
+        }
+        true
+    }
 
-    private fun restore(name: String): Boolean {
+    /** 包里那一条源的原文；没随包（或被摘掉）就回 null。 */
+    private fun bundledBytes(name: String): ByteArray? = runCatching {
+        BookSourceStore::class.java.getResourceAsStream("/booksource/$name.json")?.use { it.readBytes() }
+    }.getOrNull()
+
+    private fun writeBundled(name: String, bytes: ByteArray): Boolean {
         val to = File(root, "$name.json")
-        val bytes = runCatching {
-            BookSourceStore::class.java.getResourceAsStream("/booksource/$name.json")?.use { it.readBytes() }
-        }.getOrNull() ?: return false
         // 写一半比不写更糟：那是一份截断的规则，解析报错只说"这一条坏了"，不说为什么
         if (runCatching { to.outputStream().use { it.write(bytes) } }.isFailure) to.delete()
         return to.isFile
@@ -214,6 +269,11 @@ class BookSourceStore(private val context: Context) {
 
         fun sha1(s: String): String =
             MessageDigest.getInstance("SHA-1").digest(s.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+
+        /** 随包源的对账用它：文件内容的哈希，不是地址的哈希。 */
+        fun sha256(bytes: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(bytes)
                 .joinToString("") { "%02x".format(it) }
     }
 }

@@ -14,17 +14,31 @@ import java.nio.charset.Charset
  * - `"@text"` / `"css@text"` —— 只要这个元素**自己**那截文字（不含子元素；选择器留空就是这一格本身）。
  *   榜单那一行常见 `<li><a href=…>书名</a>/作者</li>`：书名从 a 取，作者只能用这一档，行首那个 `/` 顺手去掉。
  * - `""` —— 这一项不取。
+ *
+ * 属性那一格后面还能再挂一档函数后缀，和 [pickAll] 同一套：`@url`（从一整串里抠第一个 http 地址，
+ * 古文岛那种埋在 `javascript:Play(…,'https://…')` 参数串里的）、`@num`（抠第一串连续数字，
+ * 199mh 那种 `onclick="fileDownload(1176462)"` —— 站点不给链接、只给一个要 POST 回去的号）。
  */
 fun pick(root: Element, spec: String): String {
     val t = spec.trim()
     if (t.isEmpty()) return ""
     val at = t.indexOf('@')
     val sel = (if (at < 0) t else t.substring(0, at)).trim()
-    val attr = if (at < 0) null else t.substring(at + 1).trim().ifEmpty { null }
+    val attrPart = if (at < 0) null else t.substring(at + 1).trim().ifEmpty { null }
+    val fn = attrPart?.substringAfter('@', "")?.takeIf { it.isNotEmpty() }
+    val attr = attrPart?.substringBefore('@')?.ifEmpty { null }
     val e = if (sel.isEmpty()) root else root.selectFirst(sel) ?: return ""
-    if (attr == null) return (e.ownText().ifBlank { e.text() }).trim()
-    if (attr == "text") return e.ownText().trim().trimStart('/', '·', '-', ':', ' ').trim()
-    return (if (attr == "href" || attr == "src") e.attr("abs:" + attr) else e.attr(attr)).trim()
+    val raw = when {
+        attr == null -> (e.ownText().ifBlank { e.text() }).trim()
+        attr == "text" -> e.ownText().trim().trimStart('/', '·', '-', ':', ' ').trim()
+        attr == "href" || attr == "src" -> e.attr("abs:$attr").trim()
+        else -> e.attr(attr).trim()
+    }
+    return when (fn) {
+        "url" -> firstUrl(raw)
+        "num" -> firstNumber(raw)
+        else -> raw
+    }.trim()
 }
 
 /**
@@ -127,8 +141,11 @@ fun introOf(rule: Rule, html: String, base: String): String {
  *
  * 书名或链接缺一样就不算一条（和搜索结果同一口径）：宁可少一条，也不给精选那一页摆一张点不动的卡。
  */
-fun hotBooks(rule: Rule, html: String, base: String): List<BookHit> {
-    val h = rule.hot ?: return emptyList()
+fun hotBooks(rule: Rule, html: String, base: String): List<BookHit> =
+    rule.hot?.let { hotBooks(rule, html, base, it) }.orEmpty()
+
+/** 同一套取值，但由调用方给那一套：类目页版式和榜单页不一样的那一家（图库）用它自己那一份。 */
+fun hotBooks(rule: Rule, html: String, base: String, h: HotRule): List<BookHit> {
     val doc = html(base, html)
     return doc.select(h.group).flatMap { g ->
         val category = pick(g, h.category)
@@ -328,12 +345,54 @@ class SearchEngine(private val rule: Rule, private val fetch: Fetcher) {
     }
 
     /** 首页那一堆分类块上的热门书单。这条源没写 hot 就返回空，精选那一页不列它。 */
-    fun hot(): List<BookHit> {
+    fun hot(page: Int = 1): List<BookHit> {
         val h = rule.hot ?: return emptyList()
-        val p = fetch.fetch(PageRequest(h.url))
+        // 第 2 页起要走 `hot.page` 那个模板；这条源没写就是只有首页那一份 —— 回空串，
+        // 一枪都不发（发了就是拿同一页反复喂界面，"加载更多"看着像在转圈其实什么都没来）
+        val at = h.pageUrl(page)
+        if (at.isEmpty()) return emptyList()
+        val p = fetch.fetch(PageRequest(at))
         // 和 search 同一个口径去重：首页上"同一本书既在玄幻块、又在热销块"是常态，
         // 而精选那两排卡片的 key 也是「源 id + 书页地址」—— 不去重就是同一颗撞 key 的雷
         return hotBooks(rule, p.text(rule.charset), p.finalUrl).distinctBy { it.bookUrl }
+    }
+
+    /**
+     * 这家站自己的类目表：(类目名, 那一类的列表页地址)。
+     *
+     * 按地址去重（首页上"熱血"和"热血"两种写法、或者同一类在导航里出现两遍都常见），
+     * 顺序就是站点页面上的顺序，条数上限是 `cats.max`。
+     */
+    fun cats(): List<Pair<String, String>> {
+        val c = rule.cats ?: return emptyList()
+        val p = fetch.fetch(PageRequest(c.at.ifBlank { rule.homeUrl }))
+        val doc = parseDoc(rule, p.finalUrl, p.text(rule.charset))
+        val out = LinkedHashMap<String, String>()
+        for (e in doc.select(c.item)) {
+            val name = (if (c.name.isBlank()) e.ownText().ifBlank { e.text() } else pick(e, c.name)).trim()
+            val raw = if (c.link.isBlank()) e.attr("href") else pick(e, c.link)
+            val url = absolutize(p.finalUrl, raw).trim()
+            if (name.isEmpty() || url.isEmpty() || url == rule.homeUrl.trimEnd('/')) continue
+            if (url in out) continue
+            out[url] = name
+            if (out.size >= c.max) break
+        }
+        return out.map { (u, n) -> n to u }
+    }
+
+    /**
+     * 某一类列表页上的书。取值那一套优先用 `cats.list`，没有就复用 `hot` 那一段
+     * （瓜子、199mh 的类目页和榜单页同一种排法，就不用再抄一份）。
+     */
+    fun catBooks(catUrl: String, page: Int = 1): List<BookHit> {
+        val c = rule.cats ?: return emptyList()
+        val at = c.pageUrl(catUrl, page)
+        if (at.isEmpty()) return emptyList()
+        val hot = rule.hot
+        val base = c.list ?: hot ?: return emptyList()
+        val shape = if (base.group.isBlank() && hot != null) base.copy(group = hot.group) else base
+        val p = fetch.fetch(PageRequest(at))
+        return hotBooks(rule, p.text(rule.charset), p.finalUrl, shape).distinctBy { it.bookUrl }
     }
 
     /** 目录 = 这一页上选到的章 + 下拉框里其它页的章。`base` 就是这一页自己的 URL，等于它就不重取。 */

@@ -37,14 +37,31 @@ fun pickAll(root: Element, spec: String): List<String> {
             name == "text" -> e.ownText().trim().ifEmpty { null }
             name == "href" || name == "src" -> e.attr("abs:$name").trim().ifEmpty { null }
             else -> e.attr(name).trim().ifEmpty { null }
-        }?.let { if (fn == "url") firstUrl(it) else it }?.ifEmpty { null }
+        }?.let {
+            when (fn) {
+                "url" -> firstUrl(it)
+                "num" -> firstNumber(it)
+                else -> it
+            }
+        }?.ifEmpty { null }
     }
 }
 
 /** 从一整串里抠出第一个 http(s) 地址（到引号、空格、尖括号为界）。 */
-private val URL_IN_TEXT = Regex("https?://[^\"'<>\\s)]+")
+internal val URL_IN_TEXT = Regex("https?://[^\"'<>\\s)]+")
 
-private fun firstUrl(v: String): String = URL_IN_TEXT.find(v)?.value ?: ""
+internal fun firstUrl(v: String): String = URL_IN_TEXT.find(v)?.value ?: ""
+
+/**
+ * 从一整串里抠出**第一串连续数字**。给 `onclick="fileDownload(1176462)"` 那一族用：
+ * 站点不给链接、只给一个要 POST 回去的号。
+ *
+ * 只抠第一串是有意收窄的：号后面常常还跟着别的数字（时间戳、页码），写规则的人自己清楚要哪一串，
+ * 引擎不该替他猜哪一种分隔符。要取后面那一串就换个写法（先把前缀选掉，再用 `@num`）。
+ */
+internal val NUMBER_IN_TEXT = Regex("\\d+")
+
+internal fun firstNumber(v: String): String = NUMBER_IN_TEXT.find(v)?.value ?: ""
 
 /** 一章漫画 = 一排图：这一章页面上 [ChapterRule.image] 选中的那些地址，按页面顺序。 */
 fun chapterImages(rule: Rule, body: String, at: String): List<String> {
