@@ -20,7 +20,7 @@ class ShippedRulesTest {
 
     @Test
     fun everyShippedRuleLoadsAndItsIdMatchesItsFileName() {
-        val shipped = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss", "gushiwen-audio")
+        val shipped = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss", "gushiwen-audio", "mh199")
         val all = shipped.map { RuleLoader.load(text(it), it) }
         println("[随包] " + all.map { it.id + "=" + it.kind })
         assertEquals("文件名和 id 必须一一对上", shipped, all.map { it.id })
@@ -44,5 +44,29 @@ class ShippedRulesTest {
         assertEquals("地址挂在 enclosure 的 url 上，不是条目的 href", "enclosure @url", r.toc.href)
         assertTrue("目录里那一条地址本身就是文件", r.selfAudio)
         assertEquals("一集几十 MB，四条线程一起读整段会顶到堆上限", 2, r.crawl.concurrency)
+    }
+
+    /**
+     * 「一章 = 一个包」那一族的第一条随包源（199mh）。它出不出得了东西全押在四格上：
+     * `chapter.file` 三格少任一格 = 下载进度走到 100% 却一本都打不开；`login` 少了 = 未登录把
+     * HTTP 200 当成功（那个取址口把「請先登錄」写在 **body** 里，状态码上看不出来）；
+     * 号埋在 `onclick="fileDownload(1176462)"` 里，所以 `toc.href` 必须是 `@num` 那一档，
+     * 少这一格目录就全是同一个地址。翻页那两格（`hot.page` / `cats.page`）是量过才写的。
+     */
+    @Test
+    fun theShippedFileChapterRuleCarriesLocateBodyLoginAndTheNumberExtractor() {
+        val r = RuleLoader.load(text("mh199"), "mh199")
+        assertEquals("这一条是漫画（一章交回来的是一个包，不是一排图）", Rule.COMIC, r.kind)
+        val f = r.chapter.file
+        assertTrue("没写 chapter.file 就不是包那一族 —— 那这条不该随包", f != null)
+        assertEquals("ids[]={num}&ext=epub", f!!.body)
+        assertEquals("result.0.url", f.path)
+        val lg = r.login
+        assertTrue("要先登录的源没写登录口，界面上就没地方填账号", lg != null)
+        assertEquals("email", lg!!.user)
+        assertEquals("password", lg.pass)
+        assertTrue("号在 onclick 里：目录取址得走 @num 那一档", r.toc.href.contains("@num"))
+        assertTrue("榜单翻得动才给 hot.page", r.hot!!.page.contains("%n"))
+        assertTrue("类目页翻得动才给 cats.page（第 2 页 20 条全新是量的）", r.cats!!.page.contains("%n"))
     }
 }

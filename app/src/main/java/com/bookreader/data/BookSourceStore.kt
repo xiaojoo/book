@@ -219,7 +219,20 @@ class BookSourceStore(private val context: Context) {
          * `shuhaige` = 书海阁小说网：第一台**一章切好几页**的源（剑来 第52章 = 十页），所以它是
          * `chapter.nextPage` 的第一家真用户；那一条的判据也在 `RealSiteFixturesTest` 里。
          */
-        val BUILTIN = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss", "gushiwen-audio")
+        val BUILTIN = listOf("mengshu", "aixiashu", "shuhaige", "tuku", "guazi", "arxiv", "openalex", "podcast-rss", "gushiwen-audio", "mh199")
+
+        /**
+         * `mh199` 是第一条"**要先登录才给内容**"的源（199mh 漫画）：一章 = 一个 epub 包，
+         * 号埋在 `onclick="fileDownload(1176462)"` 里，取址要 POST `/m/vol/download_add`。
+         * 未登录时那个口 **HTTP 照样回 200**、body 是 `{"code":4001002,"message":"請先登錄"}`，
+         * 所以会话判据不看状态码、看 cookie（`HttpFetcher.hasCookie`）。
+         *
+         * 这份规则里只有"登录口在哪、那两个字段叫什么"（`login{url,user,pass}`）—— 账号本身不进文件：
+         * 邮箱明文进 prefs、密码进 AndroidKeyStore，都在应用里填，规则原样导给别人时不带口令。
+         * 2026-10-29 量过的四格：书页目录 195 条且号 195/195 取到、榜单 20 本带 20 张封面（地址在
+         * `data-src`）、首页导航 65 颗类目里 `max=42` 停在题材那一段末尾、类目页第 2 页 20 条全新（所以拼页是 `%U%n`）。
+         * **还欠一次**：真取一包解成一排页要先在手机上登录，那一步没跑过，端到端挂在待办里。
+         */
 
         /**
          * `gushiwen-audio` 是第一条"**同一页同时给正文和朗读音频**"的源（古文岛）：
