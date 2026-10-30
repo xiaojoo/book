@@ -65,6 +65,9 @@ class ShippedRulesTest {
         assertTrue("要先登录的源没写登录口，界面上就没地方填账号", lg != null)
         assertEquals("email", lg!!.user)
         assertEquals("password", lg.pass)
+        // 站点的登录 JS 先 md5 再发（`post['password'] = md5(post['password'])`）：
+        // 这一档丢了，这条源在谁手机上都登不进去，而屏幕上只回一句「登錄失敗」
+        assertEquals(LoginRule.MD5, lg.hash)
         assertTrue("号在 onclick 里：目录取址得走 @num 那一档", r.toc.href.contains("@num"))
         assertTrue("榜单翻得动才给 hot.page", r.hot!!.page.contains("%n"))
         assertTrue("类目页翻得动才给 cats.page（第 2 页 20 条全新是量的）", r.cats!!.page.contains("%n"))

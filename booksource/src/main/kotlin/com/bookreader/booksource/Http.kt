@@ -78,8 +78,18 @@ class HttpFetcher(
         val code = conn.responseCode
         takeCookies(host, conn)
         if (code !in 200..299) {
+            // 非 2xx 那一头的 body 常常才是人话：199mh 的登录失败回的是 `HTTP 400` +
+            // `{"code":4001001,"message":"登錄失敗"}`，只报状态码的话屏幕上剩"HTTP 400 Bad Request"一句，
+            // 站点写的那句被丢了 —— 而"号错了"和"我们发错形状"就分不开了。
+            // 读不到 / 压了又解不开 / 是张 HTML：都退回只报码，这一枪不该为了一句附送的话再坏一次。
+            val said = runCatching {
+                val raw = conn.errorStream?.use { it.readBytes() } ?: ByteArray(0)
+                val body = if (conn.contentEncoding == "gzip") gzip(raw) else raw
+                String(body, Charsets.UTF_8).replace('\n', ' ').replace('\r', ' ').trim().take(160)
+            }.getOrDefault("")
+            val head = "HTTP $code ${conn.responseMessage.orEmpty().trim()}".trim()
             conn.disconnect()
-            throw IOException("HTTP " + code + " " + conn.responseMessage.orEmpty().trim())
+            throw IOException(if (said.isEmpty()) head else "$head · 站点回：$said")
         }
         // 跟着跳转走完之后的地址才是这一页真正的地址：相对链接要按它补全，
         // 按当初请求的那个补会补到跳转前的域名上

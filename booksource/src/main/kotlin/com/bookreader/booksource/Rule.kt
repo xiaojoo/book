@@ -253,8 +253,37 @@ data class CatsRule(
  * 登录口。[user] / [pass] 是**表单字段名**，不是值：实测那一家站报的是 `name="email"`、
  * `name="password"`，值由应用从 `SecretStore` 取来填 —— 规则文件是要能原样导给别人的，
  * 里面不该躺着一个人的密码。
+ *
+ * [hash] 是"站点在把密码发出去之前自己先过的那一道"，只认 [MD5]（空 = 原样发）。
+ * 这一格不是可选的调味：199mh 的登录 JS 写的就是 `post['password'] = md5(post['password'])`，
+ * 站点拿收到的串直接和库里的哈希比 —— 我们发明文**永远登不进去**（2026-10-30 屏上那一枪回
+ * `HTTP 400 {"code":4001001,"message":"登錄失敗"}`，和假凭据同一句，看不出是号错还是形状错）。
+ * 存进 KeyStore 的仍然是人敲的那串明文：换一档哈希只改发出去的那一枪，不用重敲密码。
  */
-data class LoginRule(val url: String, val user: String, val pass: String)
+data class LoginRule(val url: String, val user: String, val pass: String, val hash: String = "") {
+    companion object {
+        const val MD5 = "md5"
+    }
+}
+
+/**
+ * 登录那一枪的表单串：两个字段名按规则里那两格，值按各自该过的那一道。
+ *
+ * 单拎出来放在 `:booksource`（而不是写在应用里）就为了能拿纯字符串判一遍：
+ * 少一道 md5 在界面上是"登录失败"四个字，看不出来是这一串差在哪。
+ */
+fun loginForm(lg: LoginRule, email: String, pass: String): String =
+    lg.user + "=" + urlEncode(email) + "&" + lg.pass + "=" + urlEncode(
+        if (lg.hash == LoginRule.MD5) md5Hex(pass) else pass
+    )
+
+/** 表单串的编码：只用 `(String, String)` 那一档，`(String, Charset)` 是 Android API 33 才有的。 */
+fun urlEncode(v: String): String = java.net.URLEncoder.encode(v, "UTF-8")
+
+/** 小写十六进制的 MD5 —— 和浏览器 `md5()` 那一份同一个形状。 */
+fun md5Hex(v: String): String =
+    java.security.MessageDigest.getInstance("MD5").digest(v.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
 
 /**
  * 抓取节奏。区间和重试次数不是"调快点省时间"的参数：
@@ -301,7 +330,7 @@ object RuleLoader {
     private val TOC = setOf("url", "item", "nextPage", "name", "href", "format", "reverse")
     private val HOT = setOf("url", "group", "item", "bookName", "author", "category", "bookUrl", "cover", "page")
     private val CHAPTER = setOf("content", "filter", "nextPage", "image", "audio", "file")
-    private val LOGIN = setOf("url", "user", "pass")
+    private val LOGIN = setOf("url", "user", "pass", "hash")
     private val CATS = setOf("at", "item", "name", "link", "max", "page", "list")
     private val FILE = setOf("locate", "body", "path")
     private val CRAWL = setOf("concurrency", "minIntervalMs", "maxIntervalMs", "maxAttempts")
@@ -410,6 +439,12 @@ object RuleLoader {
                     url = str(m, "url", "$where.login", required = true).also { legalUrl(it, "$where.login.url") },
                     user = str(m, "user", "$where.login", required = true),
                     pass = str(m, "pass", "$where.login", required = true),
+                    // 认不得的值**当场拒**：写歪一档的下一枪就是拿明文去比哈希，站点只回一句"登录失败"，
+                    // 人在手机上看到的是"号错了"，而坏的是我们发出去的那一串
+                    hash = str(m, "hash", "$where.login").lowercase().also {
+                        if (it.isNotEmpty() && it != LoginRule.MD5)
+                            throw RuleException("$where.login.hash 只支持 \"" + LoginRule.MD5 + "\"（空 = 原样发），写的是 \"" + it + "\"")
+                    },
                 )
             },
             cats = o["cats"]?.let { cs ->

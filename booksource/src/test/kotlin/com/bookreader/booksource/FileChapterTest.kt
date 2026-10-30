@@ -60,6 +60,38 @@ class FileChapterTest {
 
 
 
+        /** 带 `login` 那一格的同一条规则：哈希那一档写不写得进、写歪了红不红，只问这一份。 */
+    private fun ruleWithLogin(login: String): Rule = RuleLoader.load(
+        """
+        {
+          "id": "mh199", "name": "199 测试", "homeUrl": "https://199mh.com/", "kind": "comic",
+          "toc": { "item": "div.vol-item", "name": ".vol-item-no", "href": "a @onclick@num" },
+          "chapter": { "file": { "locate": "https://199mh.com/m/vol/download_add", "body": "ids[]={num}&ext=epub", "path": "result.0.url" } },
+          "login": $login
+        }
+        """.trimIndent(),
+        "mh199",
+    )
+
+    private val loginBase = """{"url":"https://199mh.com/m/user/login","user":"email","pass":"password""""
+
+    /**
+     * 站点登录的 JS 写的是 `post['password'] = md5(post['password'])` —— 这一档没处写，应用就只能发明文，
+     * 而它回的那句 `HTTP 400 {"code":4001001,"message":"登錄失敗"}` 和"号真的错了"长得一模一样（2026-10-30 实测）。
+     * 所以：认 md5、不写就是原样发（别的站的密码就是密码）、认不得的值**当场红**。
+     */
+    @Test
+    fun theLoginGridCarriesTheHashStageTheSiteAsksForAndRefusesMadeUpOnes() {
+        assertEquals("md5 那一档要落进规则", LoginRule.MD5, ruleWithLogin("$loginBase,\"hash\":\"md5\"}").login!!.hash)
+        assertEquals("大小写不敏感（规则是人手写的）", LoginRule.MD5, ruleWithLogin("$loginBase,\"hash\":\"MD5\"}").login!!.hash)
+        assertEquals("不写 = 原样发，这一档不许默认打开", "", ruleWithLogin("$loginBase}").login!!.hash)
+        val e = runCatching { ruleWithLogin("$loginBase,\"hash\":\"sha1\"}") }.exceptionOrNull()
+        assertTrue(
+            "认不得的哈希要当场红并点名那一格和那个值，实际：" + e?.message,
+            e is RuleException && e.message!!.contains("login.hash") && e.message!!.contains("sha1"),
+        )
+    }
+
     /** 记请求的假站子：POST 取址回一条地址，GET 那条地址回一个包。 */
     private class Site(private var reply: String, private val file: ByteArray = cbz(3)) : Fetcher {
         val posts = ArrayList<String>()

@@ -6,7 +6,7 @@ import com.bookreader.booksource.Fetcher
 import com.bookreader.booksource.HttpFetcher
 import com.bookreader.booksource.PageRequest
 import com.bookreader.booksource.Rule
-import java.net.URLEncoder
+import com.bookreader.booksource.loginForm
 
 /**
  * 「要先登录才有内容」那一族源的账号那一格（199mh：取址口在未登录时回 `{"code":4001002,"message":"請先登錄"}`，
@@ -61,17 +61,19 @@ object SourceAuth {
         if (email.isEmpty() || pass.isEmpty()) {
             return f to "「${rule.name}」要先登录：在「管理书籍源」那一行的「账号」里填邮箱和密码"
         }
-        val body = lg.user + "=" + enc(email) + "&" + lg.pass + "=" + enc(pass)
+        // 串按规则里那一档过一道再发（199mh 要 md5，见 [LoginRule.hash]）—— 明文发过去永远登不进
+        val body = loginForm(lg, email, pass)
         val reply = runCatching { f.fetch(PageRequest(lg.url, method = "POST", body = body)) }
-            .fold({ it }, { return f to "「${rule.name}」登录没打成：" + it.javaClass.simpleName + " " + it.message.orEmpty() })
+            .fold({ it }, {
+                // 站点那句人话（"登錄失敗"）比 `IOException` 这个类名有用，有消息就别报类名
+                val said = it.message.orEmpty().trim()
+                return f to "「${rule.name}」登录没打成：" + if (said.isEmpty()) it.javaClass.simpleName else said
+            })
         if (!f.hasCookie(lg.url)) {
             return f to "「${rule.name}」没拿到会话，站点回的是：" + reply.text(rule.charset).replace('\n', ' ').trim().take(120)
         }
         return f to null
     }
-
-    /** 表单串的编码：只用 `(String, String)` 那一档，`(String, Charset)` 是 Android API 33 才有的。 */
-    private fun enc(v: String): String = URLEncoder.encode(v, "UTF-8")
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("reader", Context.MODE_PRIVATE)
 }
