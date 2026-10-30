@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,9 +63,12 @@ import com.bookreader.data.AiVoicePlayer
 import com.bookreader.data.AudioBook
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.BookProvenance
+import com.bookreader.data.ChapterFetch
 import com.bookreader.data.ReaderPrefs
 import com.bookreader.R
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -76,6 +78,12 @@ private enum class AudioSheet { None, Episodes, Rates, Settings }
 
 /** 语速那几档：底栏「语速」那一格里选一档，选中的那档立刻套到当前这段上。 */
 private val RATES = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+
+/**
+ * 顶上那一条（‹ 书名/集名 + 时间）的高度。这一屏的栏**不收放**（他点名"app 菜单不能隐藏"），
+ * 所以这个数就是它占的实高，和 [ReaderBottomBarHeight] 一样只在这一处定义。
+ */
+private val AudioTopBandHeight = 52.dp
 
 /**
  * 听一本有声书。这一屏不是小说那条"一串字 → 排成页"的路，和漫画那种"一屏一张"也不一样 ——
@@ -95,6 +103,8 @@ fun AudioReaderScreen(
     author: String,
     library: BookLibrary,
     prefs: ReaderPrefs,
+    /** 「本书信息」里点某一章进来：从那一章起。-1 = 回到上次读的位置。 */
+    startChapter: Int = -1,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -114,25 +124,37 @@ fun AudioReaderScreen(
     // 换背景/夜间要连着外壳一起换（和漫画那一屏同一条写法）
     LaunchedEffect(themeIndex) { prefs.themeIndex = themeIndex; Chrome.night = theme.night }
 
-    val book = remember(bookId) { AudioBook(library.dir(bookId)) }
+    // `AudioBook` 的集表 lazy 读一次就缓存住：补完一集要换一个新对象才读得到那一行新 append 的
+    val bookTick = remember { mutableIntStateOf(0) }
+    val book = remember(bookId, bookTick.intValue) { AudioBook(library.dir(bookId)) }
     var episodes by remember { mutableStateOf<List<AudioBook.Episode>>(emptyList()) }
     // 整本的集名来自下载时存下的那份目录：架上那行写"全书 1068 集"，抽屉就该能看见 1068 行
     var outline by remember { mutableStateOf<List<String>>(emptyList()) }
-    LaunchedEffect(bookId) {
+    LaunchedEffect(bookId, bookTick.intValue) {
         episodes = withContext(Dispatchers.IO) { book.episodes() }
         outline = withContext(Dispatchers.IO) { BookProvenance(library.dir(bookId)).outline() }
     }
 
-    val start = remember(bookId) { prefs.loadAudioPos(bookId) }
+    val start = remember(bookId, startChapter) {
+        // 从「本书信息」点某一章进来时从那一章起；否则回到上次读的位置
+        if (startChapter >= 0) startChapter to 0 else prefs.loadAudioPos(bookId) }
     var episode by remember { mutableIntStateOf(start.first.coerceAtLeast(0)) }
     /** 进这一集时要从多少毫秒开始：只对第一段有效，起播完就归零。 */
     var resumeMs by remember { mutableIntStateOf(start.second.coerceAtLeast(0)) }
     var parts by remember { mutableStateOf<List<File>>(emptyList()) }
     var partIndex by remember { mutableIntStateOf(0) }
     var sheet by remember { mutableStateOf(AudioSheet.None) }
-    /** 上下那两条栏在不在：顶上那行（‹ 书名/集名 + 时间）和底下那排四颗。中间那一格只管它，点屏幕收放。 */
-    var bars by remember { mutableStateOf(true) }
     var note by remember { mutableStateOf<String?>(null) }
+    // 正在补的那一集（同一瞬间只允许一枪）和刚补完的那一集（只有那一行的勾弹一下）
+    var getting by remember { mutableStateOf<Int?>(null) }
+    // 目录抽屉的排法（正序/倒序）：和小说/漫画那一屏各存一份
+    var chapterDesc by remember { mutableStateOf(prefs.chapterDesc) }
+    // 撑满状态栏和导航栏：这一档自己存一份（三屏各按各的习惯，互不带）。
+    // **有声这一屏不支持撑满**（他点名）：设置里那一行只置灰，开关和下面那些 `if (edge)` 的排版
+    // 一条都没拆；本地钉死在 false —— 以前在这一屏把开关打开过的机器，进来也不会是撑满的样子。
+    var edge by remember { mutableStateOf(false) }
+    var justGot by remember { mutableStateOf(-1) }
+    val scope = rememberCoroutineScope()
     var playing by remember { mutableStateOf(false) }
     /**
      * 要不要播。**进这一屏它是 false**（他点名的：翻开就出声是吓人的），
@@ -231,8 +253,10 @@ fun AudioReaderScreen(
      */
     fun goEpisode(to: Int, atMs: Int = 0, andPlay: Boolean = true) {
         if (to < 0 || to >= total) return
-        if (have[to] == null) {
-            note = "第 ${to + 1} 集还没下到本机 —— 到「本书信息」点「下载全书」补齐"
+        // have 是这一次组合里那份表：刚补完的那一章已经落盘，但内存这一份要等下一次重组才追上，
+        // 所以那一章放行（justGot 读的是状态本身，不是闭包里那份旧值）
+        if (have[to] == null && to != justGot) {
+            note = "第 ${to + 1} 集还没下到本机 —— 在目录里点那一行就补它"
             return
         }
         sheet = AudioSheet.None
@@ -240,6 +264,52 @@ fun AudioReaderScreen(
         if (andPlay) wantPlay = true
         resumeMs = atMs
         episode = to
+    }
+
+    /** 补这一集：抓完就地开始听它（和漫画那一屏同一档事、同一条规矩）。 */
+    fun fetch(to: Int) {
+        if (getting != null) return
+        getting = to
+        note = null
+        scope.launch {
+            val parts = runCatching { withContext(Dispatchers.IO) { ChapterFetch.audio(context, library, bookId, to) } }
+            getting = null
+            parts.fold(
+                onSuccess = {
+                    bookTick.intValue++
+                    justGot = to
+                    goEpisode(to)
+                    // 不另说一句"补好了"：那一行自己变成勾、并且当场开始听它 —— 那就是回执
+                },
+                onFailure = { note = it.message ?: "这一集没抓到" },
+            )
+        }
+    }
+
+    /** 重听这一集 = 重下这一集：那几段音频重新取一遍（上次只下到半截、站点换了录音都靠它）。 */
+    fun redo(to: Int) {
+        if (getting != null) return
+        getting = to
+        note = null
+        scope.launch {
+            val n = runCatching {
+                withContext(Dispatchers.IO) { ChapterFetch.audio(context, library, bookId, to, force = true) }
+            }
+            getting = null
+            n.fold(
+                onSuccess = { bookTick.intValue++; justGot = to },
+                onFailure = { note = it.message ?: "这一集没抓到" },
+            )
+        }
+    }
+
+    /** 行点击的规矩在 [onRowTap] 那一颗里：已下的直接听，没下的先补再听，正在下的那一下不重发。 */
+    fun pick(to: Int) {
+        when (onRowTap(have[to] != null, getting == to)) {
+            RowTap.Open -> goEpisode(to)
+            RowTap.FetchThenOpen -> fetch(to)
+            RowTap.Wait -> Unit
+        }
     }
 
     /** ⏮ / ⏭：集内还有一段就切段，没有就跨集。退的那颗在 3 秒内算"回到这一集开头"。 */
@@ -325,61 +395,76 @@ fun AudioReaderScreen(
         }
     }
 
-    ApplySystemBars(darkIcons = !theme.night, bgArgb = theme.page)
+    // 藏系统栏要等这一屏自己的两条栏和抽屉都收干净（和小说/漫画同一句口径）。
+    // 这一屏的两条栏**不隐藏**（他点名），没有"收干净"那一刻，所以永远不会去藏系统栏
+    ApplySystemBars(
+        darkIcons = !theme.night,
+        immersive = false,
+        bgArgb = theme.page,
+    )
 
     // 「我的 → 皮肤管理」上传的那张背景图，这一屏也要铺（2026-10-15 他点名"这个没有实现上传的图片
     // 背景显示啊"）。位图按整块窗口的宽解、压的那层纸色仍是皮肤管理那一格的滑块 —— 和阅读屏、
     // 听书页共用同一份 `PaperBackground`，三屏换纸色 / 换浓淡一起换。
     val bgBmp = scaledImage(themeFile(context, prefs.bgImageFile), contentSizePx().width)
+    // 顶上那条和底下那条各占多高：撑满那一档内容顶到 y=0，两条栏各自再补一份系统栏高才不压在栏里
+    val barInset = systemBarHeights()
     // **先铺满整块窗口，再让内容让开安全区**：图要伸到状态栏和导航条底下，正文和那两条栏要让开。
     // 顺序反了图就只铺到安全区里，栏背后露的是窗口默认色（`ApplySystemBars` 上面那条注释写的就是这个坑）
     Box(Modifier.fillMaxSize().background(theme.pageColor)) {
         PaperBackground(theme, bgBmp, prefs.bgDim)
-        // 上下那两条栏亮着的时候，状态栏 / 导航条那两条盖成实心纸 —— 和阅读屏同一条口径、同一份实现
-        BarPaper(theme, if (bars) 1f else 0f)
         Box(
             Modifier
                 .fillMaxSize()
-                .safeDrawingPadding()
-                // 点屏幕：开着一层就先收那一层；什么都没开，就是收放上下那两条栏（他点名的第二条）
+                // 撑满开着就顶到边（图和纸铺到系统栏底下），不撑满就让开 —— 和小说/漫画同一条口径
+                .fixedBarsPadding(edge)
+                // 点屏幕：开着一层就先收那一层（这一屏的两条栏不跟着收放 —— 他点名"app 菜单不能隐藏"）
                 .pointerInput(Unit) {
                     detectTapGestures {
-                        if (sheet != AudioSheet.None) sheet = AudioSheet.None else bars = !bars
+                        if (sheet != AudioSheet.None) sheet = AudioSheet.None
                     }
                 },
         ) {
             Column(Modifier.fillMaxSize()) {
-                // 顶栏：‹ 书名 + 集名（多段的集带上"第几段"）/ 右边这一段的时间。点屏幕收这一条（他点名的）
-                if (bars) Row(
-                    Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                // 顶栏槽：这一屏不收栏，槽一直画着。撑满那一档内容顶到 y=0，槽里再补一份系统栏高，
+                // 栏才不压在状态栏里
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(AudioTopBandHeight + if (edge) barInset.calculateTopPadding() else 0.dp)
+                        .padding(top = if (edge) barInset.calculateTopPadding() else 0.dp),
                 ) {
-                    BackSlot("返回书架", onBack)
-                    Column(Modifier.weight(1f).padding(start = 2.dp)) {
-                        Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, maxLines = 1)
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BackSlot("返回书架", onBack)
+                        Column(Modifier.weight(1f).padding(start = 2.dp)) {
+                            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, maxLines = 1)
+                            Text(
+                                (names.getOrNull(episode) ?: "第 ${episode + 1} 集") +
+                                    (if (parts.size > 1) " · 第 ${partIndex + 1}/${parts.size} 段" else ""),
+                                fontSize = 12.sp,
+                                color = theme.faintColor,
+                                maxLines = 1,
+                            )
+                        }
                         Text(
-                            (names.getOrNull(episode) ?: "第 ${episode + 1} 集") +
-                                (if (parts.size > 1) " · 第 ${partIndex + 1}/${parts.size} 段" else ""),
-                            fontSize = 12.sp,
+                            if (durationMs > 0) mmss(positionMs) + " / " + mmss(durationMs) else "--:--",
+                            fontSize = 13.sp,
                             color = theme.faintColor,
-                            maxLines = 1,
                         )
-                    }
-                    Text(
-                        if (durationMs > 0) mmss(positionMs) + " / " + mmss(durationMs) else "--:--",
-                        fontSize = 13.sp,
-                        color = theme.faintColor,
-                    )
-                    // 这一集有正文才给这一颗（没正文那一族点了是颗死控件）。名字写的是**按下去会看到什么**
-                    if (canFollow) {
-                        Text(
-                            if (follow) "封面" else "正文",
-                            fontSize = 12.sp,
-                            color = theme.faintColor,
-                            modifier = Modifier
-                                .padding(start = 12.dp)
-                                .tap { follow = !follow; followChosen = true; pinned = true },
-                        )
+                        // 这一集有正文才给这一颗（没正文那一族点了是颗死控件）。名字写的是**按下去会看到什么**
+                        if (canFollow) {
+                            Text(
+                                if (follow) "封面" else "正文",
+                                fontSize = 12.sp,
+                                color = theme.faintColor,
+                                modifier = Modifier
+                                    .padding(start = 12.dp)
+                                    .tap { follow = !follow; followChosen = true; pinned = true },
+                            )
+                        }
                     }
                 }
 
@@ -475,79 +560,113 @@ fun AudioReaderScreen(
                     }
                 }
 
-                // 底栏：和小说/漫画**同一颗** ReaderBottomBar（图标上、文字下、58dp、顶部一条发丝线）。
+                // 底栏槽：和小说/漫画**同一颗** ReaderBottomBar（图标上、文字下、58dp、顶部一条发丝线）。
                 // 第二颗给的是「语速」而不是「书签」—— 这一族没有"第几页"可记，那一格空着就是颗死控件。
-                // 和顶栏同一条命运：点屏幕收放（栏收着时那句回话还在中间那一格里看得见，不会变成"点了没反应"）
-                if (bars) ReaderBottomBar(
-                    theme = theme,
-                    onToc = { sheet = if (sheet == AudioSheet.Episodes) AudioSheet.None else AudioSheet.Episodes },
-                    onMarks = { sheet = if (sheet == AudioSheet.Rates) AudioSheet.None else AudioSheet.Rates },
-                    onToggleNight = { themeIndex = if (theme.night) 0 else ReaderTheme.ALL.lastIndex },
-                    onSettings = { sheet = if (sheet == AudioSheet.Settings) AudioSheet.None else AudioSheet.Settings },
-                    marksLabel = "语速" + rateLabel(rate),
-                    marksIcon = R.drawable.ic_speed,
-                )
-            }
-
-            if (sheet == AudioSheet.Episodes) {
-                EpisodesDrawer(
-                    names = names,
-                    have = have,
-                    current = episode,
-                    theme = theme,
-                    onPick = { goEpisode(it) },
-                    onClose = { sheet = AudioSheet.None },
-                )
-            }
-
-            if (sheet == AudioSheet.Rates) {
-                PanelShell(theme) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("语速", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, modifier = Modifier.weight(1f))
-                        Text("关闭", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.tap { sheet = AudioSheet.None })
-                    }
-                    Text(
-                        "一档 = 原速。选一档立刻套到当前这一段上，换集不换（存在「我的 → 阅读偏好」同一格）。",
-                        fontSize = 12.sp,
-                        color = theme.faintColor,
-                        modifier = Modifier.padding(top = 6.dp),
+                // 和顶栏一样一直画着（这一屏的菜单不隐藏）
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(ReaderBottomBarHeight + if (edge) barInset.calculateBottomPadding() else 0.dp)
+                        .padding(bottom = if (edge) barInset.calculateBottomPadding() else 0.dp),
+                ) {
+                    ReaderBottomBar(
+                        theme = theme,
+                        modifier = Modifier.fillMaxSize(),
+                        onToc = { sheet = if (sheet == AudioSheet.Episodes) AudioSheet.None else AudioSheet.Episodes },
+                        onMarks = { sheet = if (sheet == AudioSheet.Rates) AudioSheet.None else AudioSheet.Rates },
+                        onToggleNight = { themeIndex = if (theme.night) 0 else ReaderTheme.ALL.lastIndex },
+                        onSettings = { sheet = if (sheet == AudioSheet.Settings) AudioSheet.None else AudioSheet.Settings },
+                        marksLabel = "语速" + rateLabel(rate),
+                        marksIcon = R.drawable.ic_speed,
                     )
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 22.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        RATES.forEach { v ->
-                            val on = v == rate
-                            Box(
-                                Modifier
-                                    .weight(1f)
-                                    .height(40.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(if (on) theme.accentColor else theme.pageColor)
-                                    .tap { pickRate(v) },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(rateLabel(v), fontSize = 13.sp, color = if (on) Color.White else theme.inkColor)
+                }
+            }
+
+            // 抽屉和面板另让一次系统栏：撑满那一档内容顶到边，而这几层还是正常上下排列
+            // （不让的话抽屉底边会压进导航条 —— 和漫画那一屏同一条写法）
+            Box(Modifier.fillMaxSize().then(if (edge) Modifier.fixedBarsPadding() else Modifier)) {
+                if (sheet == AudioSheet.Episodes) {
+                    EpisodesDrawer(
+                        names = names,
+                        have = have,
+                        current = episode,
+                        theme = theme,
+                        getting = getting,
+                        justGot = justGot,
+                        desc = chapterDesc,
+                        onToggleSort = { chapterDesc = !chapterDesc; prefs.chapterDesc = chapterDesc },
+                        onRedo = { redo(it) },
+                        onPick = { pick(it) },
+                        onClose = { sheet = AudioSheet.None },
+                    )
+                }
+
+                if (sheet == AudioSheet.Rates) {
+                    PanelShell(theme) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("语速", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = theme.inkColor, modifier = Modifier.weight(1f))
+                            Text("关闭", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.tap { sheet = AudioSheet.None })
+                        }
+                        Text(
+                            "一档 = 原速。选一档立刻套到当前这一段上，换集不换（存在「我的 → 阅读偏好」同一格）。",
+                            fontSize = 12.sp,
+                            color = theme.faintColor,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 22.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            RATES.forEach { v ->
+                                val on = v == rate
+                                Box(
+                                    Modifier
+                                        .weight(1f)
+                                        .height(40.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (on) theme.accentColor else theme.pageColor)
+                                        .tap { pickRate(v) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(rateLabel(v), fontSize = 13.sp, color = if (on) Color.White else theme.inkColor)
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if (sheet == AudioSheet.Settings) {
-                // 和漫画那一屏点「设置」开的同一格（同一份实现，不各写一遍）
-                BrightnessBackgroundPanel(
-                    theme = theme,
-                    brightness = brightness,
-                    onBrightness = { brightness = it; prefs.brightness = it },
-                    onFollowSystem = { brightness = -1f; prefs.brightness = -1f },
-                    onPickTheme = { themeIndex = ReaderTheme.ALL.indexOf(it) },
-                )
+                if (sheet == AudioSheet.Settings) {
+                    // 和漫画那一屏点「设置」开的同一格（同一份实现，不各写一遍）
+                    BrightnessBackgroundPanel(
+                        theme = theme,
+                        brightness = brightness,
+                        onBrightness = { brightness = it; prefs.brightness = it },
+                        onFollowSystem = { brightness = -1f; prefs.brightness = -1f },
+                        onPickTheme = { themeIndex = ReaderTheme.ALL.indexOf(it) },
+                        // 顶上多留一截：原来那一行几乎是贴着面板上沿画出来的（面板顶到「全屏」那行字 35px），
+                        // 他要"这个选项的顶部间隙大一点" —— 抬 14dp（量到 35px → 73px），
+                        // 和下面亮度那一行到这一行的间距同一条数（20dp）
+                        header = {
+                            Spacer(Modifier.height(14.dp))
+                            // 这一屏不支持撑满（他点名）：开关只置灰、点不动，代码逻辑整份留着
+                            EdgeToEdgeRow(
+                                theme = theme,
+                                on = edge,
+                                onToggle = { edge = !edge; prefs.edgeToEdge = edge },
+                                enabled = false,
+                            )
+                        },
+                    )
+                }
             }
         }
+
+        // 两条栏一直亮着，状态栏 / 导航条那两格就用实心纸色盖住（撑满那一档背景图是铺到 y=0 的）：
+        // 和小说/漫画共用一份 `BarPaper`；画在正文那一格之后才盖得住，抽屉自己让过系统栏、不重叠
+        BarPaper(theme, 1f)
     }
 }
 
@@ -555,7 +674,7 @@ fun AudioReaderScreen(
  * 跟读那一格：整集正文摆满，当前那一句染成强调色，**只在当前这一句滚出屏幕时**才把它拉回来。
  *
  * 两处都是量出来的形态，不是随手定的：
- *  - **不挂点击**。这一格上的字只是给人读的，点屏幕正中在这屏一贯是"收放上下那两条栏"；
+ *  - **不挂点击**。这一格上的字只是给人读的；这一屏的两条栏不隐藏（他点名），点屏幕正中什么都不做。
  *    给它挂一颗跳播之后，实测一次中心点击把播放从 7:45 拽回 7:35（那一段的开头）—— 他点名的"点屏幕中心翻页"。
  *    要跳有底下那条进度条，不用在正文上再埋一颗看不见的按钮。
  *  - **跟随按句、但只在看不见时才滚**。一屏装得下二十来句，跟着每一句滚等于每隔几秒整屏跳一下；
@@ -613,9 +732,10 @@ private fun FollowPane(
             state = state,
             // 缝要开在**视口**上，不是开在 contentPadding 上：后者只在滚到顶 / 底那一头生效，
             // 中途滚动时文字照样贴着栏切一刀（他第二张截图圈的就是这个）。
-            // 视口往里缩 20dp（和左右那条缝同一条数），上下各留一条真空隙；边缘那半行再淡出 8dp
-            // —— 淡出和听书页那个两行窗口共用一份 `edgeFade`
-            modifier = Modifier.fillMaxSize().padding(vertical = 20.dp).edgeFade(8.dp),
+            // **顶上那一条缝不再另加**：顶栏槽本身在字底下还留着 31px（那行 52dp 里字是居中的），
+            // 原来再垫 20dp 之后，菜单底下的空当是 86px、比菜单顶上那 32px 宽出一大截 —— 他要"上下一样"。
+            // 底下那条缝留着（进度条那一格就贴着它）；边缘那半行再接 8dp 淡出
+            modifier = Modifier.fillMaxSize().padding(bottom = 20.dp).edgeFade(8.dp),
             contentPadding = PaddingValues(horizontal = 20.dp),
         ) {
             items(map.paragraphs.size) { pi ->
@@ -712,6 +832,11 @@ private fun BoxScope.EpisodesDrawer(
     have: Map<Int, AudioBook.Episode>,
     current: Int,
     theme: ReaderTheme,
+    getting: Int?,
+    justGot: Int,
+    desc: Boolean,
+    onToggleSort: () -> Unit,
+    onRedo: (Int) -> Unit,
     onPick: (Int) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -724,14 +849,23 @@ private fun BoxScope.EpisodesDrawer(
             .background(theme.barColor)
             .consumesPanelTaps(),
     ) {
-        PanelTitle("目录 ${names.size} 集", theme, onClose)
-        val state = rememberLazyListState(initialFirstVisibleItemIndex = current.coerceIn(0, (names.size - 1).coerceAtLeast(0)))
+        PanelTitle("目录 ${names.size} 集", theme, onClose, sortDesc = desc, onToggleSort = onToggleSort)
+        // 倒序就是把号倒过来摆：点第几集还是那几集，不因为换了排法错位
+        val cur = current.coerceIn(0, (names.size - 1).coerceAtLeast(0))
+        val order = chapterOrder(names.size, desc)
+        val at = chapterSlot(names.size, cur, desc)
+        val state = rememberLazyListState(initialFirstVisibleItemIndex = at.coerceIn(0, (names.size - 1).coerceAtLeast(0)))
+        // 换排法的时候把当前集留在原来那一屏位上
+        LaunchedEffect(desc) { if (names.isNotEmpty()) state.scrollToItem(at.coerceIn(0, names.lastIndex)) }
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxWidth().weight(1f),
             contentPadding = PaddingValues(bottom = 12.dp),
         ) {
-            items(names.size) { i -> EpisodeRow(i, names[i], have[i], i == current, theme, onPick) }
+            items(order.size) { slot ->
+                val i = order[slot]
+                EpisodeRow(i, names[i], have[i], i == current, theme, getting == i, justGot == i, onPick, onRedo)
+            }
         }
     }
 }
@@ -744,7 +878,10 @@ private fun EpisodeRow(
     ep: AudioBook.Episode?,
     current: Boolean,
     theme: ReaderTheme,
+    busy: Boolean,
+    pop: Boolean,
     onPick: (Int) -> Unit,
+    onRedo: (Int) -> Unit,
 ) {
     Row(
         Modifier
@@ -765,7 +902,12 @@ private fun EpisodeRow(
             maxLines = 1,
             modifier = Modifier.weight(1f),
         )
+        // 段数只在有的那一行出现，那颗自己永远占同一个位置（不因为有没有下过而左右挪）
         if (ep != null) Text(ep.parts.toString(), fontSize = 12.sp, color = theme.faintColor)
+        // 一颗两用：没下过是箭头（补这一集），下过是转圈箭头（重下这一集）—— 和漫画那一屏同一条规矩
+        ChapterGet(faceOf(ep != null, busy), theme.accentColor, theme.faintColor, pop) {
+            if (ep == null) onPick(index) else onRedo(index)
+        }
     }
 }
 

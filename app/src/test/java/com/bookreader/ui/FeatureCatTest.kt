@@ -3,6 +3,8 @@ package com.bookreader.ui
 import com.bookreader.booksource.BookHit
 import com.bookreader.booksource.RuleLoader
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -72,6 +74,21 @@ class FeatureCatTest {
         assertEquals("类目表本身是八颗（六类小说 + 漫画 + 有声）", 8, FEATURE_CATS.size)
         assertEquals("整条取前 20 本只会剩两个类目 —— 那种写法正是这条判据要挡的",
             2, site.take(20).map { featureCat(it.category) }.distinct().size)
+    }
+
+    /**
+     * 分类页那一格什么时候摆方格骨架。这条判据管的是"闪一下"和"永远站着"两头：
+     * 只认 loading 就只剩几百毫秒的一闪（真机量过 0.4 秒满屏封面），把"还翻得动"也算进来
+     * 就会在压根翻不动的那一站站成一句等不到的假话。
+     */
+    @Test
+    fun gridSkeletonStandsForTheWholeEmptyWindow() {
+        assertTrue("外层下拉、这一格还空着", gridShowsSkeleton(true, true, false, false, false))
+        assertTrue("正在要这一类的第一页", gridShowsSkeleton(true, false, true, true, false))
+        assertTrue("翻得动、也还没说翻完 —— 这几秒不该是一片空墙", gridShowsSkeleton(true, false, false, true, false))
+        assertFalse("已经有书：闪一张骨架看着像把列表清了", gridShowsSkeleton(false, true, true, true, false))
+        assertFalse("这一站压根没写翻页模板：骨架站着就是等不到的假话", gridShowsSkeleton(true, false, false, false, false))
+        assertFalse("当场说翻完了却一本没有：那句实话比骨架有用", gridShowsSkeleton(true, false, false, true, true))
     }
 
     private fun hit(name: String, category: String) = BookHit(

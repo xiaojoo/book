@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「撑满状态栏、导航栏」那一格：四角括号。pdf / pptx 的抽屉里用它（小说/漫画/听书那一档是
+     设置面板里的一行字，没有图标位）。描边画而不是实心块 —— 线条粗细和抽屉里那几颗 21dp 的图标一档 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M4,9L4,4L9,4M15,4L20,4L20,9M20,15L20,20L15,20M9,20L4,20L4,15" />
+</vector>

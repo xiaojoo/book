@@ -51,9 +51,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bookreader.R
 import com.bookreader.booksource.HttpFetcher
+import com.bookreader.booksource.Rule
 import com.bookreader.booksource.SearchEngine
+import com.bookreader.core.model.BookMeta
+import com.bookreader.data.AudioBook
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.BookProvenance
+import com.bookreader.data.ChapterFetch
+import com.bookreader.data.ComicBook
 import com.bookreader.data.DownloadRecord
 import com.bookreader.data.Downloads
 import com.bookreader.data.StoredSource
@@ -89,6 +94,26 @@ data class BookInfo(
 }
 
 /**
+ * 目录那一格的行：永远按站点那份整大纲摆，本地已下的那一截只用来填字数。
+ *
+ * 为什么不按本地那份摆：一本 3066 章的小说「先拉开头」只有 10 章，按本地摆就是这一屏只剩 10 行、
+ * 底下 3056 章像被删了 —— 而他要的是"列表还是全部，只是其余的没下"。
+ * 字数**按章名对位**，不按下标：下载时空正文的那几章是跳过的，引擎的第 i 章不一定是大纲的第 i 章，
+ * 按下标填会在末尾把 A 章的名字配上 B 章的字数（见 [alignOutline]）。
+ * 大纲空着（本地导入的那一本没有书页）就整份退回本地清单。
+ * 盘上比大纲多出来的那些章**不摆成第二行** —— 理由写在 [outlineRows] 上面。
+ */
+internal fun chapterRows(outline: List<String>, counted: List<Pair<String, String>>): List<Pair<String, String>> {
+    if (outline.isEmpty()) return counted
+    val at = alignOutline(outline, counted.map { it.first })
+    val words = HashMap<Int, String>()
+    at.forEachIndexed { i, p -> if (p >= 0) words[p] = counted[i].second }
+    // 行数只认大纲：盘上多出来的那些章（正文里被标题规则误判出来的）不摆成第二行，
+    // 那一行的章名会和上面那一行一模一样（真机《夜无疆》：882 条的目录被摆成 917 行）
+    return outline.mapIndexed { j, t -> t to (words[j] ?: "") }
+}
+
+/**
  * 一本书的信息页，版式照参考图3：顶栏一颗 ‹ → 封面 + 书名/作者/类目 → 一排数据 → 标签 chip →
  * 简介（长到一屏放不下才给「展开」）→ 一行「目录 ›」（进参考图4 那一屏）→ 底部动作条。
  *
@@ -105,8 +130,14 @@ fun BookInfoPage(
     library: BookLibrary,
     onBack: () -> Unit,
     onOpen: (String) -> Unit,
-    /** 点目录里某一章：从那一章开始读。只有已经下进书架的那一本给得起这个动作。 */
-    onReadChapter: (Int) -> Unit,
+    /**
+     * 点目录里某一章：从那一章开始读。只有已经下进书架的那一本给得起这个动作。
+     *
+     * 书 id 由这一页交回去：从精选/分类进来的那一份 `BookInfo` 手上没有 id，是这一页按
+     * "哪条源的哪个书页" 从书架上找回来的（上面那格 LaunchedEffect）。壳子那份 `bookInfo`
+     * 还是空的 —— 拿它去开就是开一本不存在的书，界面表现为"点完退回原地"（真机撞见过）。
+     */
+    onReadChapter: (String, Int) -> Unit,
 ) {
     val ctx = LocalContext.current
     var shown by remember { mutableStateOf(info) }
@@ -116,13 +147,33 @@ fun BookInfoPage(
     var openIntro by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
     var rec by remember { mutableStateOf<DownloadRecord?>(null) }
+    // 哪一章是「点了先下、下完就地翻开」那一枪叫起来的：整本那条 worker 是异步的，
+    // 这一格就是它跑完该跳去的地方（-1 = 没人在等它）。就地补一章那一档是同步的，不经这一格。
+    var pendingOpen by remember { mutableIntStateOf(-1) }
+    var getting by remember { mutableStateOf<Int?>(null) }
     // 和搜书那一格同一条规矩：不维护第二份"内存里的进度"（那份东西进程一死就开始骗人），
     // 有任务在跑才 1 秒读一次磁盘上的下载表，没跑就只在动作之后读一次 —— 空转的轮询等于界面在自己刷自己。
-    LaunchedEffect(shown.bookUrl, reload) {
+    LaunchedEffect(shown.bookUrl, reload, pendingOpen) {
         readRec(ctx, shown.bookUrl)?.let { rec = it }
+        var wasRunning = false
         while (rec?.running == true) {
+            wasRunning = true
             delay(1_000L)
             readRec(ctx, shown.bookUrl)?.let { rec = it }
+        }
+        if (!wasRunning) return@LaunchedEffect
+        // 任务刚跑完要再重读一遍这一页：书 id、每章字数、那颗 ↻ 三样都是按"架上那本"算的，
+        // 不重读就停在任务开始前的那一份上（真机：补完 8 章回到这一页，那一屏还满屏 ↓）
+        getting = null
+        reload++
+        val to = pendingOpen
+        pendingOpen = -1
+        // 只在下成功之后翻进去：那一枪失败了就停在原地，把失败那句实话留在页面上。
+        // id 问下载表那一行，不问 `shown.bookId`：那一格是另一个 effect 按书架找回来的，
+        // 它这一轮还没跑到（真机点第五章：书下完了、人还站在这一页，因为那时它是空的）
+        if (to >= 0 && rec?.state == DownloadRecord.STATE_DONE) {
+            val id = rec?.bookId.orEmpty().ifEmpty { shown.bookId }
+            if (id.isNotEmpty()) onReadChapter(id, to)
         }
     }
     val srcName = sources.firstOrNull { it.rule?.id == shown.sourceId }?.rule?.name.orEmpty()
@@ -141,17 +192,160 @@ fun BookInfoPage(
     // 没下过的书要看字数只能去读每一章，而两家站的目录页整页搜「N字」命中 0 次 —— 所以那一格宁可空着，
     // 不编一个数上去。开索引是读文件，走 IO，不在组合线程上。
     var counted by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    LaunchedEffect(shown.bookId) {
+    LaunchedEffect(shown.bookId, reload) {
         counted = if (shown.bookId.isEmpty()) emptyList() else withContext(Dispatchers.IO) {
             runCatching {
                 library.open(shown.bookId).chapters.chapters.map { it.title to "${it.charCount}字" }
             }.getOrDefault(emptyList())
         }
     }
-    val chapters = counted.ifEmpty { shown.outline.map { it to "" } }
+    // 列表永远按站点那份整目录摆：下了几章就只剩几行是假象（真机：点第五章补了 5 章，
+    // 这一屏就只剩 5 行，其余三千章像被删了）。本地那份只用来填字数那一格。
+    val chapters = chapterRows(shown.outline, counted)
     // 只有"这一本已经下进书架"才认得引擎的章序号：没下过的那一份章名是站点目录上的顺序，本地一个字都没有，
     // 点了没东西可读 —— 所以那一行不挂点击，也不摆一颗点了没反应的行
     val canRead = counted.isNotEmpty()
+    val rule = sources.firstOrNull { it.rule?.id == shown.sourceId }?.rule
+    val getKind = if (shown.hasSource) getKindOf(rule?.kind) else GetKind.None
+    // 那颗「补这一章」：漫画/有声就地补那一章（架上还没有这一本就先开一本空壳，见 [ChapterFetch.openShell]）；
+    // 小说补的是从头到那一章那一截（见 [GetKind.Prefix]）。
+    // 整本下载正在跑的时候图标**照样摆着**：撤掉它们会让同一串行在任务起止之间变两次形状
+    // （真机：点第五章，那一屏十行右边的箭头全没了，看着像列表被换了一份）。
+    // 点下去该拒的那一枪由 [busyByJob] 拒，并当场说一句为什么 —— 不是不响应，是这一枪现在打不得。
+    val canGet = getKind != GetKind.None
+    // 哪几章已经在机上：读的就是阅读页那一屏同一份清单（章号 = 站点目录里的号，两边同一个主人）
+    var have by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var gotTick by remember { mutableIntStateOf(0) }
+    var justGot by remember { mutableStateOf(-1) }
+    val getScope = rememberCoroutineScope()
+    LaunchedEffect(shown.bookId, canGet, gotTick) {
+        have = if (!canGet || shown.bookId.isEmpty()) emptySet() else withContext(Dispatchers.IO) {
+            val d = library.dir(shown.bookId)
+            runCatching {
+                if (rule?.kind == BookMeta.AUDIO) AudioBook(d).episodes().map { it.index }.toSet()
+                else ComicBook(d).chapters().map { it.index }.toSet()
+            }.getOrDefault(emptySet())
+        }
+    }
+
+    /**
+     * 整本那条 worker 正在跑 —— 这时候再点一章 = 往同一个队列名里塞第二枪，
+     * `KEEP` 会把第二枪直接吃掉，界面上就是"点了没反应"。所以拒掉，并说一句为什么。
+     */
+    fun busyByJob(): Boolean {
+        if (rec?.running != true) return false
+        note = "整本正在下：等它跑完再点这一章"
+        return true
+    }
+
+    /**
+     * 小说那一档：起「从头补到这一章」那一枪（就是上面那颗「预览十章」同一条路，只是拉到第 to+1 章）。
+     *
+     * 不自己开一条"只抓一章"的路：那一章进不了架上那串字（要整本重灌重索引），
+     * 引擎也不认一份不在 `chapter.idx` 里的章。补完这一页会自己重读：那一行换成 ↻，点它就读。
+     */
+    fun fetchPrefix(to: Int) {
+        start(shown, sources, ctx, { note = it }, head = to + 1)
+        // 那一枪是异步的（整本那条 worker）：这一行先挂上三个点，跑完由上面那个轮询收掉，
+        // 并按 pendingOpen 就地翻进那一章 —— 他要的是"没下的点击就直接下载，然后阅读"
+        getting = to
+        pendingOpen = to
+        reload++
+    }
+
+    /** 补完就地从那一章读起来 —— 和阅读页抽屉里那一行点下去是同一条规矩（[onRowTap]）。 */
+    fun fetchOne(to: Int) {
+        if (getting != null) return
+        getting = to
+        note = ""
+        getScope.launch {
+            val r = rule ?: run { getting = null; note = "那条源已经不在了，这一章没处下"; return@launch }
+            val audio = r.kind == Rule.AUDIO
+            var id = shown.bookId
+            if (id.isEmpty()) {
+                // 架上还没有这一本：先开一本空壳（清单 + 来源 + 整份大纲），不然那一章没地方落
+                id = withContext(Dispatchers.IO) {
+                    ChapterFetch.openShell(ctx, library, r, shown.bookUrl, shown.title, shown.author, shown.outline)
+                }
+                shown = shown.copy(bookId = id)
+            }
+            val got = runCatching {
+                withContext(Dispatchers.IO) {
+                    if (audio) ChapterFetch.audio(ctx, library, id, to) else ChapterFetch.comic(ctx, library, id, to)
+                }
+            }
+            getting = null
+            got.fold(
+                onSuccess = { gotTick++; justGot = to; onReadChapter(id, to) },
+                onFailure = { note = it.message ?: "这一章没抓到" },
+            )
+        }
+    }
+
+    /**
+     * 这一章在不在本机：漫画/有声问那份章表（章号本来就是大纲号）；
+     * 小说问"引擎里有没有一章对得上大纲这个位置" —— 空正文被跳过的那几章会让两个号错开，
+     * 所以这里按章名对位，不按"排到第几章"那个前缀算。
+     */
+    val localAt = remember(shown.outline, counted, getKind) {
+        if (getKind == GetKind.Prefix) alignOutline(shown.outline, counted.map { it.first })
+            .filter { it >= 0 }.toSet()
+        else emptySet()
+    }
+
+    fun hasAt(to: Int): Boolean = if (getKind == GetKind.Prefix) to in localAt else to in have
+
+    /** 重下这一章：漫画/有声就地重取那一章的文件；小说那一节是「抹掉断点缓存 + 补齐全本」那一枪。 */
+    fun redo(to: Int) {
+        if (getting != null) return
+        if (busyByJob()) return
+        val id = shown.bookId
+        getting = to
+        note = ""
+        if (getKind == GetKind.Prefix) {
+            getScope.launch {
+                val ok = runCatching {
+                    withContext(Dispatchers.IO) {
+                        // head = to+1：要的是"到这一章为止"，不是整本。盘上比它多时由 routeOf 抬回去，
+                        // 所以重下中间某一节不会把后面的裁掉
+                        ChapterFetch.novel(ctx, library, id, to, shown.title, head = to + 1)
+                    }
+                }
+                ok.fold(
+                    // 起了枪就别收圈：那一枪是异步的，由上面那个轮询在任务停下时收（顺带重读这一页）
+                    onSuccess = { if (!it) { getting = null; note = ChapterFetch.goneSays(to) } },
+                    onFailure = { getting = null; note = it.message ?: "这一章没抓到" },
+                )
+            }
+            return
+        }
+        val audio = rule?.kind == Rule.AUDIO
+        getScope.launch {
+            val n = runCatching {
+                withContext(Dispatchers.IO) {
+                    if (audio) ChapterFetch.audio(ctx, library, id, to, force = true)
+                    else ChapterFetch.comic(ctx, library, id, to, force = true)
+                }
+            }
+            getting = null
+            n.fold(onSuccess = { gotTick++ }, onFailure = { note = it.message ?: "这一章没抓到" })
+        }
+    }
+
+    fun pickRow(to: Int) {
+        if (!canGet) {
+            if (canRead) onReadChapter(shown.bookId, to)
+            return
+        }
+        when (onRowTap(hasAt(to), getting == to)) {
+            RowTap.Open -> onReadChapter(shown.bookId, to)
+            // 已经下过的那一章照开（整本在下也读得到）；要新起一枪的这一档得先看队列忙不忙
+            RowTap.FetchThenOpen -> if (!busyByJob()) {
+                if (getKind == GetKind.Prefix) fetchPrefix(to) else fetchOne(to)
+            }
+            RowTap.Wait -> Unit
+        }
+    }
 
     BackHandler(onBack = onBack)
     // 只有"既没简介也没大纲、又确实有条源能去读"时才补一次；书架上那本本地文件里都有，不重复打站子
@@ -239,7 +433,15 @@ fun BookInfoPage(
             ) {
                 items(if (expanded) chapters.size else chapters.size.coerceAtMost(CARD_CHAPTERS)) { i ->
                     val (name, words) = chapters[i]
-                    ChapterLine(name, words, Modifier.padding(horizontal = 16.dp), onClick = if (canRead) { { onReadChapter(i) } } else null)
+                    ChapterLine(
+                        name, words, Modifier.padding(horizontal = 16.dp),
+                        // 状态那颗只在【补这一章】时转圈；重下的圈归左边那颗（两圈同转看不出谁在跑）
+                        face = if (canGet) faceOf(hasAt(i), getting == i) else null,
+                        pop = justGot == i,
+                        // 那颗自己：没下过=补这一章，下过=重下这一章（三档都有重下，见 ChapterFetch.novel）
+                        onGlyph = { if (hasAt(i)) redo(i) else pickRow(i) },
+                        onClick = { pickRow(i) },
+                    )
                 }
             }
             if (more && (!expanded || atBottom)) {
@@ -524,14 +726,29 @@ private fun ChapterLine(
     title: String,
     words: String,
     modifier: Modifier = Modifier,
+    face: GetFace? = null,
+    pop: Boolean = false,
+    onGlyph: () -> Unit = {},
     onClick: (() -> Unit)? = null,
 ) {
     var m = modifier
     if (onClick != null) m = m.tap(onClick)
-    Column(m.fillMaxWidth().padding(vertical = 14.dp)) {
-        Text(title, fontSize = 15.sp, lineHeight = 20.sp, color = Chrome.ink, maxLines = 1)
+    // 字数挪到章名同一行的右边：原先它另起一行，量下来**有字数的行 167px、没字数的行 122px**
+    // —— 同一屏里"下过的"和"没下过的"两种行差一截（他点名的就是这一条）。
+    // 一行到底之后两种行同一个高、同一份内衬（还是上下各 14dp），信息一样不少
+    Row(m.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 15.sp, lineHeight = 20.sp, color = Chrome.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (words.isNotEmpty()) {
-            Text(words, fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.padding(top = 5.dp))
+            Text(words, fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.padding(start = 10.dp))
+        }
+        // 那颗：没下过是箭头（补这一章），下过是转圈箭头（重下这一章）；没有那颗时一行不占位。
+        // 往右挪一点让墨的右边缘和表头最右那颗对上（表头那颗离屏边 43px）：箭头和转圈箭头的墨
+        // 在各自画布里留的白不一样（ic_download 描到 x=19/24、ic_redownload 描到 x=21/24），
+        // 所以两档各给一个数 —— 量的，对平后都是 43px
+        face?.let {
+            Box(Modifier.offset(x = if (it == GetFace.Absent) 3.5.dp else 2.dp)) {
+                ChapterGet(it, Chrome.dot, Chrome.faint, pop, onGlyph)
+            }
         }
     }
 }

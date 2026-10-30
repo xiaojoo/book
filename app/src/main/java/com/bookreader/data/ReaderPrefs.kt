@@ -223,6 +223,35 @@ class ReaderPrefs internal constructor(private val p: SharedPreferences, private
         get() = floatOf("brightness", -1f)
         set(v) = putFloat("brightness", v)
 
+    /**
+     * 按屏：目录抽屉的排法。false = 正序（第 1 章在上），true = 倒序（最新在上）。
+     *
+     * 存下来而不是记在屏里：倒着看是习惯，不是这一本的事 —— 退出阅读页再进来还该是倒的。
+     * 三档（小说/漫画/有声）各存一份，因为"目录几千话只想看最新的"通常是漫画那档的需求，
+     * 不该把小说那档也一起倒过来。
+     */
+    var chapterDesc: Boolean
+        get() = boolOf("chapterDesc", false)
+        set(v) = putBool("chapterDesc", v)
+
+    /**
+     * 按屏：漫画怎么翻。false = 左右翻（一张一屏），true = 上下滚着读（条漫那种连着往下）。
+     * 和上面那颗一样存"按屏"这一档：条漫适合上下、单格页适合左右，同一档设置不该串到小说那屏去。
+     */
+    var comicVertical: Boolean
+        get() = boolOf("comicVertical", false)
+        set(v) = putBool("comicVertical", v)
+
+    /**
+     * 按屏：这一档阅读器自己要不要把内容撑满状态栏和导航栏那两条。
+     *
+     * 和「我的 → 偏好设置」那颗「全屏模式」不是一回事：那颗是全局的，而且只在挂了背景图的那一本
+     * 生效（他早先定的口径）。这一颗是每个阅读器各存一份、开了就真藏 —— 漫画撑满不该把小说也撑满。
+     */
+    var edgeToEdge: Boolean
+        get() = boolOf("edgeToEdge", false)
+        set(v) = putBool("edgeToEdge", v)
+
     /** 按屏：休息提醒分钟数，0=不提醒。 */
     var restMinutes: Int
         get() = intOf("restMinutes", 0)
@@ -258,9 +287,22 @@ class ReaderPrefs internal constructor(private val p: SharedPreferences, private
             )
         }
 
+    /**
+     * 书架上那些「站点又多了几章」的红点：书 id → 多几章。下拉刷新写、点开那一本清。
+     * 存储形状和判据都在 [UpdateCheck]（那两个编解码是纯函数，判据在那儿测，不靠 SharedPreferences）。
+     */
+    var shelfUpdates: Map<String, Int>
+        get() = UpdateCheck.decode(p.getString("shelfUpdates", "") ?: "")
+        set(v) = p.edit { putString("shelfUpdates", UpdateCheck.encode(v)) }
+
+    /** 点开那一本 = 这一本的红点看完了（下一次下拉还会照着站点重新判）。 */
+    fun clearShelfUpdate(id: String) {
+        val m = shelfUpdates.toMutableMap()
+        if (m.remove(id) != null) shelfUpdates = m
+    }
+
     /** 按屏：正文字体。null = 系统默认。 */
-    var fontPath: String?
-        get() = stringOf("fontPath", null)
+    var fontPath: String?        get() = stringOf("fontPath", null)
         set(v) = putString("fontPath", v)
 
     /** 昵称：只存在这台机上，没有账号体系。 */

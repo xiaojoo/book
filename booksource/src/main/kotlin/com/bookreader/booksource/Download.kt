@@ -145,7 +145,7 @@ class BookDownloader(
         return DownloadOutcome(hit.bookName, hit.author, chapters.size, body.length, failed, body, intro, outline)
     }
 
-    private fun storeKey(bookUrl: String, chapterUrl: String) = rule.id + "|" + bookUrl + "|" + chapterUrl
+    private fun storeKey(bookUrl: String, chapterUrl: String) = chapterCacheKey(rule.id, bookUrl, chapterUrl)
 
     /** 一章的一页：原文（还要从里面找"下一页"）、它自己生效的地址（相对链接按它解，限流站会跳走）、抽出来的正文。 */
     private class ChapterPage(val html: String, val at: String, val text: String)
@@ -187,6 +187,13 @@ interface ChapterStore {
     fun get(key: String): String?
     fun put(key: String, value: String)
 }
+
+/**
+ * 一章在断点缓存里的那个键。唯一的一份写法放在这里：
+ * 「重下这一节」那一条要自己算出键去删文件，格式在两处各写一遍迟早有一处改了另一处没改 ——
+ * 那时表现就是"点了重下，抓回来的还是缓存里那一份"。
+ */
+fun chapterCacheKey(ruleId: String, bookUrl: String, chapterUrl: String) = ruleId + "|" + bookUrl + "|" + chapterUrl
 
 /** 测试和一次性下载用这个；`:app` 里给的是落盘实现（进程被杀也能续）。 */
 class MemoryStore(initial: Map<String, String> = emptyMap()) : ChapterStore {

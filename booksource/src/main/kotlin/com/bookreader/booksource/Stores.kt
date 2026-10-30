@@ -35,6 +35,18 @@ class FileChapterStore(private val root: File) : ChapterStore {
 
     private fun file(key: String) = File(root, sha1(key) + ".txt")
 
+    /**
+     * 抹掉一章的缓存（重下那一节用）：删了它，下次整本跑的时候那一节就会重新抓，
+     * 其余各节照旧从缓存读 —— 一颗「重下这一节」不该把一本书的网络请求全废掉。
+     * 回有没有真删掉一个文件。
+     */
+    fun drop(key: String): Boolean {
+        val f = file(key)
+        val gone = f.delete()
+        File(f.parentFile, f.name + ".part").delete()
+        return gone
+    }
+
     /** 仓里已有多少章（给"接着上次"那句回话用）。 */
     fun stored(): Int = root.listFiles { f -> f.isFile && f.name.endsWith(".txt") }?.size ?: 0
 

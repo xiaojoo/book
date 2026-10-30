@@ -121,6 +121,12 @@ fun WholePageDrawer(
     onNight: (Boolean) -> Unit,
     rotate: Boolean,
     onRotate: (Boolean) -> Unit,
+    /**
+     * 「撑满状态栏、导航栏」。五个阅读器各一档（各存各的 `ReaderScope` 那一份）——
+     * pdf / pptx 没有版式可调，这一格是它们唯一"版面往外扩"的开关。
+     */
+    edge: Boolean,
+    onEdge: (Boolean) -> Unit,
     onHeight: (Int) -> Unit,
 ) {
     // 拖滑块只是"候选"，按「跳转」才真的过去 —— 参考图那颗按钮就是干这个的
@@ -218,6 +224,14 @@ fun WholePageDrawer(
         )
         SheetHairline()
         SheetSwitch(R.drawable.ic_rotate, "旋转屏幕", "横过来看这一页", rotate, onRotate)
+        SheetHairline()
+        SheetSwitch(
+            R.drawable.ic_reader_fullscreen,
+            "撑满状态栏、导航栏",
+            "版面铺到屏幕边，上下两条栏浮在版面上",
+            edge,
+            onEdge,
+        )
 
         if (plays != null) {
             SheetBand()

@@ -1,5 +1,8 @@
 package com.bookreader.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,6 +40,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
@@ -67,6 +72,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bookreader.R
+import com.bookreader.booksource.Rule
 import com.bookreader.data.DeviceFonts
 import com.bookreader.data.ReaderPrefs
 
@@ -165,6 +171,12 @@ internal fun VolumePageTurn(enabled: Boolean, blockedBy: () -> String?, onTurn: 
  * 那一格给它当「语速」—— 换的是**这一格的内容**，不是再复制一排四颗。
  * 同一件事不留两个主人：这一族的高度、发丝线、图标 21dp、字 11sp 只有这一处定义。
  */
+/**
+ * 底栏那一排的高度。有声书那一屏的正文按它**常驻让位**（栏收着也留这一格，内容才不挪），
+ * 所以这个数只能有一处定义 —— 写两份哪天改了一份，让位就对不上栏了。
+ */
+internal val ReaderBottomBarHeight = 58.dp
+
 @Composable
 fun ReaderBottomBar(
     theme: ReaderTheme,
@@ -183,7 +195,7 @@ fun ReaderBottomBar(
             .drawBehind {
                 drawLine(theme.dividerColor, Offset.Zero, Offset(size.width, 0f), 1f)
             }
-            .height(58.dp),
+            .height(ReaderBottomBarHeight),
     ) {
         BarItem("目录", R.drawable.ic_reader_toc, theme, onToc)
         BarItem(marksLabel, marksIcon, theme, onMarks)
@@ -480,18 +492,26 @@ internal fun SlideBar(
  * `alpha` 是给阅读屏那条淡出用的（`chrome.value`）；别的屏非 0 即 1。
  */
 @Composable
-internal fun BoxScope.BarPaper(theme: ReaderTheme, alpha: Float) {
+internal fun BoxScope.BarPaper(theme: ReaderTheme, alpha: Float) = BarPaper(theme.pageColor, alpha)
+
+/**
+ * 同一个盖条，色子由调用方给：pdf / pptx 整屏用的是外壳那套色板（`Chrome.page` #F6F7F9），
+ * 不是六档纸色（纸白是 #FFFFFF）—— 拿 `ReaderTheme` 那一份盖上去，栏和工具栏差 6/8/10，
+ * 白天一眼能看出分界。形状、高度、时机全和上面那份一样，只有颜色换了来源。
+ */
+@Composable
+internal fun BoxScope.BarPaper(color: Color, alpha: Float) {
     if (alpha <= 0f) return
     val inset = systemBarHeights()
     Box(
         Modifier.align(Alignment.TopCenter).fillMaxWidth()
             .height(inset.calculateTopPadding())
-            .background(theme.pageColor.copy(alpha = alpha))
+            .background(color.copy(alpha = alpha))
     )
     Box(
         Modifier.align(Alignment.BottomCenter).fillMaxWidth()
             .height(inset.calculateBottomPadding())
-            .background(theme.pageColor.copy(alpha = alpha))
+            .background(color.copy(alpha = alpha))
     )
 }
 
@@ -539,7 +559,7 @@ internal fun PaperBackground(theme: ReaderTheme, bgBmp: ImageBitmap?, dim: Float
 }
 
 @Composable
-private fun PanelChip(
+internal fun PanelChip(
     text: String,
     theme: ReaderTheme,
     modifier: Modifier = Modifier,
@@ -602,11 +622,14 @@ fun BoxScope.MoreSettingsPanel(
     traditional: Boolean,
     onTraditional: (Boolean) -> Unit,
     traditionalAvailable: Boolean,
+    edge: Boolean,
+    onEdge: () -> Unit,
     note: String?,
     onBack: () -> Unit,
 ) {
     PanelShell(theme) {
         PanelHeader("阅读设置", theme, onBack)
+        EdgeToEdgeRow(theme, edge, onEdge)
         LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), contentPadding = PaddingValues(bottom = 12.dp)) {
             item { Text("行间距", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.padding(top = 10.dp)) }
             item {
@@ -824,6 +847,47 @@ internal fun BoxScope.Sheet(
 }
 
 /**
+ * 「撑满状态栏、导航栏」那一行：三个阅读器共用一颗（小说/漫画/有声），形状照亮度那行末尾
+ * 那颗「跟随系统 ✓」来 —— 同一个屏里两种勾选样式，人就得分辨哪个是哪个。
+ *
+ * 开关本身存的是**按屏**那一档（`ReaderPrefs.edgeToEdge`）：漫画撑满不该把小说也撑满。
+ */
+@Composable
+internal fun ColumnScope.EdgeToEdgeRow(
+    theme: ReaderTheme,
+    on: Boolean,
+    onToggle: () -> Unit,
+    /** 这一屏不支持撑满时传 false：行还在、字照旧，勾那一颗退成灰点且点不动 —— 有声那一屏（他点名）。 */
+    enabled: Boolean = true,
+) {
+    Row(Modifier.fillMaxWidth().height(34.dp), verticalAlignment = Alignment.CenterVertically) {
+        RowLabel("全屏", theme)
+        Spacer(Modifier.width(6.dp))
+        Text("撑满状态栏、导航栏", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.weight(1f))
+        val lit = enabled && on
+        Box(
+            modifier = Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                // 熄灭时用 `chipBg` 会只剩 5/255 —— 面板底色本来就浅，那颗等于没画；
+                // 换成再深一档的灰，人一眼看得出"这颗是灰的"而不是"这里空着"
+                .background(
+                    when {
+                        lit -> theme.accentColor
+                        enabled -> chipBg(theme)
+                        theme.night -> Color(0xFF2E3236)
+                        else -> Color(0xFFDDE0E5)
+                    },
+                )
+                .then(if (enabled) Modifier.tap(onToggle) else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (lit) Text("✓", fontSize = 13.sp, color = Color.White)
+        }
+    }
+}
+
+/**
  * 「设置」点开的那一格：**亮度那一整行**（滑轨 + 跟随系统那颗）和**背景那排色块**。
  *
  * 从漫画那一屏挪过来的，不是新写一份 —— 漫画/有声两屏点「设置」开的就是这一格，
@@ -837,8 +901,11 @@ internal fun BoxScope.BrightnessBackgroundPanel(
     onBrightness: (Float) -> Unit,
     onFollowSystem: () -> Unit,
     onPickTheme: (ReaderTheme) -> Unit,
+    /** 挂在亮度那一行之上的额外行（漫画那一屏的「翻页」两颗走这里）。有声那屏不传 = 面板一个字都不变。 */
+    header: @Composable ColumnScope.() -> Unit = {},
 ) {
     PanelShell(theme) {
+        header()
         Spacer(Modifier.height(20.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             RowLabel("亮度", theme)
@@ -884,3 +951,169 @@ internal fun BoxScope.BrightnessBackgroundPanel(
         Spacer(Modifier.height(20.dp))
     }
 }
+
+/** 目录行右边那颗「补这一章」的三种脸。一个位置三种状态：不消失、不挪位、行高不跳。 */
+internal enum class GetFace {
+    /** 没下过：↓，点它 = 补这一章 */
+    Absent,
+
+    /** 已下载：↻，点它 = 重下这一章。原先这是一只勾，他说勾不要了 —— 有 ↻ 就说明它在，不用第二个记号 */
+    Have,
+
+    /** 正在补这一章 */
+    Fetching,
+
+    /** 正在重下这一章 */
+    Redoing,
+}
+
+/** 正在下的那一章优先（箭头和 ↻ 都不许在它上面抢）；下过的给 ↻，没下过的给 ↓。 */
+internal fun faceOf(has: Boolean, busy: Boolean): GetFace = when {
+    busy && has -> GetFace.Redoing
+    busy -> GetFace.Fetching
+    has -> GetFace.Have
+    else -> GetFace.Absent
+}
+
+/** 点目录那一行到底干什么。他要的口径是"没下的点击就直接下载，然后阅读"。 */
+internal enum class RowTap { Open, FetchThenOpen, Wait }
+
+/**
+ * 同一颗规矩只留一个主人：图标自己不猜该不该点，屏上那一格拿这三个数决定。
+ * `Wait` 那一档是真的会错的地方 —— 允许连点两下就是同一章起两枪，两枪都往同一章目录里写图。
+ */
+internal fun onRowTap(has: Boolean, busy: Boolean): RowTap = when {
+    busy -> RowTap.Wait
+    has -> RowTap.Open
+    else -> RowTap.FetchThenOpen
+}
+
+/**
+ * 目录行右边那一颗：16dp 墨，命中区就是它所在的那一整行。颜色是传进来的两支（阅读那几屏用 `ReaderTheme`、
+ * 本书信息那一屏用 `Chrome`）—— 同一颗形状，谁用谁的色板，不在这里第二遍定义一套色。
+ *
+ * 正在下的那一颗换成一行的三个点（和精选刷新、翻页那三个点同一颗，只是缩到行里）：
+ * 转圈暗示"知道还要多久、正在路上"，而补一章到底要几秒真的不知道 —— 三个点说的是"在等"。
+ * 那一行的高不会跳：三个点占的还是那一格 16dp。
+ * 刚补完的那一行让 ↻ 从 0.6 长回 1（260ms）—— 一屏几十行里只有它动，眼睛找得到它。
+ * 已经在本机的那些行不重播这个动效（抽屉一开几十颗一起弹就是噪声）。
+ */
+@Composable
+internal fun ChapterGet(face: GetFace, ink: Color, faint: Color, pop: Boolean, onTap: () -> Unit) {
+    val grow = remember { Animatable(1f) }
+    LaunchedEffect(pop) {
+        if (pop) {
+            grow.snapTo(0.6f)
+            grow.animateTo(1f, tween(260, easing = FastOutSlowInEasing))
+        }
+    }
+    // 30×20dp 的命中格，墨靠右摆。
+    // 高只能 20dp：本书信息那一行的内容高就是章名那一格的 20dp，给它 44dp 会把整行撑起来
+    // （真机量过：行距 122 → 198px）。
+    // 墨靠右：那一列的右边缘和表头那颗对平过（43px 对 43px），改成居中就偏出去了。
+    Box(Modifier.size(width = 30.dp, height = 20.dp).tap(onTap), contentAlignment = Alignment.CenterEnd) {
+        Box(Modifier.size(16.dp).scale(grow.value), contentAlignment = Alignment.Center) {
+            when (face) {
+                GetFace.Absent -> Icon(
+                    painterResource(R.drawable.ic_download), "下载这一章",
+                    tint = ink, modifier = Modifier.size(16.dp),
+                )
+                GetFace.Have -> Icon(
+                    painterResource(R.drawable.ic_redownload), "重新下载这一章",
+                    tint = faint, modifier = Modifier.size(16.dp),
+                )
+                // 点 4dp、缝 2dp：三颗加两道缝正好 24dp，装得进这一格 30dp 的命中区
+                GetFace.Fetching, GetFace.Redoing -> LoadingDots(
+                    dot = ink, rowHeight = 16.dp, dotSize = 4.dp, gap = 2.dp, wide = false,
+                )
+            }
+        }
+    }
+}
+
+/** 点某一章那一颗，这一档的书实际会干什么。 */
+internal enum class GetKind {
+    /** 漫画/有声：一章 = 一个目录，就地补那一章，补完点开就读。 */
+    Chapter,
+
+    /**
+     * 小说：一章是整串 `content.txt` 里的一段偏移，单补一章既进不了那串字、
+     * 引擎也没有"从文件读一章"那条路 —— 所以这一颗补的是**从头到那一章**那一截，
+     * 走的还是下载那条 worker（已经抓过的章在磁盘上有缓存，不重复打站子）。
+     */
+    Prefix,
+
+    /** 文献那一档：一篇就是一份文件，没有"某一章"可补。 */
+    None,
+}
+
+
+/** 认的是**规则**那套 kind（`novel`/`comic`/`audio`/`paper`），不是清单里 `BookMeta` 那套。 */
+internal fun getKindOf(kind: String?): GetKind = when (kind) {
+    Rule.COMIC, Rule.AUDIO -> GetKind.Chapter
+    Rule.NOVEL -> GetKind.Prefix
+    else -> GetKind.None
+}
+
+/**
+ * 把引擎那份章表对回站点大纲的位置。
+ *
+ * 为什么不能按下标配：下载时**空正文的那几章是跳过的**（宁可缺一章，不接半截一章），
+ * 所以引擎里的第 i 章不一定是大纲里的第 i 章 —— 前面每跳一章，后面整体就错一格。
+ * 按下标配的画法在末尾会看起来"章重复了"：名字是 A 章、点开是 B 章的内容。
+ *
+ * 判据用的是"子序列"这一条：抓下来的章名本来就是从大纲那串里取的，顺序不会倒，
+ * 所以只往前走（单调指针）就能对回去；这样也才分得开作者真的写了两遍"休息一天"那种同名章。
+ * 对不上的（站点改了章名、或删了那一章）回 -1，由调用方单独摆一行，不许把它藏起来。
+ */
+internal fun alignOutline(outline: List<String>, local: List<String>): IntArray {
+    val at = IntArray(local.size) { -1 }
+    val want = local.map { chapterKey(it) }
+    val have = outline.map { chapterKey(it) }
+    var from = 0
+    for (i in want.indices) {
+        var j = from
+        while (j < have.size && have[j] != want[i]) j++
+        if (j < have.size) {
+            at[i] = j
+            from = j + 1
+        }
+    }
+    return at
+}
+
+/**
+ * 比章名之前先把空白规整掉：写进正文的那一行是 `heading()` 的产物，它**trim 过**，
+ * 而存下来的大纲是站点 `<a>` 里的原串（前后带空格、中间用全角空格分章号和标题的站都有）。
+ * 按字面相等配，这些章就"对不上号"被追加到末尾 —— 同一章在列表里出现两行，
+ * 顶上那个章数也跟着虚高（真机：一本 858 章编号到顶的书，抽屉头写成 917 章）。
+ */
+private fun chapterKey(title: String): String = title.trim().replace('\u3000', ' ').replace(Regex("\\s+"), " ")
+
+/**
+ * 目录那一屏的行：**行数 = 大纲的行数，一行不多**。每一行按名对回引擎里的那一章，对得上才摆字数。
+ *
+ * 为什么不追加"盘上有、大纲里没有"的那些章：真机《夜无疆》就是栽在这里 —— 站点那份目录 882 条
+ * （第1章 永夜…第858章 只是当时已惘然，中间夹着 20 来条「休息一天」这种没编号的单章），
+ * 而入库那本检出了 917 章：正文里有几行被标题规则误判成了新章。把多出来的 35 章追加成行，
+ * 顶上就出现两行「第1章 永夜」、抽屉头写成「目录 917 章」，看着像站点把开头那段摆了两遍。
+ * 那 35 行不是"你没见过的章"，是同一章被数了两遍 —— 摆出来只会把假话放大。
+ * 盘上真正多出来的内容不会丢：它还在那串字里，一页一页翻读照样读得到。
+ */
+internal fun outlineRows(outline: List<String>, local: List<String>): List<Pair<String, Int?>> {
+    val at = alignOutline(outline, local)
+    val byOutline = HashMap<Int, Int>()
+    at.forEachIndexed { i, p -> if (p >= 0) byOutline[p] = i }
+    return outline.indices.map { j -> outline[j] to byOutline[j] }
+}
+
+/**
+ * 目录那一屏的号怎么排。倒序只是把这一串翻过来摆，**章号本身不动** ——
+ * 点第 37 话跳的还是第 37 话，不因为换了排法跳去别处（那是这一格最容易错的地方）。
+ */
+internal fun chapterOrder(size: Int, desc: Boolean): List<Int> =
+    if (desc) (size - 1 downTo 0).toList() else (0 until size).toList()
+
+/** 当前那一章在排完的列表里排第几：换排法的时候要把它的屏幕位保住。 */
+internal fun chapterSlot(size: Int, current: Int, desc: Boolean): Int =
+    if (desc) (size - 1) - current else current

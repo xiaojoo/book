@@ -87,7 +87,12 @@ object Downloads {
             author = hit.author, sourceName = rule.name,
         )
         // 这本书是不是已经在架上：书架上那本的 source.tsv 才算数，下载历史那张表是可以删的
-        val route = routeOf(BookLibrary(ctx).downloaded()[BookProvenance.key(rule.id, hit.bookUrl)], update, head)
+        val shelf = BookLibrary(ctx)
+        val onShelf = shelf.downloaded()[BookProvenance.key(rule.id, hit.bookUrl)]
+        // 架上那一本已经排到第几章 —— 只有要往回带 head 时才去读那一遍清单（一次下载多读几份 manifest）
+        val onShelfChapters = if (head <= 0 || onShelf.isNullOrEmpty()) 0
+        else shelf.list().firstOrNull { it.id == onShelf }?.chapterCount ?: 0
+        val route = routeOf(onShelf, update, head, onShelfChapters)
         if (route.bookId.isNotEmpty()) rec.bookId = route.bookId
         rec.state = DownloadRecord.STATE_RUNNING
         rec.error = ""
@@ -112,12 +117,15 @@ object Downloads {
      * 界面上那颗按钮跟着改成「增量更新」。原先第二次点会另起一个 id，架上就多出第二本一样的书
      * —— 抓章那一层本来就是按章缓存在磁盘上的，所以"增量"省的正是这部分网络请求。
      *
-     * `head`（先拉开头）在架上那一本上必须归零：入库是把这份前 N 章**整本重灌**，
-     * 带着 head 写回原 id 等于把一本全本裁成开头十章。
+     * `head`（先拉开头 / 补到第几章）在架上那一本上**只许往大走**：入库是把这一份整本重灌，
+     * 带着比盘上少的 head 写回原 id 等于把一本全本裁成开头十章（真机踩过一次：架上那本只补第 8 章，
+     * 结果 head 被归零成整本，1195 章一路抓下去了四百多章）。所以要么给 0（整本），
+     * 要么给 `max(head, 架上已有的章数)` —— 长回去，不裁掉。
      */
-    internal fun routeOf(onShelf: String?, update: Boolean, head: Int): Route {
+    internal fun routeOf(onShelf: String?, update: Boolean, head: Int, onShelfChapters: Int = 0): Route {
         val id = onShelf.orEmpty()
-        return if (id.isEmpty()) Route(id, update, head) else Route(id, true, 0)
+        return if (id.isEmpty()) Route(id, update, head)
+        else Route(id, true, if (head <= 0) 0 else maxOf(head, onShelfChapters))
     }
 
     /** [routeOf] 的结论：写回哪本、是不是增量、拉几章。 */

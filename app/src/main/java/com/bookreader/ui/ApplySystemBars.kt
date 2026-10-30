@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.core.graphics.Insets
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsAnimationControllerCompat
 import androidx.core.view.WindowInsetsAnimationControlListenerCompat
 import androidx.core.view.WindowInsetsCompat
@@ -237,7 +238,7 @@ private class BarSync {
  * 所以正文那一层用这里，藏与不藏给出**同一个数**。
  */
 @Composable
-internal fun Modifier.fixedBarsPadding(): Modifier {
+internal fun Modifier.fixedBarsPadding(edgeToEdge: Boolean = false): Modifier {
     val view = LocalView.current
     val d = LocalDensity.current
     val w = view.rootWindowInsets ?: return this.safeDrawingPadding()
@@ -246,9 +247,11 @@ internal fun Modifier.fixedBarsPadding(): Modifier {
     )
     return this.padding(
         start = with(d) { i.left.toDp() },
-        top = with(d) { i.top.toDp() },
+        // 撑满那一档：顶和底不再让开。让开的话栏是藏了，底下露的还是窗口/纸色那一条白 ——
+        // 小说是"正文没撑满"，漫画是"顶上白一块、图没铺上去"（他点名的两处）
+        top = if (edgeToEdge) 0.dp else with(d) { i.top.toDp() },
         end = with(d) { i.right.toDp() },
-        bottom = with(d) { i.bottom.toDp() },
+        bottom = if (edgeToEdge) 0.dp else with(d) { i.bottom.toDp() },
     )
 }
 
@@ -282,13 +285,15 @@ internal fun systemBarHeights(): PaddingValues {
  * pdf / pptx 没有排版器，这一个数就是渲染宽度本身。
  */
 @Composable
-fun contentSizePx(): IntSize {
+fun contentSizePx(edgeToEdge: Boolean = false): IntSize {
     val container = LocalWindowInfo.current.containerSize
     val view = LocalView.current
-    // 跟着容器大小重算：转屏 / 分屏改尺寸时系统栏那一条也会跟着变
-    val bars = remember(container) {
+    // 跟着容器大小**和撑满那一档**重算：转屏 / 分屏改尺寸时系统栏那一条也会跟着变；
+    // 而只记 container 是不够的 —— 藏掉系统栏**不改窗口大小**，那一档翻过去缓存里还是栏还在时的
+    // 84/130，于是正文按"少两条栏"的高度排，撑满之后顶和底各留一条空白（他报的"排版没撑满"）。
+    val bars = remember(container, edgeToEdge) {
         val w = view.rootWindowInsets
-        if (w == null) Insets.NONE
+        if (edgeToEdge || w == null) Insets.NONE
         else WindowInsetsCompat.toWindowInsetsCompat(w).getInsets(WindowInsetsCompat.Type.systemBars())
     }
     return IntSize(

@@ -114,12 +114,29 @@ class ComicDownloader(
     }
 
     /**
+     * 只抓整本目录里的那一章 —— 目录抽屉行右边那颗「补这一话」走的就是这一条。
+     *
+     * 章号是**整本目录里的号**，不是"这一次抓了几章"里的号：「先拉开头」那本补第 37 话，
+     * 落进章表必须落在 37 那一行，所以要先拿一次目录再按号取地址。
+     * 目录里没有这一号（站点删了章、或者号是从一份旧目录里记的）回 null，
+     * 那句"站点目录里已经没有第 N 话了"由界面上说 —— 这里不猜。
+     * 抓不到一张图就抛：和整本那一条同一个规矩，调用方把原话写进那一行。
+     */
+    fun chapterAt(bookUrl: String, index: Int, force: Boolean = false): ComicChapter? {
+        val all = SearchEngine(rule, fetch).head(bookUrl).chapters
+        val at = all.getOrNull(index) ?: return null
+        val one = fetchChapter(at.second, { false }, {}, force)
+        if (one.pages == 0) error("「${at.first}」那一章的页面里没有图片地址")
+        return ComicChapter(index, at.first, one.dir, one.pages)
+    }
+
+    /**
      * 一章：先拿那一排地址，再逐张取图。
      *
      * 地址表要**先落盘再取图**：图取到一半进程被杀，下次进来还知道这一章本来该有几张、
      * 缺的是哪几张。反过来（先取图再写表）会留下一堆没人认领的文件。
      */
-    private fun fetchChapter(chapterUrl: String, shouldStop: () -> Boolean, gate: () -> Unit): One {
+    private fun fetchChapter(chapterUrl: String, shouldStop: () -> Boolean, gate: () -> Unit, force: Boolean = false): One {
         rule.chapter.file?.let { return fetchFileChapter(chapterUrl, it, gate) }
         val page = fetch.fetch(PageRequest(chapterUrl))
         val urls = chapterImages(rule, page.text(rule.charset), page.finalUrl)
@@ -128,7 +145,8 @@ class ComicDownloader(
         for (u in urls) {
             // 每张之前问一次取消：一本几千张，只在章头问的话按了暂停还要等一整章跑完
             if (shouldStop()) break
-            if (store.has(dir, u)) continue
+            // 重下那一档：已经在仓里的图也要重新取一遍（图床换图、上一次只下到半截的情况）
+            if (!force && store.has(dir, u)) continue
             val bytes = fetchImage(chapterUrl, u, gate) ?: continue
             store.put(dir, u, bytes)
         }

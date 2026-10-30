@@ -25,11 +25,25 @@ class DownloadsRouteTest {
     }
 
     @Test
-    fun pullingTheHeadOntoAnExistingBookBecomesAFullPull() {
+    fun pullingTheHeadOntoAnExistingBookNeverCutsItDown() {
         // 反证：head 原样带过去时，入库会把这本整本重灌成前十章 —— 老位置还在，后面的章没了
-        val r = Downloads.routeOf("1-夜无疆", update = false, head = 10)
-        assertEquals("先拉开头对架上那本没意义，按全本补", 0, r.head)
+        val r = Downloads.routeOf("1-夜无疆", update = false, head = 10, onShelfChapters = 882)
+        assertEquals("架上已有 882 章，head 只能长不能裁", 882, r.head)
         assertEquals(true, r.update)
+    }
+
+    @Test
+    fun aPartialBookCanGrowChapterByChapter() {
+        // 架上那本只补到第 6 章：点第 9 章那一行 = 长到 9 章，不是整本 1195 章
+        val r = Downloads.routeOf("1-宿命之环", update = true, head = 9, onShelfChapters = 6)
+        assertEquals(9, r.head)
+        assertEquals("1-宿命之环", r.bookId)
+    }
+
+    @Test
+    fun aFullPullStaysAFullPull() {
+        val r = Downloads.routeOf("1-夜无疆", update = true, head = 0, onShelfChapters = 882)
+        assertEquals("head=0 是「补齐全本」那颗，别被 clamp 成一个前缀", 0, r.head)
     }
 
     @Test

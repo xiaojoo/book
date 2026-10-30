@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -195,6 +194,8 @@ private fun PptBody(
     val (rotate, onRotate) = rememberScreenRotate()
     var marksTick by remember { mutableIntStateOf(0) }
     val marks = remember(marksTick) { prefs.pageBookmarks(bookId) }
+    // 撑满状态栏、导航栏：这一屏自己一份（存 ReaderScope.PPT 那一格，和 pdf 各存各的）
+    var edge by remember { mutableStateOf(prefs.edgeToEdge) }
     // 查找：整本 deck 都在内存里（版面模型早就读完了），所以打字的时候直接扫，不用后台线程
     var query by remember { mutableStateOf("") }
     val hits = remember(query) { deck.search(query, limit = 100) }
@@ -255,125 +256,143 @@ private fun PptBody(
         note = null
     }
 
-    ApplySystemBars(darkIcons = !Chrome.night)
+    // 藏系统栏要等这一屏自己的上下栏和抽屉都收干净（和小说/漫画同一句口径）
+    ApplySystemBars(
+        darkIcons = !Chrome.night,
+        immersive = edge && !chrome && sheet == WholeSheet.None,
+    )
 
     var viewport by remember { mutableStateOf(IntSize.Zero) }
-    Box(Modifier.fillMaxSize().background(Chrome.page).safeDrawingPadding()) {
-        HorizontalPager(
-            state = pager,
-            // 放大到比屏宽之后，横向那一把gesture要给页面自己拖着看，不能再被 pager 抢去翻页
-            userScrollEnabled = zoom <= 1.001f,
-            pageContent = { page -> SlideView(deck, deck.slides[page], widthPx, images, zoom) },
-            modifier = Modifier
-                .fillMaxSize()
-                .onSizeChanged { viewport = it }
-                // 点击区挂在页面上而不是外层：挂外层的话，点"第 N / M 页"会连它一起收掉
-                .pointerInput(Unit) { detectTapGestures { o -> surfaceTap(viewport.width, o.x) } }
-                // 双指张合 = 整页放大；单指事件不消费，翻页滑动和点击照旧
-                .pinchZoom { f -> zoom = (zoom * f).coerceIn(ZOOM_MIN, ZOOM_MAX) },
-        )
+    // 底色铺满整块窗口（系统栏背后也是它）；版面那一格再按「撑满」自己决定让不让系统栏
+    Box(Modifier.fillMaxSize().background(Chrome.page)) {
+        // 版面：撑满开着就顶到边，不撑满就让开安全区（下面那条"第 N/M 页"才不被导航条盖住）
+        Box(Modifier.fillMaxSize().fixedBarsPadding(edge)) {
+            HorizontalPager(
+                state = pager,
+                // 放大到比屏宽之后，横向那一把gesture要给页面自己拖着看，不能再被 pager 抢去翻页
+                userScrollEnabled = zoom <= 1.001f,
+                pageContent = { page -> SlideView(deck, deck.slides[page], widthPx, images, zoom) },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { viewport = it }
+                    // 点击区挂在页面上而不是外层：挂外层的话，点"第 N / M 页"会连它一起收掉
+                    .pointerInput(Unit) { detectTapGestures { o -> surfaceTap(viewport.width, o.x) } }
+                    // 双指张合 = 整页放大；单指事件不消费，翻页滑动和点击照旧
+                    .pinchZoom { f -> zoom = (zoom * f).coerceIn(ZOOM_MIN, ZOOM_MAX) },
+            )
+        }
 
-        if (sheet == WholeSheet.Thumbs) {
-            WholePageThumbs(
-                current = pager.currentPage,
-                pageCount = pageCount,
-                ratio = { deck.widthEmu.toFloat() / deck.heightEmu },
-                onClose = { sheet = WholeSheet.None },
-                onJump = { go(it) },
-            ) { i, cellW -> SlideCanvas(deck, deck.slides[i], cellW, images) }
-        } else if (chrome) {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Chrome.card)
-                        .padding(start = 6.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(38.dp).tap(onBack), contentAlignment = Alignment.Center) {
-                        Icon(painterResource(R.drawable.ic_back), "返回", tint = Chrome.ink, modifier = Modifier.size(20.dp))
+        // 栏和整屏覆盖那一层单独让安全区：撑满开着时版面顶到边，而上下两条栏和抽屉还是正常上下排列
+        Box(Modifier.fillMaxSize().fixedBarsPadding()) {
+            if (sheet == WholeSheet.Thumbs) {
+                WholePageThumbs(
+                    current = pager.currentPage,
+                    pageCount = pageCount,
+                    ratio = { deck.widthEmu.toFloat() / deck.heightEmu },
+                    onClose = { sheet = WholeSheet.None },
+                    onJump = { go(it) },
+                ) { i, cellW -> SlideCanvas(deck, deck.slides[i], cellW, images) }
+            } else if (chrome) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Chrome.card)
+                            .padding(start = 6.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(38.dp).tap(onBack), contentAlignment = Alignment.Center) {
+                            Icon(painterResource(R.drawable.ic_back), "返回", tint = Chrome.ink, modifier = Modifier.size(20.dp))
+                        }
+                        Text(title, fontSize = 15.sp, color = Chrome.ink, maxLines = 1, modifier = Modifier.padding(start = 2.dp))
+                        Spacer(Modifier.weight(1f))
+                        Text("原版面", fontSize = 12.sp, color = Chrome.faint)
                     }
-                    Text(title, fontSize = 15.sp, color = Chrome.ink, maxLines = 1, modifier = Modifier.padding(start = 2.dp))
                     Spacer(Modifier.weight(1f))
-                    Text("原版面", fontSize = 12.sp, color = Chrome.faint)
-                }
-                Spacer(Modifier.weight(1f))
-                // 底栏就是这个抽屉本身：点屏幕中间把它放出来，不用再点页码弹一层
-                when (sheet) {
-                    WholeSheet.Marks -> WholePageMarksPanel(
-                        pages = marks,
-                        pageCount = pageCount,
-                        current = pager.currentPage,
-                        note = note,
-                        ratio = { deck.widthEmu.toFloat() / deck.heightEmu },
-                        onJump = { go(it) },
-                        onDelete = {
-                            prefs.removePageBookmark(bookId, it)
-                            marksTick++
-                            // 删完最后一条就不留话：那一层自己会收掉，收掉之后还顶一句提示就是噪声
-                            note = if (prefs.pageBookmarks(bookId).isEmpty()) null else "第 ${it + 1} 页的书签已删掉"
-                        },
-                        onBack = { sheet = WholeSheet.None },
-                        onEmpty = {
-                            sheet = WholeSheet.None
-                            chrome = false
-                        },
-                        onHeight = { },
-                    ) { i, cellW -> SlideCanvas(deck, deck.slides[i], cellW, images) }
-
-                    WholeSheet.Search -> WholePageSearchPanel(
-                        query = query,
-                        onQuery = { query = it },
-                        hits = hits,
-                        onJump = { go(it) },
-                        onBack = { sheet = WholeSheet.None },
-                        onHeight = { },
-                    )
-
-                    else -> WholePageDrawer(
-                        current = pager.currentPage,
-                        pageCount = pageCount,
-                        onJump = { go(it) },
-                        markCount = marks.size,
-                        onAddMark = {
-                            note = if (marks.contains(pager.currentPage + 1)) {
-                                "第 ${pager.currentPage + 1} 页已经在书签里了"
-                            } else {
-                                prefs.addPageBookmark(bookId, pager.currentPage)
+                    // 底栏就是这个抽屉本身：点屏幕中间把它放出来，不用再点页码弹一层
+                    when (sheet) {
+                        WholeSheet.Marks -> WholePageMarksPanel(
+                            pages = marks,
+                            pageCount = pageCount,
+                            current = pager.currentPage,
+                            note = note,
+                            ratio = { deck.widthEmu.toFloat() / deck.heightEmu },
+                            onJump = { go(it) },
+                            onDelete = {
+                                prefs.removePageBookmark(bookId, it)
                                 marksTick++
-                                "第 ${pager.currentPage + 1} 页已存进书签"
-                            }
-                        },
-                        onShowMarks = { sheet = WholeSheet.Marks },
-                        onThumbnails = { sheet = WholeSheet.Thumbs },
-                        // pptx 查得了：版面模型里每个 run 的原文都在
-                        onSearch = { sheet = WholeSheet.Search },
-                        searchNote = null,
-                        tocNote = "幻灯片是一页一页，没有章节层级",
-                        note = note,
-                        plays = WholePagePlays(
-                            playing = playing,
-                            fromCurrent = { playing = true },
-                            fromFirst = {
-                                go(0)
-                                playing = true
+                                // 删完最后一条就不留话：那一层自己会收掉，收掉之后还顶一句提示就是噪声
+                                note = if (prefs.pageBookmarks(bookId).isEmpty()) null else "第 ${it + 1} 页的书签已删掉"
                             },
-                            onToggle = { playing = !playing },
-                            autoSeconds = autoSeconds,
-                            onAutoSeconds = {
-                                autoSeconds = it
-                                playing = true
+                            onBack = { sheet = WholeSheet.None },
+                            onEmpty = {
+                                sheet = WholeSheet.None
+                                chrome = false
                             },
-                        ),
-                        night = night,
-                        onNight = onNight,
-                        rotate = rotate,
-                        onRotate = onRotate,
-                        onHeight = { },
-                    )
+                            onHeight = { },
+                        ) { i, cellW -> SlideCanvas(deck, deck.slides[i], cellW, images) }
+
+                        WholeSheet.Search -> WholePageSearchPanel(
+                            query = query,
+                            onQuery = { query = it },
+                            hits = hits,
+                            onJump = { go(it) },
+                            onBack = { sheet = WholeSheet.None },
+                            onHeight = { },
+                        )
+
+                        else -> WholePageDrawer(
+                            current = pager.currentPage,
+                            pageCount = pageCount,
+                            onJump = { go(it) },
+                            markCount = marks.size,
+                            onAddMark = {
+                                note = if (marks.contains(pager.currentPage + 1)) {
+                                    "第 ${pager.currentPage + 1} 页已经在书签里了"
+                                } else {
+                                    prefs.addPageBookmark(bookId, pager.currentPage)
+                                    marksTick++
+                                    "第 ${pager.currentPage + 1} 页已存进书签"
+                                }
+                            },
+                            onShowMarks = { sheet = WholeSheet.Marks },
+                            onThumbnails = { sheet = WholeSheet.Thumbs },
+                            // pptx 查得了：版面模型里每个 run 的原文都在
+                            onSearch = { sheet = WholeSheet.Search },
+                            searchNote = null,
+                            tocNote = "幻灯片是一页一页，没有章节层级",
+                            note = note,
+                            plays = WholePagePlays(
+                                playing = playing,
+                                fromCurrent = { playing = true },
+                                fromFirst = {
+                                    go(0)
+                                    playing = true
+                                },
+                                onToggle = { playing = !playing },
+                                autoSeconds = autoSeconds,
+                                onAutoSeconds = {
+                                    autoSeconds = it
+                                    playing = true
+                                },
+                            ),
+                            night = night,
+                            onNight = onNight,
+                            rotate = rotate,
+                            onRotate = onRotate,
+                            // 撑满：这一档和版式一样是这一屏自己的（存 ReaderScope.PPT 那一格）
+                            edge = edge,
+                            onEdge = { edge = it; prefs.edgeToEdge = it },
+                            onHeight = { },
+                        )
+                    }
                 }
             }
         }
+
+        // 上下两条栏亮着的时候，状态栏 / 导航条那两格用实心页底盖住（撑满那一档版面铺到边）。
+        // 色子给的是外壳那套 `Chrome.page`（#F6F7F9）不是纸白 —— 差 6/8/10 白天一眼能看出分界
+        BarPaper(Chrome.page, if (chrome) 1f else 0f)
     }
 }
 

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 重新下载这一章：一圈顺时针的弧 + 一个箭头。和 ic_download 分开是必须的 ——
+     同一行里"没下的"和"下过要重下的"要是共用一支箭头，两种状态就分不清谁是谁。
+     描边画的弧（strokeColor），VectorDrawable 认；整张单色，tint 由调用方给。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#000000">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M19,12 A7,7 0 1 1 12,5" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11.2,1.2 L16.4,5 L11.2,8.8 Z" />
+</vector>

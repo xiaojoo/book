@@ -249,9 +249,17 @@ private fun infoOf(b: BookHit) = BookInfo(
  * 站点那一页没回来就是没回来。三个点说的是"在等"，不是"快好了"。
  *
  * 相位由一个总时钟算出来（不是三颗各起一条动画）：三颗永远同拍，也不会随重组各自漂相位。
+ *
+ * `wide = false` 那一档给目录行里那颗用：那一格只有 30×20dp，撑满一行会把整行撑高。
  */
 @Composable
-internal fun LoadingDots(dot: Color = Chrome.dot, rowHeight: Dp = 44.dp) {
+internal fun LoadingDots(
+    dot: Color = Chrome.dot,
+    rowHeight: Dp = 44.dp,
+    dotSize: Dp = 7.dp,
+    gap: Dp = 4.dp,
+    wide: Boolean = true,
+) {
     val clock = rememberInfiniteTransition(label = "loading-dots")
     val phase by clock.animateFloat(
         initialValue = 0f, targetValue = 1f,
@@ -259,13 +267,13 @@ internal fun LoadingDots(dot: Color = Chrome.dot, rowHeight: Dp = 44.dp) {
         label = "phase",
     )
     Row(
-        Modifier.fillMaxWidth().height(rowHeight),
+        if (wide) Modifier.fillMaxWidth().height(rowHeight) else Modifier.height(rowHeight),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(3) { i ->
             val a = 0.28f + 0.72f * (0.5f + 0.5f * sin(2.0 * PI * (phase - i / 3.0)).toFloat())
-            Box(Modifier.padding(horizontal = 4.dp).size(7.dp).clip(CircleShape).background(dot.copy(alpha = a)))
+            Box(Modifier.padding(horizontal = gap).size(dotSize).clip(CircleShape).background(dot.copy(alpha = a)))
         }
     }
 }
@@ -339,10 +347,12 @@ private fun FeaturedSkeleton(rows: Int = 2, search: Boolean = true, grid: Boolea
         if (grid) {
             // 分类页右栏的形状：两列方格，每格一张 44×56 封面 + 两行字。
             // 横宽用 weight(1f) 而不是写死 dp —— 那一格是 GridCells.Fixed(2)，跟着它分才不错位。
-            // 行距 68dp = 封面 56 + 真那一格上下内衬各 4 + 网格自己那道 4dp 间隔
-            Column(Modifier.fillMaxSize().clipToBounds().padding(horizontal = 8.dp)) {
-                repeat(rows * 4) {
-                    Row(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+            // 行距 68dp = 真那一格量到的 186px：封面 56 + 格子自己上下内衬各 4 + 网格那道 4dp 间隔。
+            // 第一行只让 4dp（真身第一张封面离格顶就 4dp；原先统一让 12dp 会把整列抬下去 9dp）
+            // 骨架是**盖**在网格上的，所以这一层要带底色：不填的话底下那句「到这里就翻完了」会从灰条缝里透出来
+            Column(Modifier.fillMaxSize().background(Chrome.page).clipToBounds().padding(horizontal = 8.dp)) {
+                repeat(rows * 4) { i ->
+                    Row(Modifier.fillMaxWidth().padding(top = if (i == 0) 4.dp else 12.dp)) {
                         repeat(2) {
                             Row(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                                 bar(44.dp, 56.dp, 4, 0.dp)
@@ -402,6 +412,22 @@ private fun FeaturedSkeleton(rows: Int = 2, search: Boolean = true, grid: Boolea
  */
 internal fun featureCat(category: String): String =
     FEATURE_CATS.firstOrNull { category.contains(it) } ?: CAT_OTHER
+
+/**
+ * 分类页那一格此刻摆不摆方格骨架。
+ *
+ * 「还有可能拿到东西」这一档不能省：只认 loading 的话，骨架就在"点下去"到"第 1 页到手"那几百毫秒里
+ * 闪一下（真机量过瓜子·玄幻：0.4 秒已经满屏封面），比不画还晃眼。
+ * 反过来，`canPage && !dry` 把这一段撑到"书真来了"或"这一站当场说没有"为止 —— 两头都是实话，
+ * 中间那几秒不该是一片空墙。已经有书就永远不摆：那看着像把列表清了。
+ */
+internal fun gridShowsSkeleton(
+    empty: Boolean,
+    refreshing: Boolean,
+    loading: Boolean,
+    canPage: Boolean,
+    dry: Boolean,
+): Boolean = empty && (refreshing || loading || (canPage && !dry))
 
 /**
  * 固定的一张中文类目表。顺序就是那一排 tab 的顺序。
@@ -1095,12 +1121,13 @@ private fun CategoryBrowse(
                             Text("共 ${list.size} 本", fontSize = 12.sp, color = Chrome.faint, modifier = Modifier.padding(start = 14.dp))
                         }
                     }
-                    // 一本都还没有又在读：这一格摆成两列方格的骨架。读的是两件事 ——
-                    // 外层下拉在转，或这一类自己正在要第一页（切到一个缓存里没有的类目就是这一条，
-                    // 那一秒不然这格是一片空墙）。已经有书了不许闪骨架，那看着像把列表清了
-                    if (list.isEmpty() && (isRefreshing || pager.loading)) {
-                        FeaturedSkeleton(rows = 2, search = false, grid = true)
-                    } else {
+                    // 这一格空着、而且还有可能拿到东西 → 方格骨架**盖**在网格上。
+                    // 是盖不是换：驱动翻页那颗探针读的就是这张网格的 layoutInfo，整块换掉等于把探针拔了 ——
+                    // 骨架会一直站着、书永远不来，那比一片空更假。
+                    // 只认 loading 也不行：真机量过瓜子·玄幻，0.4 秒就已经满屏封面，
+                    // 那种闪一下比不画还晃眼；canPage && !dry 把这一段撑到"书真来了"或"这站说没有"为止
+                    val skel = gridShowsSkeleton(list.isEmpty(), isRefreshing, pager.loading, pager.canPage, pager.dry)
+                    Box(Modifier.fillMaxSize()) {
                         LazyVerticalGrid(
                             state = gridState,
                             columns = GridCells.Fixed(2),
@@ -1120,6 +1147,7 @@ private fun CategoryBrowse(
                             // 底下那一行要横跨两列，不然它只占一个格子、三个点会画在半宽处
                             item(key = "#底", span = { GridItemSpan(maxLineSpan) }) { PagerFoot(pager) }
                         }
+                        if (skel) FeaturedSkeleton(rows = 2, search = false, grid = true)
                     }
                 }
             }

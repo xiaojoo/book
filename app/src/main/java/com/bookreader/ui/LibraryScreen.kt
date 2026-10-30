@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +36,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,7 +68,9 @@ import com.bookreader.core.model.BookMeta
 import com.bookreader.data.BookLibrary
 import com.bookreader.data.BookProvenance
 import com.bookreader.data.CoverImages
+import com.bookreader.data.BookSourceStore
 import com.bookreader.data.ReaderPrefs
+import com.bookreader.data.UpdateCheck
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -85,13 +90,20 @@ private val MORE_ICON = 18.dp
 fun LibraryScreen(
     library: BookLibrary,
     prefs: ReaderPrefs,
+    // 传 store 而不是那份列表：规则可能在「管理书籍源」里刚被改过，下拉这一刻要拿最新的去问
+    sources: BookSourceStore,
     onOpen: (BookMeta) -> Unit,
     onInfo: (BookInfo) -> Unit,
     notice: String? = null,
 ) {
+    val ctx = LocalContext.current
     var books by remember { mutableStateOf(library.list().shelfOrder(prefs)) }
     var busy by remember { mutableStateOf<Pair<String, Float>?>(null) }
     var note by remember(notice) { mutableStateOf(notice) }
+    // 下拉刷新：挨本问一次站点目录，比我们上次知道的那份多出来的章数就是那颗红点（点开那一本清掉）
+    var checking by remember { mutableStateOf(false) }
+    var check by remember { mutableIntStateOf(0) }
+    var pending by remember { mutableStateOf(prefs.shelfUpdates) }
     // 三个点和长按开的是同一层（四个动作）；「删除书籍」那一步再单独弹一次框
     var actionsFor by remember { mutableStateOf<BookMeta?>(null) }
     var renameFor by remember { mutableStateOf<BookMeta?>(null) }
@@ -104,6 +116,38 @@ fun LibraryScreen(
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
 
     fun reload() { books = library.list().shelfOrder(prefs) }
+
+    /** 点开那一本：那颗红点当场收掉。下一次下拉刷新再照站点重新判，不是一擦就永远没了。 */
+    fun open(meta: BookMeta) {
+        if (pending.containsKey(meta.id)) {
+            prefs.clearShelfUpdate(meta.id)
+            pending = prefs.shelfUpdates
+        }
+        onOpen(meta)
+    }
+
+    LaunchedEffect(check) {
+        if (check == 0) return@LaunchedEffect
+        checking = true
+        val r = runCatching { UpdateCheck.run(ctx, library, sources.list(), books) }.getOrNull()
+        checking = false
+        if (r == null) {
+            note = "刷新没跑起来"
+            return@LaunchedEffect
+        }
+        // 没问到的那些本**留着上一次的红点**：源要登录、站点限流不等于"这本书没更新"，
+        // 把旧答案擦掉再说"全部已最新"就是界面在撒谎
+        val merged = prefs.shelfUpdates.filterKeys { id -> !books.any { it.id == id } } + r.updates
+        prefs.shelfUpdates = merged
+        pending = merged
+        note = when {
+            r.asked == 0 -> "架上这几本都不是从书源下来的，没有可问的书页"
+            r.updates.isNotEmpty() -> "查到 ${r.updates.size} 本有更新" +
+                (if (r.missed > 0) "，${r.missed} 本没问到" else "")
+            r.missed > 0 -> "没有新的章节，${r.missed} 本没问到（源要登录或站点没回）"
+            else -> "没有新的章节"
+        }
+    }
 
     fun startImport(uri: android.net.Uri) {
         busy = "正在导入" to 0f
@@ -194,45 +238,61 @@ fun LibraryScreen(
                 )
             }
 
-            // 两种排法共用同一份 books / 同一个开书和长按删的手势，只有行怎么摆不同
-            if (shelfList) {
-                LazyColumn(
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    state = listState,
-                ) {
-                    items(books, key = { it.id }) { meta ->
-                        BookRow(
-                            meta = meta,
-                            position = prefs.loadPosition(meta.id),
-                            onOpen = { onOpen(meta) },
-                            onLongPress = { actionsFor = meta },
-                            onMore = { actionsFor = meta },
-                        )
-                    }
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(46.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    state = gridState,
-                ) {
-                    items(books, key = { it.id }) { meta ->
-                        BookCard(
-                            meta = meta,
-                            position = prefs.loadPosition(meta.id),
-                            onOpen = { onOpen(meta) },
-                            onLongPress = { actionsFor = meta },
-                        )
-                    }
+            // 两种排法共用同一份 books / 同一个开书和长按删的手势，只有行怎么摆不同。
+            // 下拉刷新挂在它们外面：顶栏那颗 ⋯ 和"N 本"那一行不参与，拉它不会出三个点（和精选同一句规矩）
+            val ptr = rememberPullToRefreshState()
+            PullToRefreshBox(
+                isRefreshing = checking,
+                onRefresh = { check++ },
+                state = ptr,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                // M3 那颗圈不要：和精选一套 —— 顶上空出一行、行里三个点，跟着下拉走、松手留在顶上直到真问完
+                indicator = {},
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    if (checking) LoadingDots()
+                    if (shelfList) {
+                        LazyColumn(
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            state = listState,
+                        ) {
+                            items(books, key = { it.id }) { meta ->
+                                BookRow(
+                                    meta = meta,
+                                    position = prefs.loadPosition(meta.id),
+                                    update = pending[meta.id] ?: 0,
+                                    onOpen = { open(meta) },
+                                    onLongPress = { actionsFor = meta },
+                                    onMore = { actionsFor = meta },
+                                )
+                            }
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(46.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                            state = gridState,
+                        ) {
+                            items(books, key = { it.id }) { meta ->
+                                BookCard(
+                                    meta = meta,
+                                    position = prefs.loadPosition(meta.id),
+                                    update = pending[meta.id] ?: 0,
+                                    onOpen = { open(meta) },
+                                    onLongPress = { actionsFor = meta },
+                                )
+                            }
                     item { AddBookCard(onClick = { pick() }) }
+                }
                 }
             }
         }
+    }
 
         if (menu) {
             // 铺满一整屏的透明接盘：点弹框外面就收，这一层不吃掉的话那一枪会落到书架卡片上、把书翻开
@@ -240,8 +300,11 @@ fun LibraryScreen(
             Column(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    // 58dp = 顶栏 12 + 那颗 44 的框 + 2dp 缝；右缘和 ⋯ 的框对齐（同一个 12dp 内衬）
-                    .padding(top = 58.dp, end = 12.dp)
+                    // 34dp = 那颗的墨底（顶栏 46dp 行里 44dp 框居中，18dp 的墨再居中 = 1 + 13 + 18 = 32dp）
+                    // + 2dp 缝。这一档是量着"三点"本身留的缝，不是留在那 44dp 命中框底下 ——
+                    // 代价：弹框盖住命中框下面那 11dp，但菜单开着时整屏本来就有一层接盘（点哪儿都是先收菜单），
+                    // 那颗的墨没有被盖住，看得见、也点得到
+                    .padding(top = 34.dp, end = 12.dp)
                     .width(200.dp)
                     .clip(RoundedCornerShape(SHEET_RADIUS))
                     .background(Chrome.card),
@@ -469,6 +532,7 @@ private fun ShelfMenuRow(iconRes: Int, label: String, onClick: () -> Unit) {
 private fun BookRow(
     meta: BookMeta,
     position: com.bookreader.core.model.BookPosition?,
+    update: Int,
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
     onMore: () -> Unit,
@@ -489,7 +553,10 @@ private fun BookRow(
             .padding(top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BookCover(meta.title, meta.id, Modifier.size(width = 48.dp, height = 64.dp))
+        Box {
+            BookCover(meta.title, meta.id, Modifier.size(width = 48.dp, height = 64.dp))
+            if (update > 0) UpdateDot(Modifier.align(Alignment.TopEnd).padding(2.dp))
+        }
         Spacer(Modifier.size(12.dp))
         Column(Modifier.weight(1f).height(64.dp)) {
             // 作者这一档：抽不出作者的件（txt / 本地文档全是）不能把分隔点单独晾在行首
@@ -634,6 +701,7 @@ internal fun BookCover(
 private fun BookCard(
     meta: BookMeta,
     position: com.bookreader.core.model.BookPosition?,
+    update: Int,
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
 ) {
@@ -646,7 +714,10 @@ private fun BookCard(
             .fillMaxWidth()
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress),
     ) {
-        BookCover(meta.title, meta.id, Modifier.fillMaxWidth().height(116.dp))
+        Box {
+            BookCover(meta.title, meta.id, Modifier.fillMaxWidth().height(116.dp))
+            if (update > 0) UpdateDot(Modifier.align(Alignment.TopEnd).padding(4.dp))
+        }
         // 书名不截断：截断等于这个控件没做完
         Text(
             meta.title,
@@ -675,6 +746,23 @@ private fun BookCard(
             }
         }
     }
+}
+
+/**
+ * 「站点多了几章」那颗红点：钉在**封面右上角**，不坐进下面那行字。
+ *
+ * 为什么不挨着文字：那一行已经有一颗未读点了（它说的是"这本你没读完"）。两颗一模一样的红点
+ * 放在一起，人就得分辨哪个是哪个 —— 分开摆，位置本身就说了两件事。
+ * 外面那一圈页面底色是给深色封面准备的：没有它，深红那张封面会把点吃掉。
+ */
+@Composable
+private fun UpdateDot(modifier: Modifier) {
+    Box(
+        modifier
+            .size(9.dp)
+            .border(1.5.dp, Chrome.page, CircleShape)
+            .background(Chrome.dot, CircleShape),
+    )
 }
 
 @Composable

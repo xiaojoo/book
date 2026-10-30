@@ -114,6 +114,20 @@ class AudioDownloader(
     }
 
     /**
+     * 只补整本目录里的那一集 —— 和漫画 [ComicDownloader.chapterAt] 同一档事。
+     *
+     * 章号按整本目录算（集表那一行记的就是这个号），所以要先拿一次目录；
+     * 目录里没这一号回 null，抓不到一段音频就抛，原话由界面写进那一行。
+     */
+    fun chapterAt(bookUrl: String, index: Int, force: Boolean = false): AudioChapter? {
+        val all = SearchEngine(rule, fetch).head(bookUrl).chapters
+        val at = all.getOrNull(index) ?: return null
+        val one = fetchChapter(bookUrl, at.second, { false }, {}, force)
+        if (one.parts == 0) error("「${at.first}」那一集里没有音频地址")
+        return AudioChapter(index, at.first, one.dir, one.parts)
+    }
+
+    /**
      * 一集：先拿那一段（或几段）地址，再逐段取音频。
      *
      * 地址表要**先落盘再取音频**：取到一半进程被杀，下次进来还知道这一集本来该有几段、
@@ -122,7 +136,7 @@ class AudioDownloader(
      * `@self` 那一档（[Rule.selfAudio]）没有"集页"这一层：目录里那一条地址本身就是文件，
      * 所以**一次集页请求都不发** —— 发出去就是拿 10MB 的音频当一页 HTML 读回来再解一遍。
      */
-    private fun fetchChapter(bookUrl: String, chapterUrl: String, shouldStop: () -> Boolean, gate: () -> Unit): One {
+    private fun fetchChapter(bookUrl: String, chapterUrl: String, shouldStop: () -> Boolean, gate: () -> Unit, force: Boolean = false): One {
         val body = if (rule.selfAudio) null else fetch.fetch(PageRequest(chapterUrl)).let {
             it.text(rule.charset) to it.finalUrl
         }
@@ -140,7 +154,7 @@ class AudioDownloader(
         for (u in urls) {
             // 每段之前问一次取消：一集几十 MB 要拉几分钟，只在集头问的话按了暂停还要等一整集
             if (shouldStop()) break
-            if (store.has(dir, u)) { landed += 1; continue }
+            if (!force && store.has(dir, u)) { landed += 1; continue }
             val bytes = fetchPart(if (rule.selfAudio) bookUrl else chapterUrl, u, gate) ?: continue
             store.put(dir, u, bytes)
             landed += 1

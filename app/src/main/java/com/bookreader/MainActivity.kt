@@ -210,7 +210,7 @@ private fun Root(
             library = library,
             onBack = { info = null },
             onOpen = { info = null; openAt(it, -1) },
-            onReadChapter = { i -> info = null; openAt(bookInfo.bookId, i) },
+            onReadChapter = { id, i -> info = null; openAt(id, i) },
         )
     } else if (editName) {
         NicknameScreen(prefs, onBack = { editName = false })
@@ -279,6 +279,7 @@ private fun Root(
                     MainTab.Shelf -> LibraryScreen(
                         library = library,
                         prefs = prefs,
+                        sources = sources,
                         onOpen = { openAt(it.id, -1) },
                         onInfo = { info = it },
                         notice = notice,
@@ -333,11 +334,14 @@ private fun Root(
                 } else if (meta.kind == BookMeta.PPTX) {
                     PptReaderScreen(bookId = bookId, title = meta.title, library = library, prefs = rp, onBack = backToShell)
                 } else if (meta.kind == BookMeta.COMIC) {
-                    ComicReaderScreen(bookId = bookId, title = meta.title, library = library, prefs = rp, onBack = backToShell)
+                    ComicReaderScreen(
+                        bookId = bookId, title = meta.title, library = library, prefs = rp,
+                        startChapter = openChapter, onBack = backToShell,
+                    )
                 } else if (meta.kind == BookMeta.AUDIO) {
                     AudioReaderScreen(
                         bookId = bookId, title = meta.title, author = meta.author,
-                        library = library, prefs = rp, onBack = backToShell,
+                        library = library, prefs = rp, startChapter = openChapter, onBack = backToShell,
                     )
                 } else {
                     ReaderScreen(bookId = bookId, library = library, prefs = rp, startChapter = openChapter, onBack = backToShell)

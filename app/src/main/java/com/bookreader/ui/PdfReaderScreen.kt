@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -158,6 +157,8 @@ private fun PdfBody(
     // 页码书签：prefs 不是可观察状态，按完自己 +1 一下让这一列重算
     var marksTick by remember { mutableIntStateOf(0) }
     val marks = remember(marksTick) { prefs.pageBookmarks(bookId) }
+    // 撑满状态栏、导航栏：五个阅读器各自一份（这一屏存 ReaderScope.PDF 那一格）
+    var edge by remember { mutableStateOf(prefs.edgeToEdge) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(listState) {
@@ -225,134 +226,147 @@ private fun PdfBody(
         note = null
     }
 
-    ApplySystemBars(darkIcons = !Chrome.night)
+    // 藏系统栏要等这一屏自己的上下栏和抽屉都收干净（和小说/漫画同一句口径）
+    ApplySystemBars(
+        darkIcons = !Chrome.night,
+        immersive = edge && !chrome && sheet == WholeSheet.None,
+    )
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            // 顺序是"先铺满底色、再让开安全区"：edge-to-edge 之后系统栏是透明的，
-            // 栏背后那条就是这一句铺的 Chrome.page（反过来写底色只铺到安全区里，栏背后会露窗口背景）。
-            // 让开安全区本身不能省：底下那条"第 N / M 页"会被系统导航条盖住，看着就像控件凭空没了
-            .background(Chrome.page)
-            .safeDrawingPadding(),
-    ) {
+    // 底色铺满整块窗口（系统栏背后也是它）；版面那一格再按「撑满」自己决定让不让系统栏
+    Box(Modifier.fillMaxSize().background(Chrome.page)) {
         var viewport by remember { mutableStateOf(IntSize.Zero) }
-        LazyColumn(
-            state = listState,
-            // 点击区挂在这一列上，不挂外层：挂外层的话，点工具栏里那颗"第 N / M 页"会连它一起收掉。
-            // 只挂 detectTapGestures 不影响竖向滚动 —— Compose 的点击不消费滚动。
-            modifier = Modifier
-                .fillMaxSize()
-                .onSizeChanged { viewport = it }
-                .pointerInput(Unit) {
-                    detectTapGestures { o -> surfaceTap(viewport.width, o.x) }
-                }
-                // 双指张合 = 整页放大（不是抽屉里的滑轨）：单指事件不消费，竖向滚动照旧
-                .pinchZoom { f -> zoom = (zoom * f).coerceIn(ZOOM_MIN, ZOOM_MAX) },
-            // 上下两条带子永远按各自高度预留（不是画在上面盖住）：pdf 的一页是一张图，
-            // 被工具栏压住就是真的少了那一截版面，不像正文那样"字还在下面滚着"。
-            // 下面那条现在是抽屉，高度按它自己量上来的算
-            contentPadding = PaddingValues(
-                top = PAGE_TOP_PAD.dp,
-                bottom = if (barHPx > 0) with(density) { barHPx.toDp() } + 6.dp else PAGE_BOTTOM_PAD.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
-        ) {
-            items(doc.pageCount, key = { it }) { i -> PdfPageView(doc, i, zoom, renderW) }
+        // 版面：撑满开着就顶到 y=0 / 屏幕底，不撑满就让开安全区（下面那条"第 N/M 页"才不被导航条盖住）
+        Box(Modifier.fillMaxSize().fixedBarsPadding(edge)) {
+            LazyColumn(
+                state = listState,
+                // 点击区挂在这一列上，不挂外层：挂外层的话，点工具栏里那颗"第 N / M 页"会连它一起收掉。
+                // 只挂 detectTapGestures 不影响竖向滚动 —— Compose 的点击不消费滚动。
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { viewport = it }
+                    .pointerInput(Unit) {
+                        detectTapGestures { o -> surfaceTap(viewport.width, o.x) }
+                    }
+                    // 双指张合 = 整页放大（不是抽屉里的滑轨）：单指事件不消费，竖向滚动照旧
+                    .pinchZoom { f -> zoom = (zoom * f).coerceIn(ZOOM_MIN, ZOOM_MAX) },
+                // 上下两条带子永远按各自高度预留（不是画在上面盖住）：pdf 的一页是一张图，
+                // 被工具栏压住就是真的少了那一截版面，不像正文那样"字还在下面滚着"。
+                // 下面那条现在是抽屉，高度按它自己量上来的算。
+                // **撑满那一档这两格都给 0** —— 版面顶到边才是"撑满"，两条栏浮在版面上
+                contentPadding = PaddingValues(
+                    top = if (edge) 0.dp else PAGE_TOP_PAD.dp,
+                    bottom = if (edge) 0.dp
+                    else if (barHPx > 0) with(density) { barHPx.toDp() } + 6.dp else PAGE_BOTTOM_PAD.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                items(doc.pageCount, key = { it }) { i -> PdfPageView(doc, i, zoom, renderW) }
+            }
         }
 
-        if (sheet == WholeSheet.Thumbs) {
-            // 整屏覆盖：它有自己的顶栏和出口，不留一条"只能靠返回键出去"的路
-            WholePageThumbs(
-                current = current,
-                pageCount = doc.pageCount,
-                ratio = { i -> doc.pageSizes[i].widthPx.toFloat() / doc.pageSizes[i].heightPx },
-                onClose = { sheet = WholeSheet.None },
-                onJump = { go(it) },
-            ) { i, cellW -> PdfThumb(doc, i, cellW) }
-        } else if (chrome) {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Chrome.card)
-                        .padding(start = 6.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(38.dp).tap(onBack), contentAlignment = Alignment.Center) {
-                        Icon(
-                            painterResource(R.drawable.ic_back),
-                            "返回",
-                            tint = Chrome.ink,
-                            modifier = Modifier.size(20.dp),
+        // 栏和整屏覆盖那一层单独让安全区：撑满开着时版面顶到边，而上下两条栏和抽屉还是正常上下排列
+        Box(Modifier.fillMaxSize().fixedBarsPadding()) {
+            if (sheet == WholeSheet.Thumbs) {
+                // 整屏覆盖：它有自己的顶栏和出口，不留一条"只能靠返回键出去"的路
+                WholePageThumbs(
+                    current = current,
+                    pageCount = doc.pageCount,
+                    ratio = { i -> doc.pageSizes[i].widthPx.toFloat() / doc.pageSizes[i].heightPx },
+                    onClose = { sheet = WholeSheet.None },
+                    onJump = { go(it) },
+                ) { i, cellW -> PdfThumb(doc, i, cellW) }
+            } else if (chrome) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Chrome.card)
+                            .padding(start = 6.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(38.dp).tap(onBack), contentAlignment = Alignment.Center) {
+                            Icon(
+                                painterResource(R.drawable.ic_back),
+                                "返回",
+                                tint = Chrome.ink,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Text(
+                            title,
+                            fontSize = 15.sp,
+                            color = Chrome.ink,
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 2.dp),
+                        )
+                        Spacer(Modifier.weight(1f))
+                        // 这一档没有版式可调是格式本身的性质，写在角上比藏进菜单里诚实
+                        Text("原版面", fontSize = 12.sp, color = Chrome.faint)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    // 底栏就是这个抽屉本身：点屏幕中间把它放出来，不用再点页码弹一层
+                    if (sheet == WholeSheet.Marks) {
+                        WholePageMarksPanel(
+                            pages = marks,
+                            pageCount = doc.pageCount,
+                            current = current,
+                            note = note,
+                            ratio = { i -> doc.pageSizes[i].widthPx.toFloat() / doc.pageSizes[i].heightPx },
+                            onJump = { go(it) },
+                            onDelete = {
+                                prefs.removePageBookmark(bookId, it)
+                                marksTick++
+                                // 删完最后一条就不留话：那一层自己会收掉，收掉之后还顶一句提示就是噪声
+                                note = if (prefs.pageBookmarks(bookId).isEmpty()) null else "第 ${it + 1} 页的书签已删掉"
+                            },
+                            onBack = { sheet = WholeSheet.None },
+                            onEmpty = {
+                                sheet = WholeSheet.None
+                                chrome = false
+                            },
+                            onHeight = { barHPx = it },
+                        ) { i, cellW -> PdfThumb(doc, i, cellW) }
+                    } else {
+                        WholePageDrawer(
+                            current = current,
+                            pageCount = doc.pageCount,
+                            onJump = { go(it) },
+                            markCount = marks.size,
+                            onAddMark = {
+                                note = if (marks.contains(current + 1)) {
+                                    "第 ${current + 1} 页已经在书签里了"
+                                } else {
+                                    prefs.addPageBookmark(bookId, current)
+                                    marksTick++
+                                    "第 ${current + 1} 页已存进书签"
+                                }
+                            },
+                            onShowMarks = { sheet = WholeSheet.Marks },
+                            onThumbnails = { sheet = WholeSheet.Thumbs },
+                            // pdf 这一族查不了：PdfRenderer 只把页渲成位图，一个字都不给
+                            onSearch = null,
+                            searchNote = "PDF 取不到文字层",
+                            tocNote = "系统渲染器只给整页位图，读不到里面的章节",
+                            note = note,
+                            plays = null,
+                            night = night,
+                            onNight = onNight,
+                            rotate = rotate,
+                            onRotate = onRotate,
+                            // 撑满：这一档和版式一样是这一屏自己的（存 ReaderScope.PDF 那一格）
+                            edge = edge,
+                            onEdge = { edge = it; prefs.edgeToEdge = it },
+                            onHeight = { barHPx = it },
                         )
                     }
-                    Text(
-                        title,
-                        fontSize = 15.sp,
-                        color = Chrome.ink,
-                        maxLines = 1,
-                        modifier = Modifier.padding(start = 2.dp),
-                    )
-                    Spacer(Modifier.weight(1f))
-                    // 这一档没有版式可调是格式本身的性质，写在角上比藏进菜单里诚实
-                    Text("原版面", fontSize = 12.sp, color = Chrome.faint)
-                }
-                Spacer(Modifier.weight(1f))
-                // 底栏就是这个抽屉本身：点屏幕中间把它放出来，不用再点页码弹一层
-                if (sheet == WholeSheet.Marks) {
-                    WholePageMarksPanel(
-                        pages = marks,
-                        pageCount = doc.pageCount,
-                        current = current,
-                        note = note,
-                        ratio = { i -> doc.pageSizes[i].widthPx.toFloat() / doc.pageSizes[i].heightPx },
-                        onJump = { go(it) },
-                        onDelete = {
-                            prefs.removePageBookmark(bookId, it)
-                            marksTick++
-                            // 删完最后一条就不留话：那一层自己会收掉，收掉之后还顶一句提示就是噪声
-                            note = if (prefs.pageBookmarks(bookId).isEmpty()) null else "第 ${it + 1} 页的书签已删掉"
-                        },
-                        onBack = { sheet = WholeSheet.None },
-                        onEmpty = {
-                            sheet = WholeSheet.None
-                            chrome = false
-                        },
-                        onHeight = { barHPx = it },
-                    ) { i, cellW -> PdfThumb(doc, i, cellW) }
-                } else {
-                    WholePageDrawer(
-                        current = current,
-                        pageCount = doc.pageCount,
-                        onJump = { go(it) },
-                        markCount = marks.size,
-                        onAddMark = {
-                            note = if (marks.contains(current + 1)) {
-                                "第 ${current + 1} 页已经在书签里了"
-                            } else {
-                                prefs.addPageBookmark(bookId, current)
-                                marksTick++
-                                "第 ${current + 1} 页已存进书签"
-                            }
-                        },
-                        onShowMarks = { sheet = WholeSheet.Marks },
-                        onThumbnails = { sheet = WholeSheet.Thumbs },
-                        // pdf 这一族查不了：PdfRenderer 只把页渲成位图，一个字都不给
-                        onSearch = null,
-                        searchNote = "PDF 取不到文字层",
-                        tocNote = "系统渲染器只给整页位图，读不到里面的章节",
-                        note = note,
-                        plays = null,
-                        night = night,
-                        onNight = onNight,
-                        rotate = rotate,
-                        onRotate = onRotate,
-                        onHeight = { barHPx = it },
-                    )
                 }
             }
         }
+
+        // 上下两条栏亮着的时候，状态栏 / 导航条那两格用实心页底盖住（撑满那一档版面铺到 y=0）。
+        // 色子给的是外壳那套 `Chrome.page`（#F6F7F9），不是纸白 #FFFFFF —— 拿纸白盖上去和工具栏差 6/8/10，
+        // 白天一眼能看出分界。形状、高度、时机和小说/漫画/听书共用同一份 `BarPaper`
+        BarPaper(Chrome.page, if (chrome) 1f else 0f)
     }
 }
 

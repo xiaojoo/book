@@ -50,6 +50,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,6 +119,10 @@ import com.bookreader.core.model.PageStyle
 import com.bookreader.core.search.ChunkScanner
 import com.bookreader.core.search.ScanResult
 import com.bookreader.data.BookLibrary
+import com.bookreader.data.BookProvenance
+import com.bookreader.data.ChapterFetch
+import com.bookreader.data.DownloadRecord
+import com.bookreader.data.Downloads
 import com.bookreader.data.DeviceFonts
 import com.bookreader.data.ReaderPrefs
 import com.bookreader.data.ReaderScope
@@ -167,7 +172,11 @@ fun ReaderScreen(
     var indent by remember { mutableStateOf(prefs.paragraphIndent) }
     var keepOn by remember { mutableStateOf(prefs.keepScreenOn) }
     var volumePaging by remember { mutableStateOf(prefs.volumePaging) }
+    // 这一屏自己的「撑满状态栏、导航栏」：和「我的 → 偏好设置」那颗全屏分开存、分开生效
+    var edge by remember { mutableStateOf(prefs.edgeToEdge) }
     var bothSidesNext by remember { mutableStateOf(prefs.bothSidesNext) }
+    // 目录抽屉的排法（正序/倒序）：读一次 prefs，切换写回去 —— 那一格在抽屉里，不在这一屏的生死范围里
+    var chapterDesc by remember { mutableStateOf(prefs.chapterDesc) }
     var eyeCare by remember { mutableStateOf(prefs.eyeCare) }
     var restMinutes by remember { mutableIntStateOf(prefs.restMinutes) }
     var autoRead by remember { mutableStateOf(prefs.autoRead) }
@@ -246,9 +255,25 @@ fun ReaderScreen(
     var fontLabel by remember { mutableStateOf(prefs.fontLabel) }
     val typeface = remember(fontState.value) { DeviceFonts.typefaceOf(fontState.value) }
 
-    // 种子要在 remember 外面取：@Composable 不能在 remember 的算子里调
-    val seed = contentSizePx()
-    val engine = remember(bookId, startChapter) {
+    // 「重下这一节」那颗：认得出站点来源才摆（本地导入的书没有可下的来源）。
+    // redoAt = 正在重下的那一节；reloadTick = 整本重灌完了，引擎里那串字和偏移索引都是旧的，要换一个
+    var canRedo by remember { mutableStateOf(false) }
+    var redoAt by remember { mutableStateOf<Int?>(null) }
+    var reloadTick by remember { mutableIntStateOf(0) }
+    // 站点那份整目录（下载时就存在来源记录里）：目录抽屉按它摆，本地没下的那些节才有名字可写
+    var provOutline by remember { mutableStateOf<List<String>>(emptyList()) }
+    val provUrl = remember(bookId) { BookProvenance(library.dir(bookId)).bookUrl() }
+    // 引擎从哪一章起：进来的那一章，或「点了没下的那一节、下完就地翻进去」的那一节。
+    // 不换引擎是翻不进去的 —— 没下的那一节在旧引擎的偏移索引里根本不存在。
+    var openAt by remember { mutableIntStateOf(startChapter) }
+
+    // 撑满真正生效的那一刻：我们自己的两条栏收干净了才让内容顶到边。栏还开着就把内衬归零，
+    // app 那两条菜单会和状态栏、导航条叠在一起（他那张截图量的就是这个）
+    val fill = edge && !bars
+    // 种子要在 remember 外面取：@Composable 不能在 remember 的算子里调。
+    // 撑满那一档要跟着进来：正文一页能排几行是按这个高度算出来的，不传过去就是"栏藏了、纸还留着那条缝"
+    val seed = contentSizePx(edge)
+    val engine = remember(bookId, openAt, reloadTick, edge) {
         val start = prefs.pageStyle(
             widthPx = seed.width.toFloat(),
             heightPx = seed.height.toFloat(),
@@ -258,11 +283,18 @@ fun ReaderScreen(
         ReaderEngine(library.open(bookId), { PaintBreaker(it, DeviceFonts.typefaceOf(fontState.value) ?: android.graphics.Typeface.DEFAULT) }, start)
             .also { e ->
                 prefs.loadPosition(bookId)?.let { p -> e.restore(p) }
-                // 先还原进度、再让位给指定的那一章：顺序反了会被 restore 盖回原地
-                if (startChapter >= 0) e.jumpToChapter(startChapter)
+                // 先还原进度、再让位给指定的那一章：顺序反了会被 restore 盖回原地。
+                // openAt 是**站点大纲里的位置**（目录那一行点谁就是谁），而引擎的章号是"抓到的那些章"
+                // 的号 —— 跳过空正文的那几章之后两个号会错开，所以这里按章名找回引擎里的那一章，
+                // 名字也对不上才照原数硬跳（本地导入的那一本没有大纲，本来就是同一个号）
+                if (openAt >= 0) {
+                    val want = provOutline.getOrNull(openAt)
+                    val i = want?.let { t -> e.book.chapters.chapters.indexOfFirst { it.title == t } } ?: -1
+                    e.jumpToChapter(if (i >= 0) i else openAt)
+                }
             }
     }
-    DisposableEffect(bookId) { onDispose { engine.close() } }
+    DisposableEffect(bookId, reloadTick) { onDispose { engine.close() } }
 
     /** 加过书签的段落下面要画红色波浪线，所以书签列表得是状态：加一条就重算。 */
     var marks by remember { mutableStateOf(prefs.bookmarks(bookId)) }
@@ -368,6 +400,56 @@ fun ReaderScreen(
     var turnOut by remember { mutableStateOf<Pair<Page, String>?>(null) }
     var turnForward by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(bookId, reloadTick) {
+        canRedo = withContext(Dispatchers.IO) { ChapterFetch.from(context, library, bookId) != null }
+        provOutline = withContext(Dispatchers.IO) { BookProvenance(library.dir(bookId)).outline() }
+    }
+
+    /**
+     * 补/重下这一节。
+     *
+     * 小说的一章进不了"一章一个文件"—— 架上那本是一整串 content.txt + 一张偏移索引，
+     * 所以这一颗干的是：抹掉那一节的断点缓存 → 起「抓到这一章为止」那一枪（其余各节从缓存读）
+     * → 跑完换一个新引擎。`head` 传的是 `to + 1` 而不是整本：架上那本只到第 6 章时点第 9 章，
+     * 要的是长到 9 章，不是把一千多章全拉下来（真机踩过：整本那一枪跑到四百多章才掐掉）。
+     * 比盘上少的 head 由 [Downloads.routeOf] 抬回去，重下中间某一节不会裁掉后面的。
+     *
+     * 目录里那些**还没下过**的节走的是同一颗：那一节本来就没有缓存，drop 就是空转，
+     * 抓完它就第一次进那串字。
+     *
+     * `thenOpen` = 跑完就地翻进去读（换引擎时按 openAt 起）。
+     */
+    fun redoChapter(to: Int, thenOpen: Boolean = false) {
+        if (redoAt != null) return
+        redoAt = to
+        panelNote = null
+        scope.launch {
+            val started = runCatching {
+                withContext(Dispatchers.IO) {
+                    ChapterFetch.novel(
+                        context, library, bookId, to, engine.book.meta.title, head = to + 1,
+                    )
+                }
+            }
+            when {
+                started.isFailure -> panelNote = started.exceptionOrNull()?.message ?: "这一节没抓到"
+                started.getOrNull() != true -> panelNote = "站点目录里已经没有这一节了"
+                else -> while (Downloads.history(context).find(provUrl)?.running == true) {
+                    delay(1_000L)
+                }
+            }
+            redoAt = null
+            // 那一枪被暂停/取消/失败了都不翻：翻过去是一章读不到的空目录，人还站在原地看得清发生了什么
+            val done = panelNote == null &&
+                Downloads.history(context).find(provUrl)?.state == DownloadRecord.STATE_DONE
+            // 先定"新引擎从哪一章起"再换引擎：反了的话换完还停在原地，看着像没跳
+            if (thenOpen && done) {
+                openAt = to
+                panel = Panel.None
+            }
+            reloadTick++
+        }
+    }
 
     fun textOfPage(p: Page?): String = p?.let {
         engine.book.cache.slice(it.startOffset, (it.endOffset - it.startOffset).toInt())
@@ -815,9 +897,9 @@ fun ReaderScreen(
     // 判据和音量键那一串同一份层表 —— 上下栏还亮着就藏状态栏，等于两条栏叠在一起
     // 「全屏模式」只在**这一本挂了背景图**的阅读屏生效（他点的口径）：没有图，藏了状态栏只是把
     // 一块实心纸顶到屏幕上沿，什么都换不来；漫画 / pdf / pptx 三屏因此根本不藏。
-    val immersive = prefs.fullScreen && bgFile != null && !bars && !restPrompt &&
+    val immersive = !bars && !restPrompt &&
         panel == Panel.None && selection == null && !listenPage && !tocPage && !historyPage && !fixesPage &&
-        listening == null
+        listening == null && ((prefs.fullScreen && bgFile != null) || fill)
     ApplySystemBars(darkIcons = !theme.night, immersive = immersive, bgArgb = theme.page)
     // 我们这一层菜单（两条栏 + 背后那两段纸）和系统栏那两条**在同一条淡出里走**，
     // 判据是"什么时候**结束**"，不是"什么时候开始"：
@@ -856,12 +938,12 @@ fun ReaderScreen(
         if (bgBmp != null) {
             // 图 + 压那一层纸：和听书屏共用同一份实现（见 `PaperBackground`）
             PaperBackground(theme, bgBmp, prefs.bgDim)
-            // 菜单亮着的时候那两条实心纸（盖住图、不改任何一层的高度）：和有声书屏共用一份 `BarPaper`，
-            // 这一屏传的是淡出值 chrome.value，那一屏传的是 0/1
-            BarPaper(theme, chrome.value)
         }
-        // 让开系统栏的那一层：正文和我们自己那两条栏都在这格里面（背景图在外面，才铺得满）
-        Box(Modifier.fillMaxSize().fixedBarsPadding()) {
+        // 让开系统栏的那一层：正文和我们自己那两条栏都在这格里面（背景图在外面，才铺得满）。
+        // 内衬**只跟"撑满"那一档走，不跟菜单亮灭走**：挂 `immersive` 的话菜单一起来正文就整块让开
+        // 84/130，翻页行数跟着重排 —— 他报的"小说还是在跳"。漫画那一屏同一条规矩：菜单浮在上面，
+        // 底下那屏一动不动（正文让开系统栏的那一条由正文自己画的内衬管，见下面那层）
+        Box(Modifier.fillMaxSize().fixedBarsPadding(edge)) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1138,61 +1220,72 @@ fun ReaderScreen(
             // 整屏页（听书页 + 它开的三页）已经搬到**铺满窗口那一层**、画在这一层之后，所以它们开着时
             // 这两条本来就被盖住。下面那道闸门仍然留着，理由不是层序而是状态：收起听书页不该顺手把
             // 菜单叫出来 —— `bars` 保持原值，只是这一会儿不画
-            if ((bars || chrome.value > 0f) && !listenPage && !historyPage && !fixesPage && !tocPage) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .fillMaxWidth()
-                        .height(TOP_BAND_DP.dp)
-                        .graphicsLayer { alpha = chrome.value }
-                        // 淡出这一路它还画着，但**不能再当菜单点**：命中窗口跟着 `bars`，不跟着 1.2 秒那条曲线
-                        // （原来 275ms 时这点重叠看不出来，拉长之后就成了"收了菜单还点得到栏"）。
-                        // 这一枪转给正文那一套判据（`surfaceTap`）—— 菜单一收，整屏就都是翻页表面
-                        .fadingTap(bars) { w, x -> surfaceTap(w, x) }
-                        .background(theme.pageColor)
-                        .drawBehind {
-                            // 栏和正文同色，只剩这条发丝线说"这里有个栏"；1dp 在这台机渲成 3px
-                            drawLine(theme.dividerColor, Offset(0f, size.height - 1f), Offset(size.width, size.height - 1f), 1f)
-                        }
-                        .padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    BackChevron(theme, onClick = onBack)
-                    Text(chapter.title, fontSize = 14.sp, color = theme.inkColor, modifier = Modifier.padding(start = 4.dp))
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        if (pagesInChapter > 0) "${engine.currentPageIndex + 1}/$pagesInChapter 页" else "第 ${engine.currentPageIndex + 1} 页",
-                        fontSize = 13.sp,
-                        color = theme.faintColor,
-                    )
-                    Text("  $percent%", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.padding(end = 8.dp))
-                }
+            // 两条栏浮在正文上面：正文那一格不让系统栏（撑满时铺到 y=0），这两条自己让。
+            // 不撑满时不加：外层那一格已经让过一遍，再加就是让两遍，栏会被顶下去一截
+            Box(Modifier.fillMaxSize().then(if (edge) Modifier.fixedBarsPadding() else Modifier)) {
+                if ((bars || chrome.value > 0f) && !listenPage && !historyPage && !fixesPage && !tocPage) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .fillMaxWidth()
+                            .height(TOP_BAND_DP.dp)
+                            .graphicsLayer { alpha = chrome.value }
+                            // 淡出这一路它还画着，但**不能再当菜单点**：命中窗口跟着 `bars`，不跟着 1.2 秒那条曲线
+                            // （原来 275ms 时这点重叠看不出来，拉长之后就成了"收了菜单还点得到栏"）。
+                            // 这一枪转给正文那一套判据（`surfaceTap`）—— 菜单一收，整屏就都是翻页表面
+                            .fadingTap(bars) { w, x -> surfaceTap(w, x) }
+                            .background(theme.pageColor)
+                            .drawBehind {
+                                // 栏和正文同色，只剩这条发丝线说"这里有个栏"；1dp 在这台机渲成 3px
+                                drawLine(theme.dividerColor, Offset(0f, size.height - 1f), Offset(size.width, size.height - 1f), 1f)
+                            }
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BackChevron(theme, onClick = onBack)
+                        Text(chapter.title, fontSize = 14.sp, color = theme.inkColor, modifier = Modifier.padding(start = 4.dp))
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            if (pagesInChapter > 0) "${engine.currentPageIndex + 1}/$pagesInChapter 页" else "第 ${engine.currentPageIndex + 1} 页",
+                            fontSize = 13.sp,
+                            color = theme.faintColor,
+                        )
+                        Text("  $percent%", fontSize = 13.sp, color = theme.faintColor, modifier = Modifier.padding(end = 8.dp))
+                    }
 
-                ReaderBottomBar(
-                    theme = theme,
-                    modifier = Modifier.align(Alignment.BottomCenter).graphicsLayer { alpha = chrome.value }
-                        .fadingTap(bars) { w, x -> surfaceTap(w, x) },
-                    onToc = { panel = flip(panel, Panel.Chapters) },
-                    onMarks = {
-                        page?.let { prefs.addBookmark(bookId, engine.position()) }
-                        panel = flip(panel, Panel.Marks)
-                    },
-                    onToggleNight = {
-                        val next = if (theme.night) ReaderTheme.Paper else ReaderTheme.Night
-                        theme = next
-                        prefs.themeIndex = next.ordinal
-                    },
-                    onSettings = {
-                        panel = flip(panel, Panel.Quick)
-                        panelNote = null
-                    },
-                )
+                    ReaderBottomBar(
+                        theme = theme,
+                        modifier = Modifier.align(Alignment.BottomCenter).graphicsLayer { alpha = chrome.value }
+                            .fadingTap(bars) { w, x -> surfaceTap(w, x) },
+                        onToc = { panel = flip(panel, Panel.Chapters) },
+                        onMarks = {
+                            page?.let { prefs.addBookmark(bookId, engine.position()) }
+                            panel = flip(panel, Panel.Marks)
+                        },
+                        onToggleNight = {
+                            val next = if (theme.night) ReaderTheme.Paper else ReaderTheme.Night
+                            theme = next
+                            prefs.themeIndex = next.ordinal
+                        },
+                        onSettings = {
+                            panel = flip(panel, Panel.Quick)
+                            panelNote = null
+                        },
+                    )
+                }
             }
 
-            // 弹层一路铺到窗口底边，圆角开在顶上；底栏在这一层之下，被弹层盖住
-            Box(modifier = Modifier.fillMaxSize()) {
+            // 弹层一路铺到窗口底边，圆角开在顶上；底栏在这一层之下，被弹层盖住。
+            // 抽屉自己让开系统栏（撑满那一档正文那格已经不让人）：不让的话最后那几行钻到导航条底下，
+            // 三键导航那三个键正好压在「更多」那一颗上
+            Box(modifier = Modifier.fillMaxSize().then(if (edge) Modifier.fixedBarsPadding() else Modifier)) {
                 when (panel) {
-                    Panel.Chapters -> ChaptersPanel(engine, theme,
+                    Panel.Chapters -> ChaptersPanel(engine, theme, outline = provOutline,
+                        desc = chapterDesc,
+                        canRedo = canRedo, redoAt = redoAt, onRedo = { redoChapter(it) },
+                        onFetch = { redoChapter(it, thenOpen = true) },
+                        note = panelNote,
+                        onToggleSort = { chapterDesc = !chapterDesc; prefs.chapterDesc = chapterDesc },
                         onPick = { index ->
                             page = engine.jumpToChapter(index)
                             jumpToken++
@@ -1264,6 +1357,14 @@ fun ReaderScreen(
                         onVolumePaging = { volumePaging = it; prefs.volumePaging = it },
                         bothSidesNext = bothSidesNext,
                         onBothSidesNext = { bothSidesNext = it; prefs.bothSidesNext = it },
+                        edge = edge,
+                        // 换档要重建引擎（一页排几行是按窗口高算出来的）：先把"从哪一章起"定成眼下这一章，
+                        // 不然换完档会跳回当初点开的那一章，看着像这颗开关把人翻走了
+                        onEdge = {
+                            openAt = engine.currentChapterIndex
+                            edge = !edge
+                            prefs.edgeToEdge = edge
+                        },
                         restMinutes = restMinutes,
                         onRestMinutes = { restMinutes = it; prefs.restMinutes = it },
                         autoRead = autoRead,
@@ -1301,6 +1402,12 @@ fun ReaderScreen(
                 }
             }
         }
+
+        // 菜单亮着的时候那两条实心纸（状态栏 / 导航条那两格）：盖住底下走过去的正文和背景图，
+        // 不改任何一层的高度。和有声书屏共用一份 `BarPaper`，这一屏传的是淡出值 chrome.value。
+        // 画在正文那一格**之后**才盖得住（撑满时正文铺到 y=0）；又不会盖住抽屉 —— 抽屉自己让过
+        // 系统栏（上面那一层），两格不重叠。他点名的"导航栏也要和 app 工具栏背景色一样"就是这一条
+        BarPaper(theme, chrome.value)
 
         // 四张整屏页住在**铺满窗口**那一层（让安全区那一层之外）：AI 听书页的背景图要撑到状态栏和
         // 导航条底下，图压在它们后面才叫"撑满"。内容各自让开安全区 —— 听书页自己内部有一份，
@@ -1394,7 +1501,7 @@ fun ReaderScreen(
                 },
             )
         }
-        Box(Modifier.fillMaxSize().fixedBarsPadding()) {
+        Box(Modifier.fillMaxSize().fixedBarsPadding(immersive)) {
             if (historyPage) {
                 ListenHistoryPage(
                     theme = listenTheme,
@@ -1513,13 +1620,31 @@ private fun colorSchemeOf(theme: ReaderTheme): ColorScheme {
 }
 
 @Composable
-internal fun PanelTitle(text: String, theme: ReaderTheme, onClose: () -> Unit) {
+internal fun PanelTitle(
+    text: String,
+    theme: ReaderTheme,
+    onClose: () -> Unit,
+    /** 给 null 就没有这颗（书签/设置那两格的标题行不摆排序） */
+    sortDesc: Boolean? = null,
+    onToggleSort: () -> Unit = {},
+) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text, fontSize = 15.sp, color = theme.inkColor)
         Spacer(Modifier.weight(1f))
+        if (sortDesc != null) {
+            // 说的是"点它会变成什么"，不是"现在是什么" —— 图标的朝向已经说了现在是什么
+            Box(Modifier.size(40.dp).tap(onToggleSort), contentAlignment = Alignment.Center) {
+                Icon(
+                    painterResource(R.drawable.ic_sort),
+                    if (sortDesc) "目录改成正序（第 1 章在上）" else "目录改成倒序（最新在上）",
+                    tint = theme.accentColor,
+                    modifier = Modifier.size(16.dp).rotate(if (sortDesc) 180f else 0f),
+                )
+            }
+        }
         // 不用 TextButton：它带 48dp 的最小可点尺寸并把内容居中，"关闭"右边就多出 52px（量过），
         // 和标题左边的 36px 对不上。这里要的是"右边的间隙和左边一样"。
         Box(modifier = Modifier.height(40.dp).tap(onClose), contentAlignment = Alignment.Center) {
@@ -1532,10 +1657,29 @@ internal fun PanelTitle(text: String, theme: ReaderTheme, onClose: () -> Unit) {
 private fun BoxScope.ChaptersPanel(
     engine: ReaderEngine,
     theme: ReaderTheme,
+    outline: List<String>,
+    desc: Boolean,
+    canRedo: Boolean,
+    redoAt: Int?,
+    onRedo: (Int) -> Unit,
+    onFetch: (Int) -> Unit,
+    note: String?,
+    onToggleSort: () -> Unit,
     onPick: (Int) -> Unit,
     onClose: () -> Unit,
 ) {
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = engine.currentChapterIndex)
+    val all = engine.book.chapters.chapters
+    // 章表按站点大纲对位摆：下载时**空正文的那几章是跳过的**，引擎的第 i 章不一定是大纲的第 i 章，
+    // 按下标配会在末尾把 A 章的名字配到 B 章的内容上（真机：夜无疆最后几章看着"重复"）
+    val rows = outlineRows(outline, all.map { it.title })
+    val size = rows.size
+    // 倒序就是把这一串翻过来摆，章号还是引擎那个章号（点哪一章跳哪一章，不因为换了排法错位）
+    val order = chapterOrder(size, desc).map { s -> rows[s] to s }
+    val curSlot = rows.indexOfFirst { (_, li) -> li != null && all[li].index == engine.currentChapterIndex }
+    val at = if (curSlot < 0) 0 else chapterSlot(size, curSlot, desc)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = at)
+    // 换排法的时候把当前章留在原来那一屏位上：不接管的话列表原地重排，看着像"点了排序，书翻走了"
+    LaunchedEffect(desc) { if (size > 0) listState.scrollToItem(at) }
     Column(
         modifier = Modifier
             .fillMaxHeight()
@@ -1546,32 +1690,47 @@ private fun BoxScope.ChaptersPanel(
             .background(theme.barColor)
             .consumesPanelTaps(),
     ) {
-        PanelTitle("目录 ${engine.chapterCount} 章", theme, onClose)
+        PanelTitle("目录 $size 章", theme, onClose, sortDesc = desc, onToggleSort = onToggleSort)
+        // 重下/补那一节失败、站点没这一节，就地说一句（和漫画那一屏的抽屉同一格位置）
+        note?.let { Text(it, fontSize = 12.sp, color = theme.accentColor, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) }
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxWidth().weight(1f),
             contentPadding = PaddingValues(bottom = 12.dp),
         ) {
-            items(engine.book.chapters.chapters, key = { it.index }) { picked ->
-                val current = picked.index == engine.currentChapterIndex
+            items(order, key = { it.second }) { (row, slot) ->
+                val (title, li) = row
+                val ch = li?.let { all[it] }
+                val current = ch != null && ch.index == engine.currentChapterIndex
                 // 不用 TextButton：它自带圆角的状态层，按下会浮一块圆角高亮。这行要的是"整条方方正正地响应"
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .height(44.dp)
-                        .tap { onPick(picked.index) }
+                        .tap { if (ch == null) { if (canRedo) onFetch(slot) } else onPick(ch.index) }
                         .padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        picked.title,
+                        title,
                         fontSize = 14.sp,
                         color = if (current) theme.accentColor else theme.inkColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    Text(formatChars(picked.charCount), fontSize = 11.sp, color = theme.faintColor)
+                    // 没下的那一节没有"字"这个数：本地没索引，站点目录也不给每章字数，空着不编
+                    ch?.let { Text(formatChars(it.charCount), fontSize = 11.sp, color = theme.faintColor) }
+                    // 下过的给 ↻（重下这一节），没下的给 ↓（补到这一节，跑完就地翻开）。
+                    // 那颗上的"正在跑"记的是大纲位置：一枪下去补的是"到这一节为止"那一截
+                    if (canRedo) {
+                        Box(Modifier.offset(x = 2.dp)) {
+                            ChapterGet(
+                                faceOf(ch != null, redoAt == slot),
+                                theme.accentColor, theme.faintColor, false,
+                            ) { if (ch == null) onFetch(slot) else onRedo(slot) }
+                        }
+                    }
                 }
             }
         }

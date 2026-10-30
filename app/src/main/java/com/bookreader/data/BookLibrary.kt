@@ -52,11 +52,34 @@ class BookLibrary(private val context: Context) {
      * 改名只动清单里那一行。书名在书架、书签页、阅读页顶栏、听书页、封面占位那十几处都是从
      * manifest 读的，所以这里改一处就处处跟着变 —— 不用每个表面各存一份覆盖值（那样迟早有一处忘了读）。
      */
-    fun rename(id: String, title: String): Boolean {
+    fun rename(id: String, title: String): Boolean = patchManifest(id, "title" to title)
+
+    /**
+     * 一本漫画的账面按磁盘现状重写：全书几章（还是按源站目录）+ 现在一共几张图。
+     * 单章补完、重下完都要走这一下 —— 开壳那一刻写的是 0，不补书架上那一行就永远写着「0 页」。
+     */
+    fun syncComicCounts(id: String, tocChapters: Int, images: Int): Boolean = patchManifest(
+        id,
+        "chapterCount" to tocChapters.toString(),
+        "pages" to images.toString(),
+        // 漫画没有"字"这个口径，账面那一格放的就是张数（和 writeComicMeta 同一份映射）
+        "contentBytes" to images.toString(),
+    )
+
+    /** 有声书的账面：全书几集 + 几段 + 多少字节（映射同 [writeAudioMeta]）。 */
+    fun syncAudioCounts(id: String, tocChapters: Int, parts: Int, bytes: Long): Boolean = patchManifest(
+        id,
+        "chapterCount" to tocChapters.toString(),
+        "pages" to parts.toString(),
+        "contentBytes" to bytes.toString(),
+    )
+
+    /** 改清单上的某几格：其余各格（书名、作者、种类）原样留着，不重写整份。 */
+    private fun patchManifest(id: String, vararg kv: Pair<String, String>): Boolean {
         val f = File(dir(id), IndexCodec.MANIFEST)
         if (!f.isFile) return false
         val m = LinkedHashMap(IndexCodec.readManifest(f))
-        m["title"] = title
+        kv.forEach { (k, v) -> m[k] = v }
         IndexCodec.writeManifest(f, m)
         return true
     }
